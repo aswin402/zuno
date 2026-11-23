@@ -1,11 +1,18 @@
-import { useState } from 'react'
-import { ChevronDown, MoreHorizontal } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Check, ChevronUp, MoreHorizontal, X } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
-import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
+import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
-import { WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn, formatTime } from '@/lib/utils'
 import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
@@ -13,6 +20,8 @@ import type { Playlist, RepeatMode, Track } from '@/lib/zunoApi'
 
 interface NowPlayingPanelProps {
   track: Track | null
+  queueTracks?: Track[]
+  queueIndex?: number | null
   playlistLabel: string
   isPlaying: boolean
   isFavorite: boolean
@@ -23,11 +32,15 @@ interface NowPlayingPanelProps {
   repeat: RepeatMode
   playlists: Playlist[]
   eqEnabled?: boolean
+  eqLabel?: string
   appearance?: AppearanceSettings
   isMobileSheet?: boolean
   onCloseMobile?: () => void
   onOpenQueue: () => void
+  onOpenPlaylist?: (slug: string) => void
   onOpenEqualizer?: () => void
+  onSelectQueueIndex?: (idx: number) => void
+  onDeleteTrack?: (track: Track) => void
   onTogglePlay: () => void
   onPrev: () => void
   onNext: () => void
@@ -43,6 +56,8 @@ interface NowPlayingPanelProps {
 
 export function NowPlayingPanel({
   track,
+  queueTracks = [],
+  queueIndex = null,
   playlistLabel,
   isPlaying,
   isFavorite,
@@ -53,11 +68,13 @@ export function NowPlayingPanel({
   repeat,
   playlists,
   eqEnabled = false,
+  eqLabel = 'Off',
   appearance = DEFAULT_APPEARANCE,
-  isMobileSheet = false,
   onCloseMobile,
-  onOpenQueue,
+  onOpenPlaylist,
   onOpenEqualizer,
+  onSelectQueueIndex,
+  onDeleteTrack,
   onTogglePlay,
   onPrev,
   onNext,
@@ -70,273 +87,747 @@ export function NowPlayingPanel({
   onAddToPlaylist,
   onCreatePlaylistWithTrack,
 }: NowPlayingPanelProps) {
-  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [sheetTab, setSheetTab] = useState<'none' | 'queue' | 'playlists'>('none')
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  // Swipe-up (to open Queue/Playlists) & horizontal swipe (Prev/Next) on stage
+  const gestureStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null)
+  const [pullUpY, setPullUpY] = useState(0)
+  const [swipeX, setSwipeX] = useState(0)
+
+  // Swipe-down on opened sheet grabber to dismiss
+  const sheetDragStartRef = useRef<number | null>(null)
+  const [sheetDragY, setSheetDragY] = useState(0)
+
   const effectiveDuration = duration > 0 ? duration : (track?.duration_secs ?? 0)
   const iconPack = appearance.iconPack
+  const isLight = appearance.mode === 'light'
+
   const subtitle = track
     ? track.artist === 'Unknown Artist' && track.folder
       ? track.folder
       : track.artist
     : 'Select a track'
 
+  const orderedPlaylists = useMemo(() => {
+    return [...playlists].sort((a, b) => {
+      const aFav = a.slug === 'favorites' || a.slug === 'fav' ? 0 : 1
+      const bFav = b.slug === 'favorites' || b.slug === 'fav' ? 0 : 1
+      if (aFav !== bFav) return aFav - bFav
+      return a.title.localeCompare(b.title)
+    })
+  }, [playlists])
+
+  // Escape closes popover / drawer first, then full-screen player
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (moreOpen) {
+        setMoreOpen(false)
+      } else if (sheetTab !== 'none') {
+        setSheetTab('none')
+      } else {
+        onCloseMobile?.()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [moreOpen, sheetTab, onCloseMobile])
+
+  // ── Page-level swipe-up (Queue/Playlists) & horizontal track swipe ──
+  const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (moreOpen || sheetTab !== 'none') return
+    gestureStartRef.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId }
+  }
+
+  const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = gestureStartRef.current
+    if (!start || start.pointerId !== e.pointerId) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+
+    // Clear upward swipe opens Queue / Playlists sheet
+    if (dy < -10 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+      if (pullUpY === 0) {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+      }
+      setSwipeX(0)
+      setPullUpY(Math.max(-96, dy * 0.65))
+    } else if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      if (swipeX === 0) {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+      }
+      setPullUpY(0)
+      setSwipeX(Math.max(-90, Math.min(90, dx * 0.5)))
+    }
+  }
+
+  const handleStagePointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = gestureStartRef.current
+    if (!start || start.pointerId !== e.pointerId) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    gestureStartRef.current = null
+    setPullUpY(0)
+    setSwipeX(0)
+
+    if (dy <= -46 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+      setSheetTab('queue')
+    } else if (dx <= -64 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      onNext()
+    } else if (dx >= 64 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      onPrev()
+    }
+  }
+
+  // ── Sheet swipe-down-to-close handlers ──
+  const handleSheetHeaderDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    sheetDragStartRef.current = e.clientY
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const handleSheetHeaderMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (sheetDragStartRef.current === null) return
+    const dy = e.clientY - sheetDragStartRef.current
+    if (dy > 0) setSheetDragY(Math.min(220, dy))
+  }
+
+  const handleSheetHeaderEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (sheetDragStartRef.current === null) return
+    const dy = e.clientY - sheetDragStartRef.current
+    sheetDragStartRef.current = null
+    setSheetDragY(0)
+    if (dy > 64) setSheetTab('none')
+  }
+
+  // Bottom contrasting tray colors (high contrast across all 8 dark + light themes)
+  const trayBgClass = isLight ? 'bg-foreground text-background' : 'bg-background text-foreground'
+  const traySkipClass = isLight
+    ? 'text-background/80 hover:bg-background/12 hover:text-background'
+    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+  const trayPlayBtnClass = isLight
+    ? 'bg-background text-foreground shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
+    : 'bg-primary text-primary-foreground shadow-[0_8px_24px_rgba(0,0,0,0.5)]'
+
   return (
-    <div className="flex h-full flex-col justify-between bg-card px-6 pb-6 pt-0 select-none">
-      {/* Top Arch + Floating Transport Controls Pill */}
-      <div className="relative">
-        {isMobileSheet && (
-          <div className="absolute inset-x-0 top-4 z-20 flex items-center justify-between">
-            <button
-              onClick={onCloseMobile}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card/85 text-foreground backdrop-blur-md cursor-pointer"
-              aria-label="Minimize player"
-            >
-              <ChevronDown className="h-4 w-4" />
-            </button>
-            <button
-              onClick={onOpenQueue}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card/85 text-foreground backdrop-blur-md cursor-pointer"
-              aria-label="Open queue"
-            >
-              <ZunoIcon name="playlist" pack={iconPack} className="h-4 w-4" />
-            </button>
-          </div>
+    <div
+      onPointerDown={handleStagePointerDown}
+      onPointerMove={handleStagePointerMove}
+      onPointerUp={handleStagePointerEnd}
+      onPointerCancel={handleStagePointerEnd}
+      className={cn(
+        'relative flex h-[100dvh] w-full flex-col overflow-hidden select-none touch-none animate-sheet-up',
+        trayBgClass,
+      )}
+    >
+      {/* ── Upper Curved Main Stage ── */}
+      <div
+        style={{
+          transform: pullUpY < 0 ? `translateY(${pullUpY * 0.32}px)` : undefined,
+        }}
+        className={cn(
+          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-8 pt-[max(1rem,env(safe-area-inset-top))]',
+          pullUpY === 0 && 'transition-transform duration-300 ease-out',
+          isLight
+            ? 'bg-background shadow-[0_18px_42px_rgba(0,0,0,0.22)]'
+            : 'bg-card border-b border-border/80 shadow-[0_20px_48px_rgba(0,0,0,0.6)]',
         )}
+      >
+        {/* Top Bar: Back ←  |  Now playing  |  Heart + clean ··· Menu */}
+        <header className="relative z-20 mx-auto flex h-11 w-full max-w-5xl shrink-0 items-center justify-between px-5 lg:h-14 lg:px-10">
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onCloseMobile}
+            aria-label="Back"
+            className="flex h-10 w-10 -ml-2 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary active:scale-95 cursor-pointer"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
 
-        <div className="mx-auto w-full max-w-[276px]">
-          <div className="h-[34dvh] max-h-[268px] min-h-[196px] w-full overflow-hidden rounded-b-[140px] border-x border-b border-border bg-secondary shadow-[inset_0_-12px_32px_rgba(0,0,0,0.45)]">
-            <ArtworkTile
-              trackId={track?.id}
-              hasCover={track?.has_cover}
-              seed={track?.title ?? 'zuno'}
-              variant="arch"
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">
+            Now playing
+          </span>
+
+          <div
+            className="relative -mr-1.5 flex items-center gap-0.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <PulseHeart
+              liked={isFavorite}
+              disabled={!track}
+              iconPack={iconPack}
+              bare
+              onToggle={onToggleFavorite}
+              className={cn(
+                'h-9 w-9 transition-colors hover:bg-secondary active:scale-92',
+                isFavorite ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+              )}
+              iconClassName="h-[18px] w-[18px]"
             />
-          </div>
 
-          <div className="relative z-10 mx-auto -mt-9 flex h-[68px] w-[208px] items-center justify-between rounded-full border border-border bg-card px-4 shadow-[0_14px_32px_rgba(0,0,0,0.6)]">
-            <button
-              onClick={onPrev}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-              aria-label="Previous"
-            >
-              <ZunoIcon name="prev" pack={iconPack} filled className="h-4 w-4" />
-            </button>
-
-            {appearance.playButtonStyle === 'waveform' ? (
-              <WaveformPlayButton
-                isPlaying={isPlaying}
-                onClick={onTogglePlay}
-                size="lg"
-                inverted
-              />
-            ) : (
-              <button
-                onClick={onTogglePlay}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition-transform active:scale-95 cursor-pointer"
-                aria-label={isPlaying ? 'Pause' : 'Play'}
+            <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
+              <DropdownMenuTrigger
+                aria-label="Playback options"
+                className={cn(
+                  'h-9 w-9 text-foreground hover:bg-secondary active:scale-95',
+                  moreOpen && 'bg-secondary',
+                  !moreOpen &&
+                    (shuffle || repeat !== 'off' || eqEnabled) &&
+                    'ring-1 ring-primary/40',
+                )}
               >
-                <ZunoIcon
-                  name={isPlaying ? 'pause' : 'play'}
-                  pack={iconPack}
-                  filled
-                  className={cn('h-4.5 w-4.5', !isPlaying && 'translate-x-[1px]')}
-                />
-              </button>
-            )}
+                <MoreHorizontal className="h-[19px] w-[19px]" />
+              </DropdownMenuTrigger>
 
-            <button
-              onClick={onNext}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-              aria-label="Next"
-            >
-              <ZunoIcon name="next" pack={iconPack} filled className="h-4 w-4" />
-            </button>
+              <DropdownMenuContent align="end" className="w-60 p-1.5">
+                <div className="px-2.5 pb-1.5 pt-1">
+                  <DropdownMenuLabel className="p-0">Playing from</DropdownMenuLabel>
+                  <p className="mt-0.5 truncate text-xs font-medium text-foreground">
+                    {playlistLabel}
+                  </p>
+                </div>
+
+                <DropdownMenuSeparator />
+
+                {/* Shuffle + Repeat toggles */}
+                <div className="grid grid-cols-2 gap-1 px-0.5 py-0.5">
+                  <DropdownMenuItem
+                    keepOpen
+                    onSelect={onToggleShuffle}
+                    className={cn(
+                      'min-h-8 justify-center gap-1.5 px-2',
+                      shuffle
+                        ? 'bg-primary text-primary-foreground hover:bg-primary/90 focus:bg-primary/90'
+                        : 'bg-secondary/70',
+                    )}
+                  >
+                    <ZunoIcon name="shuffle" pack={iconPack} className="h-3.5 w-3.5" />
+                    Shuffle
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    keepOpen
+                    onSelect={onCycleRepeat}
+                    className={cn(
+                      'min-h-8 justify-center gap-1.5 px-2',
+                      repeat !== 'off'
+                        ? 'bg-primary text-primary-foreground hover:bg-primary/90 focus:bg-primary/90'
+                        : 'bg-secondary/70',
+                    )}
+                  >
+                    <ZunoIcon
+                      name={repeat === 'one' ? 'repeat1' : 'repeat'}
+                      pack={iconPack}
+                      className="h-3.5 w-3.5"
+                    />
+                    {repeat === 'off' ? 'Repeat' : repeat === 'all' ? 'All' : 'One'}
+                  </DropdownMenuItem>
+                </div>
+
+                {/* Add to playlist */}
+                {track && (
+                  <DropdownMenuItem
+                    onSelect={() => setSheetTab('playlists')}
+                    className="mt-0.5 gap-2.5"
+                  >
+                    <ZunoIcon
+                      name="playlist"
+                      pack={iconPack}
+                      className="h-3.5 w-3.5 text-muted-foreground"
+                    />
+                    Add to playlist
+                  </DropdownMenuItem>
+                )}
+
+                {/* Equalizer shortcut */}
+                {onOpenEqualizer && (
+                  <DropdownMenuItem
+                    onSelect={onOpenEqualizer}
+                    className="justify-between"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <ZunoIcon
+                        name="equalizer"
+                        pack={iconPack}
+                        className="h-3.5 w-3.5 text-muted-foreground"
+                      />
+                      Equalizer
+                    </span>
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                        eqEnabled
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {eqEnabled ? eqLabel : 'Off'}
+                    </span>
+                  </DropdownMenuItem>
+                )}
+
+                {/* Compact Volume row */}
+                <div className="mt-0.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2">
+                  <button
+                    type="button"
+                    onClick={() => onVolumeChange(volume > 0 ? 0 : 0.8)}
+                    aria-label="Mute or unmute"
+                    className="text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <ZunoIcon
+                      name={volume <= 0.001 ? 'mute' : 'volume'}
+                      pack={iconPack}
+                      className="h-3.5 w-3.5"
+                    />
+                  </button>
+                  <Slider
+                    value={volume}
+                    max={1}
+                    step={0.01}
+                    onChange={onVolumeChange}
+                    ariaLabel="Volume"
+                  />
+                </div>
+
+                {track && onDeleteTrack && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      destructive
+                      onSelect={() => onDeleteTrack(track)}
+                      className="gap-2.5"
+                    >
+                      <ZunoIcon name="trash" pack={iconPack} className="h-3.5 w-3.5" />
+                      Delete song
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-        </div>
-      </div>
+        </header>
 
-      {/* Middle: Playing-from context + Track Title */}
-      <div className="mt-4 space-y-5">
-        <div className="flex items-center justify-between border-b border-border/70 pb-3.5">
-          <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              PLAYING FROM
-            </p>
-            <p className="mt-0.5 truncate text-xs font-medium text-foreground">
-              {playlistLabel}
-            </p>
-          </div>
-        </div>
-
-        <div className="relative flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-            <h2 className="mt-0.5 truncate text-[22px] font-semibold leading-tight tracking-tight text-foreground">
+        {/* ── Hero Centerpiece: Zuno Play Animation + Title + Artist + Animated Waveform + Split Time ── */}
+        <div
+          style={{
+            transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
+          }}
+          className={cn(
+            'flex min-h-0 flex-1 flex-col items-center justify-center px-6',
+            swipeX === 0 && 'transition-transform duration-300 ease-out',
+          )}
+        >
+          {/* Centered Track Title & Artist */}
+          <div className="w-full max-w-[340px] text-center lg:max-w-2xl">
+            <h2 className="truncate text-[28px] font-bold leading-tight tracking-tight text-foreground sm:text-[34px] lg:text-[46px]">
               {track ? track.title : 'Not Playing'}
             </h2>
+            <p className="mt-2 truncate text-[14px] font-medium text-muted-foreground lg:mt-2.5 lg:text-[16px]">
+              {subtitle}
+            </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1 pt-1">
-            <Tooltip label={isFavorite ? 'Remove favorite' : 'Favorite'} side="top">
-              <PulseHeart
-                liked={isFavorite}
-                disabled={!track}
-                iconPack={iconPack}
-                onToggle={onToggleFavorite}
-              />
-            </Tooltip>
-
-            {track && (
-              <Tooltip label="Add to playlist" side="top">
-                <button
-                  onClick={() => setShowAddMenu((v) => !v)}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer',
-                    showAddMenu && 'bg-secondary text-foreground',
-                  )}
-                  aria-label="Add to playlist"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </button>
-              </Tooltip>
-            )}
-          </div>
-
-          {showAddMenu && track && (
-            <div className="absolute top-10 right-0 z-30 w-48 rounded-xl border border-border bg-popover p-1.5 shadow-2xl">
-              <p className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Add to playlist
-              </p>
-              {playlists.map((pl) => (
-                <button
-                  key={pl.slug}
-                  onClick={() => {
-                    onAddToPlaylist(pl.slug, track.id)
-                    setShowAddMenu(false)
-                  }}
-                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-secondary cursor-pointer"
-                >
-                  <span className="truncate">{pl.title}</span>
-                  <span className="tabular-nums text-[11px] text-muted-foreground">
-                    {pl.track_ids.length}
-                  </span>
-                </button>
-              ))}
-              <div className="my-1 border-t border-border" />
-              <button
-                onClick={() => {
-                  setShowAddMenu(false)
-                  onCreatePlaylistWithTrack(track.id)
-                }}
-                className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
-              >
-                <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
-                New playlist
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Bottom: Scrubber + Mode & Volume Row */}
-      <div className="mt-4 space-y-4">
-        <div>
-          <Scrubber
-            value={position}
-            max={effectiveDuration || 1}
-            styleVariant={appearance.scrubberKnob}
-            seed={track?.id ?? track?.title ?? 'zuno'}
-            onChange={onSeekChange}
-            onCommit={onSeekCommit}
-          />
-          <div className="mt-1 flex items-center justify-between tabular-nums text-[11px] text-muted-foreground">
-            <span>{formatTime(position)}</span>
-            <span>{formatTime(effectiveDuration)}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-4 border-t border-border/70 pt-3.5">
-          <div className="flex items-center gap-1">
-            <Tooltip label={shuffle ? 'Shuffle: On' : 'Shuffle: Off'} side="top">
-              <button
-                onClick={onToggleShuffle}
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
-                  shuffle
-                    ? 'bg-secondary text-primary'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                )}
-                aria-label="Shuffle"
-              >
-                <ZunoIcon name="shuffle" pack={iconPack} className="h-3.5 w-3.5" />
-              </button>
-            </Tooltip>
-            <Tooltip
-              label={
-                repeat === 'off'
-                  ? 'Repeat: Off'
-                  : repeat === 'all'
-                    ? 'Repeat: All'
-                    : 'Repeat: One'
-              }
-              side="top"
-            >
-              <button
-                onClick={onCycleRepeat}
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
-                  repeat !== 'off'
-                    ? 'bg-secondary text-primary'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                )}
-                aria-label="Repeat"
-              >
-                <ZunoIcon
-                  name={repeat === 'one' ? 'repeat1' : 'repeat'}
-                  pack={iconPack}
-                  className="h-3.5 w-3.5"
-                />
-              </button>
-            </Tooltip>
-            {onOpenEqualizer && (
-              <Tooltip label="Equalizer" side="top">
-                <button
-                  onClick={onOpenEqualizer}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
-                    eqEnabled
-                      ? 'bg-secondary text-primary'
-                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                  )}
-                  aria-label="Equalizer"
-                >
-                  <ZunoIcon name="equalizer" pack={iconPack} className="h-3.5 w-3.5" />
-                </button>
-              </Tooltip>
-            )}
-          </div>
-
-          <div className="flex flex-1 items-center gap-2 max-w-[150px]">
-            <button
-              onClick={() => onVolumeChange(volume > 0 ? 0 : 0.8)}
-              className="text-muted-foreground hover:text-foreground cursor-pointer"
-              aria-label="Mute or unmute"
-            >
-              <ZunoIcon
-                name={volume <= 0.001 ? 'mute' : 'volume'}
-                pack={iconPack}
-                className="h-3.5 w-3.5"
-              />
-            </button>
-            <Slider
-              value={volume}
-              max={1}
-              step={0.01}
-              onChange={onVolumeChange}
-              ariaLabel="Volume"
+          {/* Clean Multi-Style Scrubber (matches user's chosen Customize scrubber style) */}
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="mt-10 w-full max-w-[340px] sm:max-w-[420px] lg:mt-12 lg:max-w-[540px]"
+          >
+            <Scrubber
+              value={position}
+              max={effectiveDuration || 1}
+              styleVariant={appearance.scrubberKnob}
+              seed={track?.id ?? track?.title ?? 'zuno'}
+              onChange={onSeekChange}
+              onCommit={onSeekCommit}
             />
           </div>
+
+          {/* Centered Split Elapsed | Total Timestamp */}
+          <div className="mt-4 flex items-center justify-center gap-3 tabular-nums text-[12.5px] lg:mt-5 lg:text-[13.5px]">
+            <span className="font-semibold text-foreground">
+              {formatTime(position)}
+            </span>
+            <span className="h-3 w-[1px] bg-border" aria-hidden="true" />
+            <span className="font-medium text-muted-foreground">
+              {formatTime(effectiveDuration)}
+            </span>
+          </div>
+        </div>
+
+        {/* Subtle bottom hint inside stage for swipe-up affordance */}
+        <div className="flex shrink-0 justify-center pt-1">
+          <span className="h-1 w-8 rounded-full bg-border/80" aria-hidden="true" />
         </div>
       </div>
+
+      {/* ── Contrasting Bottom Tray: Previous · Play/Pause · Next + Swipe-Up Queue/Playlists Cue ── */}
+      <footer className="shrink-0 px-8 pt-4 pb-[max(0.85rem,env(safe-area-inset-bottom))]">
+        <div
+          className="mx-auto flex max-w-[280px] items-center justify-between"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {/* Previous */}
+          <button
+            type="button"
+            onClick={onPrev}
+            aria-label="Previous track"
+            className={cn(
+              'flex h-12 w-12 items-center justify-center rounded-full transition-all active:scale-92 cursor-pointer',
+              traySkipClass,
+            )}
+          >
+            <ZunoIcon name="prev" pack={iconPack} filled className="h-5 w-5" />
+          </button>
+
+          {/* Center Play / Pause */}
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            className={cn(
+              'relative flex h-14 w-14 items-center justify-center rounded-full transition-transform duration-150 active:scale-92 cursor-pointer',
+              trayPlayBtnClass,
+            )}
+          >
+            {appearance.playButtonStyle === 'waveform' && isPlaying ? (
+              <span className="flex h-5 items-center gap-[3px]" aria-hidden="true">
+                <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-1" />
+                <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-2" />
+                <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-3" />
+                <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-4" />
+                <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-5" />
+              </span>
+            ) : (
+              <ZunoIcon
+                name={isPlaying ? 'pause' : 'play'}
+                pack={iconPack}
+                filled
+                className={cn('h-5 w-5', !isPlaying && 'translate-x-[1.5px]')}
+              />
+            )}
+          </button>
+
+          {/* Next */}
+          <button
+            type="button"
+            onClick={onNext}
+            aria-label="Next track"
+            className={cn(
+              'flex h-12 w-12 items-center justify-center rounded-full transition-all active:scale-92 cursor-pointer',
+              traySkipClass,
+            )}
+          >
+            <ZunoIcon name="next" pack={iconPack} filled className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Swipe-Up Queue / Playlists Handle */}
+        <button
+          type="button"
+          onClick={() => setSheetTab('queue')}
+          style={{
+            transform: pullUpY < 0 ? `translateY(${pullUpY * 0.25}px)` : undefined,
+          }}
+          className={cn(
+            'mx-auto mt-2.5 flex items-center justify-center gap-1 rounded-full px-3 py-1 text-[10.5px] font-medium tracking-wide transition-opacity cursor-pointer',
+            isLight
+              ? 'text-background/55 hover:text-background/90'
+              : 'text-muted-foreground/70 hover:text-foreground',
+          )}
+        >
+          <ChevronUp className="h-3.5 w-3.5" />
+          <span className="lg:hidden">Swipe up for queue &amp; playlists</span>
+          <span className="hidden lg:inline">Queue &amp; playlists</span>
+        </button>
+      </footer>
+
+      {/* ── Swipe-Up Sheet: Queue | Playlists ── */}
+      {sheetTab !== 'none' && (
+        <div
+          onClick={() => setSheetTab('none')}
+          className="fixed inset-0 z-50 flex items-end bg-black/55 backdrop-blur-xs"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined,
+            }}
+            className={cn(
+              'mx-auto flex h-[76dvh] w-full max-w-xl flex-col rounded-t-[30px] border-t border-border bg-card text-foreground shadow-2xl animate-sheet-up pb-[max(1rem,env(safe-area-inset-bottom))] lg:border-x',
+              sheetDragY === 0 && 'transition-transform duration-200 ease-out',
+            )}
+          >
+            {/* Swipe-Down Grabber & Segmented Tab Header */}
+            <div
+              onPointerDown={handleSheetHeaderDown}
+              onPointerMove={handleSheetHeaderMove}
+              onPointerUp={handleSheetHeaderEnd}
+              onPointerCancel={handleSheetHeaderEnd}
+              className="shrink-0 touch-none border-b border-border/70 px-5 pb-3.5 pt-2.5"
+            >
+              <div className="mb-3 flex justify-center">
+                <span className="h-1 w-10 rounded-full bg-border" aria-hidden="true" />
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                {/* Queue / Playlists segmented pill switch */}
+                <div className="inline-flex rounded-full border border-border bg-secondary/70 p-0.5">
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => setSheetTab('queue')}
+                    className={cn(
+                      'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
+                      sheetTab === 'queue'
+                        ? 'bg-primary text-primary-foreground shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    Queue
+                    {queueTracks.length > 0 && (
+                      <span className="ml-1.5 tabular-nums opacity-75">
+                        {queueTracks.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => setSheetTab('playlists')}
+                    className={cn(
+                      'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
+                      sheetTab === 'playlists'
+                        ? 'bg-primary text-primary-foreground shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    Playlists
+                    {orderedPlaylists.length > 0 && (
+                      <span className="ml-1.5 tabular-nums opacity-75">
+                        {orderedPlaylists.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Right contextual controls */}
+                <div
+                  className="flex items-center gap-1.5"
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  {sheetTab === 'queue' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={onToggleShuffle}
+                        aria-label="Toggle shuffle"
+                        className={cn(
+                          'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
+                          shuffle
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <ZunoIcon name="shuffle" pack={iconPack} className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onCycleRepeat}
+                        aria-label="Cycle repeat"
+                        className={cn(
+                          'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
+                          repeat !== 'off'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <ZunoIcon
+                          name={repeat === 'one' ? 'repeat1' : 'repeat'}
+                          pack={iconPack}
+                          className="h-3.5 w-3.5"
+                        />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSheetTab('none')}
+                    aria-label="Close sheet"
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Tab 1: Up Next Queue */}
+            {sheetTab === 'queue' && (
+              <CompactScrollArea className="min-h-0 flex-1" viewportClassName="p-3">
+                <p className="mb-2 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  Playing from · {playlistLabel}
+                </p>
+                {queueTracks.length === 0 ? (
+                  <p className="py-12 text-center text-xs text-muted-foreground">
+                    Queue is empty
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {queueTracks.map((item, idx) => {
+                      const isCurrent = idx === queueIndex
+                      const itemArtist =
+                        item.artist === 'Unknown Artist' && item.folder
+                          ? item.folder
+                          : item.artist
+                      return (
+                        <button
+                          key={`${item.id}-${idx}`}
+                          type="button"
+                          onClick={() => {
+                            onSelectQueueIndex?.(idx)
+                            setSheetTab('none')
+                          }}
+                          className={cn(
+                            'flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left transition-colors cursor-pointer',
+                            isCurrent
+                              ? 'bg-secondary text-foreground'
+                              : 'hover:bg-secondary/60 text-foreground',
+                          )}
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-border bg-secondary">
+                              <ArtworkTile
+                                trackId={item.id}
+                                hasCover={item.has_cover}
+                                seed={item.title}
+                                variant="thumb"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <p
+                                className={cn(
+                                  'truncate text-sm leading-tight',
+                                  isCurrent
+                                    ? 'font-semibold text-primary'
+                                    : 'font-medium text-foreground',
+                                )}
+                              >
+                                {item.title}
+                              </p>
+                              <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                                {itemArtist}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
+                            {formatTime(item.duration_secs)}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </CompactScrollArea>
+            )}
+
+            {/* Tab 2: Playlists (open any playlist OR quick-add current song) */}
+            {sheetTab === 'playlists' && (
+              <CompactScrollArea className="min-h-0 flex-1" viewportClassName="p-3">
+                <div className="space-y-1.5">
+                  {orderedPlaylists.map((pl) => {
+                    const isFav = pl.slug === 'favorites' || pl.slug === 'fav'
+                    const alreadyIn = track ? pl.track_ids.includes(track.id) : false
+                    return (
+                      <div
+                        key={pl.slug}
+                        className="flex items-center justify-between gap-2 rounded-2xl px-3 py-2 transition-colors hover:bg-secondary/70"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSheetTab('none')
+                            onOpenPlaylist?.(pl.slug)
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer"
+                        >
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-secondary">
+                            <ZunoIcon
+                              name={isFav ? 'heart' : 'playlist'}
+                              pack={iconPack}
+                              filled={isFav}
+                              className={cn(
+                                'h-4 w-4',
+                                isFav ? 'text-primary' : 'text-muted-foreground',
+                              )}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-foreground">
+                              {pl.title}
+                            </p>
+                            <p className="mt-0.5 tabular-nums text-xs text-muted-foreground">
+                              {pl.track_ids.length}{' '}
+                              {pl.track_ids.length === 1 ? 'song' : 'songs'}
+                            </p>
+                          </div>
+                        </button>
+
+                        {track && (
+                          <button
+                            type="button"
+                            onClick={() => onAddToPlaylist(pl.slug, track.id)}
+                            aria-label={
+                              alreadyIn
+                                ? `Already in ${pl.title}`
+                                : `Add to ${pl.title}`
+                            }
+                            className={cn(
+                              'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border transition-colors cursor-pointer',
+                              alreadyIn
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'bg-secondary text-muted-foreground hover:text-foreground',
+                            )}
+                          >
+                            {alreadyIn ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSheetTab('none')
+                      onCreatePlaylistWithTrack(track?.id)
+                    }}
+                    className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-3 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
+                    New playlist
+                  </button>
+                </div>
+              </CompactScrollArea>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { Loader2 } from '@/components/PulseBarsLoader'
@@ -28,7 +35,7 @@ interface TrackRowProps {
 }
 
 /**
- * Clean song row with customizable playing style and a single three-dots (...) menu card
+ * Clean song row with customizable playing style and EaseUI dropdown menu
  * containing Add to playlist and Delete actions.
  */
 export function TrackRow({
@@ -46,29 +53,6 @@ export function TrackRow({
 }: TrackRowProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuView, setMenuView] = useState<'main' | 'playlists'>('main')
-  const menuRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!menuOpen) return
-    const handleOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-        setMenuView('main')
-      }
-    }
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setMenuOpen(false)
-        setMenuView('main')
-      }
-    }
-    document.addEventListener('mousedown', handleOutside)
-    document.addEventListener('keydown', handleKey)
-    return () => {
-      document.removeEventListener('mousedown', handleOutside)
-      document.removeEventListener('keydown', handleKey)
-    }
-  }, [menuOpen])
 
   const overline =
     track.artist === 'Unknown Artist' && track.folder
@@ -85,6 +69,7 @@ export function TrackRow({
       onClick={onPlay}
       className={cn(
         'group relative transition-colors cursor-pointer',
+        menuOpen && 'z-30',
         rowRadiusClass(appearance.radius),
         rowPaddingClass(appearance.density),
         active ? 'bg-secondary' : 'hover:bg-secondary/55',
@@ -181,9 +166,8 @@ export function TrackRow({
           </p>
         </div>
 
-        {/* Right: Single Equalizer/PulseBars toggle + Duration + Three-dots (...) menu */}
+        {/* Right: Single Equalizer/PulseBars toggle + Duration + EaseUI Three-dots (...) menu */}
         <div
-          ref={menuRef}
           className="relative flex shrink-0 items-center gap-2"
           onClick={(e) => e.stopPropagation()}
         >
@@ -235,111 +219,110 @@ export function TrackRow({
             </span>
           )}
 
-          {/* Three dots (...) options trigger */}
-          <Tooltip label="More" side="top">
-            <button
-              type="button"
-              onClick={() => {
-                setMenuOpen((o) => {
-                  if (o) setMenuView('main')
-                  return !o
-                })
-              }}
-              className={cn(
-                'flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-accent hover:text-foreground cursor-pointer',
-                menuOpen
-                  ? 'bg-accent text-foreground opacity-100'
-                  : 'lg:opacity-0 lg:group-hover:opacity-100',
-              )}
-              aria-label="Song options"
-              aria-expanded={menuOpen}
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </button>
-          </Tooltip>
+          {/* EaseUI Dropdown Menu: Add to playlist + Delete */}
+          <DropdownMenu
+            open={menuOpen}
+            onOpenChange={(next) => {
+              setMenuOpen(next)
+              if (!next) setMenuView('main')
+            }}
+          >
+            <Tooltip label="More" side="top" disabled={menuOpen}>
+              <DropdownMenuTrigger
+                aria-label="Song options"
+                className={cn(
+                  'h-7 w-7 hover:bg-accent',
+                  menuOpen
+                    ? 'bg-accent text-foreground opacity-100'
+                    : 'lg:opacity-0 lg:group-hover:opacity-100',
+                )}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </DropdownMenuTrigger>
+            </Tooltip>
 
-          {/* Compact three-dots popover card: Add to playlist + Delete */}
-          {menuOpen && (
-            <div className="absolute top-9 right-0 z-40 w-48 overflow-hidden rounded-2xl border border-border bg-popover p-1.5 shadow-2xl animate-dock-pop">
+            <DropdownMenuContent align="end" className="w-52">
               {menuView === 'main' ? (
-                <div className="space-y-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setMenuView('playlists')}
-                    className="flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                <>
+                  <DropdownMenuItem
+                    keepOpen
+                    onSelect={() => setMenuView('playlists')}
+                    className="justify-between"
                   >
                     <span className="flex items-center gap-2">
-                      <ZunoIcon name="playlist" pack={iconPack} className="h-3.5 w-3.5 text-muted-foreground" />
+                      <ZunoIcon
+                        name="playlist"
+                        pack={iconPack}
+                        className="h-3.5 w-3.5 text-muted-foreground"
+                      />
                       <span>Add to playlist</span>
                     </span>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
+                  </DropdownMenuItem>
 
-                  <div className="my-1 border-t border-border/70" />
+                  <DropdownMenuSeparator />
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false)
+                  <DropdownMenuItem
+                    destructive
+                    onSelect={() => {
                       setMenuView('main')
                       onDelete()
                     }}
-                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
                   >
                     <ZunoIcon name="trash" pack={iconPack} className="h-3.5 w-3.5" />
                     <span>{deleteLabel}</span>
-                  </button>
-                </div>
+                  </DropdownMenuItem>
+                </>
               ) : (
-                <div className="space-y-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setMenuView('main')}
-                    className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                <>
+                  <DropdownMenuItem
+                    keepOpen
+                    onSelect={() => setMenuView('main')}
+                    className="min-h-8 gap-1.5 text-[11px] text-muted-foreground"
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                     <span>Add to playlist</span>
-                  </button>
-                  <div className="my-1 border-t border-border/70" />
+                  </DropdownMenuItem>
+
+                  <DropdownMenuSeparator />
+
                   <div className="max-h-44 overflow-y-auto space-y-0.5">
                     {playlists.map((pl) => {
                       const exists = pl.track_ids.includes(track.id)
                       return (
-                        <button
+                        <DropdownMenuItem
                           key={pl.slug}
-                          type="button"
-                          onClick={() => {
+                          onSelect={() => {
                             if (!exists) onAddToPlaylist(pl.slug, track.id)
-                            setMenuOpen(false)
                             setMenuView('main')
                           }}
-                          className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                          className="min-h-8 justify-between"
                         >
                           <span className="truncate">{pl.title}</span>
                           {exists && (
                             <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
                           )}
-                        </button>
+                        </DropdownMenuItem>
                       )
                     })}
                   </div>
-                  <div className="my-1 border-t border-border/70" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false)
+
+                  <DropdownMenuSeparator />
+
+                  <DropdownMenuItem
+                    onSelect={() => {
                       setMenuView('main')
                       onCreatePlaylistWithTrack(track.id)
                     }}
-                    className="flex w-full items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                    className="min-h-8 gap-1.5 text-muted-foreground"
                   >
                     <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
                     <span>New playlist</span>
-                  </button>
-                </div>
+                  </DropdownMenuItem>
+                </>
               )}
-            </div>
-          )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
     </div>

@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown, Check } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { SORT_OPTIONS, type SortDir, type SortField } from '@/lib/sortTracks'
@@ -18,25 +26,6 @@ export function SortControl({
   onChange,
 }: SortControlProps) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onOutside = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onOutside)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onOutside)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
 
   const options = allowDefault
     ? [
@@ -64,27 +53,85 @@ export function SortControl({
   }
 
   return (
-    <div ref={ref} className="relative flex items-center gap-1.5">
-      {/* Sort field selector */}
-      <Tooltip label="Choose sort field" side="top">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className={cn(
-            'flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer',
-            open && 'bg-secondary text-foreground',
+    <div className="relative flex items-center gap-1.5">
+      {/* EaseUI Sort field dropdown */}
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <Tooltip label="Choose sort field" side="top" disabled={open}>
+          <DropdownMenuTrigger
+            unstyled
+            className={cn(
+              'flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer',
+              open && 'bg-secondary text-foreground',
+            )}
+            aria-label="Sort by"
+          >
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            <span>Sort: {activeOpt.label}</span>
+          </DropdownMenuTrigger>
+        </Tooltip>
+
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+          {options.map((opt) => {
+            const active = opt.field === field
+            return (
+              <DropdownMenuItem
+                key={opt.field}
+                onSelect={() => selectField(opt.field, opt.defaultDir)}
+                className={cn(
+                  'min-h-8 justify-between',
+                  active ? 'bg-secondary text-foreground' : 'text-muted-foreground',
+                )}
+              >
+                <span>{opt.label}</span>
+                {active && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+            )
+          })}
+
+          {canToggleDir && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Order</DropdownMenuLabel>
+              <div className="grid grid-cols-2 gap-1 px-0.5 pb-0.5">
+                <DropdownMenuItem
+                  onSelect={() => onChange(field, 'asc')}
+                  className={cn(
+                    'min-h-8 justify-center gap-1 px-2',
+                    dir === 'asc'
+                      ? 'bg-primary text-primary-foreground hover:bg-primary/90 focus:bg-primary/90'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  <ArrowUp className="h-3 w-3" />
+                  Ascending
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => onChange(field, 'desc')}
+                  className={cn(
+                    'min-h-8 justify-center gap-1 px-2',
+                    dir === 'desc'
+                      ? 'bg-primary text-primary-foreground hover:bg-primary/90 focus:bg-primary/90'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  <ArrowDown className="h-3 w-3" />
+                  Descending
+                </DropdownMenuItem>
+              </div>
+            </>
           )}
-          aria-label="Sort by"
-        >
-          <ArrowUpDown className="h-3.5 w-3.5" />
-          <span>Sort: {activeOpt.label}</span>
-        </button>
-      </Tooltip>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Dedicated 1-click Ascending / Descending toggle */}
       {canToggleDir && (
         <Tooltip
-          label={dir === 'asc' ? 'Ascending · click for Descending' : 'Descending · click for Ascending'}
+          label={
+            dir === 'asc'
+              ? 'Ascending · click for Descending'
+              : 'Descending · click for Ascending'
+          }
           side="top"
         >
           <button
@@ -106,79 +153,6 @@ export function SortControl({
             )}
           </button>
         </Tooltip>
-      )}
-
-      {open && (
-        <div className="absolute top-10 right-0 z-30 w-52 rounded-xl border border-border bg-popover p-1.5 shadow-2xl">
-          <p className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Sort by
-          </p>
-          {options.map((opt) => {
-            const active = opt.field === field
-            return (
-              <button
-                key={opt.field}
-                type="button"
-                onClick={() => {
-                  selectField(opt.field, opt.defaultDir)
-                  setOpen(false)
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer',
-                  active
-                    ? 'bg-secondary font-medium text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                )}
-              >
-                <span>{opt.label}</span>
-                {active && <Check className="h-3.5 w-3.5" />}
-              </button>
-            )
-          })}
-
-          {canToggleDir && (
-            <>
-              <div className="my-1.5 border-t border-border" />
-              <p className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Order
-              </p>
-              <div className="grid grid-cols-2 gap-1 px-1 pb-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChange(field, 'asc')
-                    setOpen(false)
-                  }}
-                  className={cn(
-                    'flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-medium transition-colors cursor-pointer',
-                    dir === 'asc'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                  )}
-                >
-                  <ArrowUp className="h-3 w-3" />
-                  Ascending
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChange(field, 'desc')
-                    setOpen(false)
-                  }}
-                  className={cn(
-                    'flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-medium transition-colors cursor-pointer',
-                    dir === 'desc'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                  )}
-                >
-                  <ArrowDown className="h-3 w-3" />
-                  Descending
-                </button>
-              </div>
-            </>
-          )}
-        </div>
       )}
     </div>
   )

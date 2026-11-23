@@ -1,4 +1,9 @@
 import { useState } from 'react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
 import { PulseHeart } from '@/components/PulseHeart'
@@ -32,6 +37,7 @@ interface DesktopPlayerBarProps {
   onToggleShuffle: () => void
   onCycleRepeat: () => void
   onToggleEqualizer?: () => void
+  onExpandPlayer?: () => void
 }
 
 /**
@@ -62,6 +68,7 @@ export function DesktopPlayerBar({
   onToggleShuffle,
   onCycleRepeat,
   onToggleEqualizer,
+  onExpandPlayer,
 }: DesktopPlayerBarProps) {
   const [volOpen, setVolOpen] = useState(false)
   const effectiveDuration = duration > 0 ? duration : (track?.duration_secs ?? 0)
@@ -87,15 +94,20 @@ export function DesktopPlayerBar({
       )}
     >
       <footer
+        onClick={() => onExpandPlayer?.()}
         className={cn(
-          'flex h-16 items-center gap-5 px-5',
+          'flex h-16 items-center gap-5 px-5 transition-colors',
+          onExpandPlayer && 'cursor-pointer',
           floating
-            ? 'pointer-events-auto mx-auto max-w-4xl rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-md'
+            ? 'pointer-events-auto mx-auto max-w-4xl rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-md hover:border-muted-foreground/35'
             : 'border-t border-border bg-card',
         )}
       >
         {/* 1. Transport Controls (Classic or Skiper25 Waveform toggle) */}
-        <div className="flex shrink-0 items-center gap-1">
+        <div
+          className="flex shrink-0 items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Tooltip label="Previous" side="top">
             <button
               onClick={onPrev}
@@ -136,26 +148,32 @@ export function DesktopPlayerBar({
           </Tooltip>
         </div>
 
-        {/* 2. Track Title & Artist */}
-        <div className="w-48 shrink-0 min-w-0">
-          <p className="truncate text-sm font-semibold leading-snug text-foreground">
-            {track ? track.title : 'Not Playing'}
-          </p>
-          <p className="truncate text-xs leading-snug text-muted-foreground">
-            {artistLabel}
-          </p>
-        </div>
+        {/* 2. Track Title & Artist (clicking dock or track opens full-screen player) */}
+        <Tooltip label="Open full-screen player" side="top" className="w-48 shrink-0 min-w-0 justify-start">
+          <div className="w-full min-w-0 text-left">
+            <p className="truncate text-sm font-semibold leading-snug text-foreground">
+              {track ? track.title : 'Not Playing'}
+            </p>
+            <p className="truncate text-xs leading-snug text-muted-foreground">
+              {artistLabel}
+            </p>
+          </div>
+        </Tooltip>
 
         {/* 3. Multi-style Progress Scrubber */}
-        <Scrubber
-          value={position}
-          max={effectiveDuration}
-          styleVariant={appearance.scrubberKnob}
-          seed={track?.id ?? track?.title ?? 'zuno'}
-          onChange={onSeekChange}
-          onCommit={onSeekCommit}
+        <div
           className="min-w-0 flex-1"
-        />
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Scrubber
+            value={position}
+            max={effectiveDuration}
+            styleVariant={appearance.scrubberKnob}
+            seed={track?.id ?? track?.title ?? 'zuno'}
+            onChange={onSeekChange}
+            onCommit={onSeekCommit}
+          />
+        </div>
 
         {/* 4. Inline Timestamp */}
         <span className="shrink-0 tabular-nums text-xs text-muted-foreground whitespace-nowrap">
@@ -163,7 +181,10 @@ export function DesktopPlayerBar({
         </span>
 
         {/* 5. Utility Controls */}
-        <div className="relative flex shrink-0 items-center gap-1">
+        <div
+          className="relative flex shrink-0 items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Tooltip
             label={isFavorite ? 'Remove favorite' : 'Favorite'}
             side="top"
@@ -236,28 +257,31 @@ export function DesktopPlayerBar({
             </Tooltip>
           )}
 
-          <Tooltip label={`Volume: ${Math.round(volume * 100)}%`} side="top">
-            <button
-              onClick={() => setVolOpen((v) => !v)}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
-                volOpen
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-              )}
-              aria-label="Volume"
-            >
-              <ZunoIcon
-                name={volume <= 0.001 ? 'mute' : 'volume'}
-                pack={iconPack}
-                className="h-4 w-4"
-              />
-            </button>
-          </Tooltip>
+          <DropdownMenu open={volOpen} onOpenChange={setVolOpen}>
+            <Tooltip label={`Volume: ${Math.round(volume * 100)}%`} side="top" disabled={volOpen}>
+              <DropdownMenuTrigger
+                aria-label="Volume"
+                className={cn(
+                  'h-8 w-8 hover:bg-secondary',
+                  volOpen && 'bg-secondary text-foreground',
+                )}
+              >
+                <ZunoIcon
+                  name={volume <= 0.001 ? 'mute' : 'volume'}
+                  pack={iconPack}
+                  className="h-4 w-4"
+                />
+              </DropdownMenuTrigger>
+            </Tooltip>
 
-          {volOpen && (
-            <div className="absolute right-0 bottom-12 z-30 flex w-40 items-center gap-2.5 rounded-xl border border-border bg-popover px-3 py-2.5 shadow-2xl">
+            <DropdownMenuContent
+              align="end"
+              side="top"
+              autoFocusFirst={false}
+              className="min-w-0 w-44 flex-row items-center gap-2.5 px-3 py-2.5"
+            >
               <button
+                type="button"
                 onClick={() => onVolumeChange(volume > 0 ? 0 : 0.8)}
                 className="text-muted-foreground hover:text-foreground cursor-pointer"
                 aria-label="Mute or unmute"
@@ -276,8 +300,8 @@ export function DesktopPlayerBar({
                 ariaLabel="Volume"
                 alwaysShowThumb
               />
-            </div>
-          )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </footer>
     </div>

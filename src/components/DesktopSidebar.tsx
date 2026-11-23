@@ -9,6 +9,7 @@ import type { Playlist } from '@/lib/zunoApi'
 export type AppPage =
   | 'home'
   | 'recent'
+  | 'playlists'
   | 'playlist'
   | 'equalizer'
   | 'customize'

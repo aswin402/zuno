@@ -14,21 +14,19 @@ interface MobileDockProps {
   isPlaying: boolean
   isFavorite: boolean
   progressPct: number
-  isFavoritesActive: boolean
-  eqEnabled?: boolean
   appearance: AppearanceSettings
   onTogglePlay: () => void
   onToggleFavorite: () => void
   onExpandPlayer: () => void
   onNavigate: (page: AppPage) => void
   onOpenSearch: () => void
-  onOpenFavorites: () => void
 }
 
 /**
  * Nested two-tier Mobile Dock:
  * - Upper tier: Integrated circular-cover mini player with PulseHeart & Play/Pause + hairline progress seam.
- * - Lower tier: Contrasting curved nav tray where the active tab morphs into a top accent tick + bold label.
+ * - Lower tier: 4-tab contrasting curved nav tray (Songs, Search, Recent, Playlists)
+ *   where the active tab morphs into a top accent tick + bold label.
  */
 export function MobileDock({
   page,
@@ -37,15 +35,12 @@ export function MobileDock({
   isPlaying,
   isFavorite,
   progressPct,
-  isFavoritesActive,
-  eqEnabled = false,
   appearance,
   onTogglePlay,
   onToggleFavorite,
   onExpandPlayer,
   onNavigate,
   onOpenSearch,
-  onOpenFavorites,
 }: MobileDockProps) {
   const iconPack = appearance.iconPack
 
@@ -54,7 +49,6 @@ export function MobileDock({
     icon: ZunoIconName
     label: string
     active: boolean
-    dot?: boolean
     onClick: () => void
   }[] = [
     {
@@ -72,26 +66,18 @@ export function MobileDock({
       onClick: onOpenSearch,
     },
     {
-      id: 'favorites',
-      icon: 'heart',
-      label: 'Favorites',
-      active: isFavoritesActive && !searchOpen,
-      onClick: onOpenFavorites,
+      id: 'recent',
+      icon: 'clock',
+      label: 'Recent',
+      active: page === 'recent' && !searchOpen,
+      onClick: () => onNavigate('recent'),
     },
     {
-      id: 'equalizer',
-      icon: 'equalizer',
-      label: 'EQ',
-      active: page === 'equalizer' && !searchOpen,
-      dot: eqEnabled,
-      onClick: () => onNavigate('equalizer'),
-    },
-    {
-      id: 'customize',
-      icon: 'customize',
-      label: 'Style',
-      active: page === 'customize' && !searchOpen,
-      onClick: () => onNavigate('customize'),
+      id: 'playlists',
+      icon: 'playlist',
+      label: 'Playlists',
+      active: (page === 'playlists' || page === 'playlist') && !searchOpen,
+      onClick: () => onNavigate('playlists'),
     },
   ]
 
@@ -185,10 +171,10 @@ export function MobileDock({
           </div>
         )}
 
-        {/* Lower Tier: Nested Contrasting Curved Nav Tray */}
+        {/* Lower Tier: Nested Contrasting 4-Tab Curved Nav Tray */}
         <nav
           aria-label="Navigation"
-          className="grid grid-cols-5 items-center rounded-[28px] bg-primary px-2 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
+          className="grid grid-cols-4 items-center rounded-[28px] bg-primary px-3 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
         >
           {navItems.map((item) => (
             <button
@@ -220,12 +206,6 @@ export function MobileDock({
                     filled={item.icon === 'heart'}
                     className="h-[19px] w-[19px]"
                   />
-                  {item.dot && (
-                    <span
-                      className="pointer-events-none absolute -top-1 -right-1.5 h-1.5 w-1.5 rounded-full bg-primary-foreground"
-                      aria-hidden="true"
-                    />
-                  )}
                 </span>
               )}
             </button>

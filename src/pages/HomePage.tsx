@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
-import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
 import type { AppearanceSettings } from '@/lib/appearance'
@@ -16,15 +15,11 @@ interface HomePageProps {
   sortDir: SortDir
   appearance: AppearanceSettings
   onSortChange: (field: SortField, dir: SortDir) => void
-  onToggleMode: () => void
   onPlayAll: (subset?: Track[]) => void
   onPlayTrack: (track: Track, subset: Track[], label: string, sourceKey: string) => void
   onDeleteTrack: (track: Track) => void
   onCreatePlaylist: (initialTrackId?: string) => void
   onAddToPlaylist: (slug: string, trackId: string) => void
-  onOpenRecent: () => void
-  onOpenSearch: () => void
-  onRescan: () => void
 }
 
 export function HomePage({
@@ -36,15 +31,11 @@ export function HomePage({
   sortDir,
   appearance,
   onSortChange,
-  onToggleMode,
   onPlayAll,
   onPlayTrack,
   onDeleteTrack,
   onCreatePlaylist,
   onAddToPlaylist,
-  onOpenRecent,
-  onOpenSearch,
-  onRescan,
 }: HomePageProps) {
   const sortedTracks = useMemo(
     () => sortTracks(tracks, sortField, sortDir),
@@ -65,45 +56,15 @@ export function HomePage({
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
-          {sortedTracks.length > 0 && (
-            <button
-              onClick={() => onPlayAll(sortedTracks)}
-              className="hidden h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:inline-flex cursor-pointer"
-            >
-              <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
-              Play all
-            </button>
-          )}
+        {sortedTracks.length > 0 && (
           <button
-            onClick={onOpenRecent}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
-            aria-label="Last played"
+            onClick={() => onPlayAll(sortedTracks)}
+            className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
           >
-            <ZunoIcon name="clock" pack={iconPack} className="h-4 w-4" />
+            <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
+            Play all
           </button>
-          <EaseThemeToggle
-            mode={appearance.mode}
-            transition={appearance.themeTransition}
-            onToggle={onToggleMode}
-            size="md"
-            className="lg:hidden"
-          />
-          <button
-            onClick={onRescan}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
-            aria-label="Rescan songs"
-          >
-            <ZunoIcon name="refresh" pack={iconPack} className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onOpenSearch}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
-            aria-label="Search"
-          >
-            <ZunoIcon name="search" pack={iconPack} className="h-4 w-4" />
-          </button>
-        </div>
+        )}
       </div>
 
       {/* AVAILABLE SONGS + Sort By */}

@@ -3,8 +3,10 @@ import { DesktopSidebar, type AppPage } from '@/components/DesktopSidebar'
 import { DesktopPlayerBar } from '@/components/DesktopPlayerBar'
 import { NowPlayingPanel } from '@/components/NowPlayingPanel'
 import { MobileDock } from '@/components/MobileDock'
+import { MobileNavbar } from '@/components/MobileNavbar'
 import { HomePage } from '@/pages/HomePage'
 import { LastPlayedPage } from '@/pages/LastPlayedPage'
+import { PlaylistsPage } from '@/pages/PlaylistsPage'
 import { PlaylistPage } from '@/pages/PlaylistPage'
 import { EqualizerPage } from '@/pages/EqualizerPage'
 import { CustomizePage } from '@/pages/CustomizePage'
@@ -766,11 +768,6 @@ export default function App() {
     }
   }, [favoritesPlaylist])
 
-  const isFavoritesActive =
-    page === 'playlist' &&
-    listCtx.kind === 'playlist' &&
-    (listCtx.slug === 'favorites' || listCtx.slug === 'fav')
-
   const isCustomPlaylist = Boolean(activeListMeta.playlistSlug)
   const currentPlaylistSort = isCustomPlaylist ? playlistSort : sortPref
 
@@ -792,8 +789,27 @@ export default function App() {
     }
   }
 
+  const queueTracks: Track[] = useMemo(
+    () =>
+      queueIds
+        .map((id) => trackById.get(id))
+        .filter((t): t is Track => Boolean(t)),
+    [queueIds, trackById],
+  )
+
+  const handleSelectQueueIndex = useCallback(
+    (idx: number) => {
+      if (idx < 0 || idx >= queueIds.length) return
+      setQueueIndex(idx)
+      playTrackById(queueIds[idx])
+    },
+    [queueIds, playTrackById],
+  )
+
   const nowPlayingProps = {
     track: currentTrack,
+    queueTracks,
+    queueIndex,
     playlistLabel: activePlaylistLabel,
     isPlaying,
     isFavorite: isCurrentFavorite,
@@ -812,6 +828,11 @@ export default function App() {
     onToggleFavorite: handleToggleFavorite,
     onToggleShuffle: handleToggleShuffle,
     onCycleRepeat: handleCycleRepeat,
+    onSelectQueueIndex: handleSelectQueueIndex,
+    onDeleteTrack: (t: Track) => {
+      setMobilePlayerOpen(false)
+      setDeleteTarget(t)
+    },
     onOpenQueue: () => {
       setMobilePlayerOpen(false)
       setPage('home')
@@ -885,8 +906,45 @@ export default function App() {
         onRescan={handleRescan}
       />
 
-      {/* Right Content Column: Scrollable Pages + Floating Sticky Desktop Player Bar / Mobile Dock */}
+      {/* Right Content Column: Mobile Top Navbar + Scrollable Pages + Floating Sticky Desktop Player Bar / Mobile Dock */}
       <div className="zuno-canvas relative flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        <MobileNavbar
+          page={page}
+          activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
+          playlists={playlists}
+          eqEnabled={eqSettings.enabled}
+          eqLabel={eqLabel}
+          mode={appearance.mode}
+          themeTransition={appearance.themeTransition}
+          iconPack={appearance.iconPack}
+          onToggleMode={toggleThemeMode}
+          onGoHome={() => {
+            setSearchOpen(false)
+            setPage('home')
+          }}
+          onOpenSearch={() => setSearchOpen(true)}
+          onGoEqualizer={() => {
+            setSearchOpen(false)
+            setPage('equalizer')
+          }}
+          onGoCustomize={() => {
+            setSearchOpen(false)
+            setPage('customize')
+          }}
+          onOpenPlaylist={(slug) => {
+            setSearchOpen(false)
+            setListCtx({ kind: 'playlist', slug })
+            setPlaylistSort({ field: 'default', dir: 'asc' })
+            setPage('playlist')
+          }}
+          onCreatePlaylist={() => {
+            setCreateName('')
+            setCreateInitialTrackId(undefined)
+            setCreateOpen(true)
+          }}
+          onRescan={handleRescan}
+        />
+
         {page === 'customize' ? (
           <main className="min-h-0 flex-1 overflow-hidden">
             <CustomizePage
@@ -913,7 +971,6 @@ export default function App() {
               sortDir={sortPref.dir}
               appearance={appearance}
               onSortChange={handleMainSortChange}
-              onToggleMode={toggleThemeMode}
               onPlayAll={(subset) => {
                 const list = subset ?? tracks
                 startQueue(
@@ -934,9 +991,6 @@ export default function App() {
                 setCreateOpen(true)
               }}
               onAddToPlaylist={handleAddToPlaylist}
-              onOpenRecent={() => setPage('recent')}
-              onOpenSearch={() => setSearchOpen(true)}
-              onRescan={handleRescan}
             />
           )}
 
@@ -970,6 +1024,33 @@ export default function App() {
             />
           )}
 
+          {page === 'playlists' && (
+            <PlaylistsPage
+              playlists={playlists}
+              tracksById={trackById}
+              appearance={appearance}
+              onOpenPlaylist={(slug) => {
+                setListCtx({ kind: 'playlist', slug })
+                setPlaylistSort({ field: 'default', dir: 'asc' })
+                setPage('playlist')
+              }}
+              onPlayPlaylist={(pl, resolved) =>
+                startQueue(
+                  resolved.map((t) => t.id),
+                  resolved[0]?.id,
+                  pl.title,
+                  undefined,
+                  `playlist:${pl.slug}`,
+                )
+              }
+              onCreatePlaylist={() => {
+                setCreateName('')
+                setCreateInitialTrackId(undefined)
+                setCreateOpen(true)
+              }}
+            />
+          )}
+
           {page === 'playlist' && (
             <PlaylistPage
               overline={activeListMeta.overline}
@@ -985,7 +1066,7 @@ export default function App() {
               canDelete={isCustomPlaylist}
               canRemoveTracks={isCustomPlaylist}
               onSortChange={handlePlaylistSortChange}
-              onBack={() => setPage('home')}
+              onBack={() => setPage('playlists')}
               onPlayTrack={(t, ordered) =>
                 selectOrToggleTrack(
                   t,
@@ -1083,6 +1164,7 @@ export default function App() {
           onToggleEqualizer={() =>
             setPage((p) => (p === 'equalizer' ? lastNonEqPageRef.current : 'equalizer'))
           }
+          onExpandPlayer={() => setMobilePlayerOpen(true)}
         />
 
         {/* Mobile Bottom Dock (< 1024px) */}
@@ -1093,8 +1175,6 @@ export default function App() {
           isPlaying={isPlaying}
           isFavorite={isCurrentFavorite}
           progressPct={progressPct}
-          isFavoritesActive={isFavoritesActive}
-          eqEnabled={eqSettings.enabled}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
           onToggleFavorite={handleToggleFavorite}
@@ -1104,10 +1184,6 @@ export default function App() {
             setPage(next)
           }}
           onOpenSearch={() => setSearchOpen(true)}
-          onOpenFavorites={() => {
-            setSearchOpen(false)
-            openFavoritesPage()
-          }}
         />
       </div>
 
@@ -1131,15 +1207,23 @@ export default function App() {
         onClose={() => setSearchOpen(false)}
       />
 
-      {/* Mobile Full-Screen Now Playing Sheet (< 1024px) */}
+      {/* Full-Screen Now Playing Player (Mobile + Desktop) */}
       {mobilePlayerOpen && (
-        <div className="fixed inset-0 z-40 h-[100dvh] w-full bg-card lg:hidden">
+        <div className="fixed inset-0 z-40 h-[100dvh] w-full">
           <NowPlayingPanel
             {...nowPlayingProps}
             eqEnabled={eqSettings.enabled}
+            eqLabel={eqLabel}
             appearance={appearance}
             isMobileSheet
             onCloseMobile={() => setMobilePlayerOpen(false)}
+            onOpenPlaylist={(slug) => {
+              setMobilePlayerOpen(false)
+              setSearchOpen(false)
+              setListCtx({ kind: 'playlist', slug })
+              setPlaylistSort({ field: 'default', dir: 'asc' })
+              setPage('playlist')
+            }}
             onOpenEqualizer={() => {
               setMobilePlayerOpen(false)
               setPage('equalizer')
