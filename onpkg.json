@@ -1,0 +1,59 @@
+{
+  "agent_instructions": {
+    "active_skills": [],
+    "docs_directory": "onpkg_docs/"
+  },
+  "architecture": {
+    "entrypoint": "src/main.tsx",
+    "styles": "src/index.css"
+  },
+  "packages": {
+    "added_by_agent": [],
+    "core": [
+      "@tailwindcss/vite",
+      "@types/react",
+      "@types/react-dom",
+      "@vitejs/plugin-react",
+      "react",
+      "react-dom",
+      "tailwindcss",
+      "typescript",
+      "vite"
+    ]
+  },
+  "project": {
+    "name": "zuno",
+    "package_manager": "npm",
+    "runtime": "node",
+    "stack": "react-vite-tailwind"
+  },
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "sources": {
+    "directories": [
+      "src"
+    ],
+    "file_patterns": [
+      "*.css",
+      "*.html",
+      "*.json",
+      "*.md",
+      "*.ts",
+      "*.tsx"
+    ],
+    "files": [
+      "README.md",
+      "index.html",
+      "package.json",
+      "src/App.tsx",
+      "src/index.css",
+      "src/main.tsx",
+      "src/vite-env.d.ts",
+      "tsconfig.json",
+      "vite.config.ts"
+    ]
+  }
+}

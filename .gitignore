@@ -1,0 +1,56 @@
+# Dependencies
+/node_modules
+.pnp
+.pnp.js
+
+# Build outputs
+/target
+/dist
+/build
+src-tauri/target
+src-tauri/gen
+*.tsbuildinfo
+
+# Local Zuno data, demo audio & runtime caches
+/demo-zuno/
+.zuno/
+*.sock
+*.m3u8.tmp
+*.tmp
+
+# Logs & diagnostics
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Android / Mobile build artifacts
+*.apk
+*.aab
+*.keystore
+*.jks
+local.properties
+.gradle/
+
+# Editors & OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Local template scaffolding stubs
+/onpkg_docs/
+/assets/logo.svg

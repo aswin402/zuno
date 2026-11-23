@@ -1,0 +1,14 @@
+[package]
+name = "zuno-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rodio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zuno-core = { path = "../zuno-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

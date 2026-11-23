@@ -1,0 +1,22 @@
+[package]
+name = "zuno-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["watch"]
+watch = ["dep:notify"]
+
+[dependencies]
+blake3.workspace = true
+dirs.workspace = true
+lofty.workspace = true
+notify = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

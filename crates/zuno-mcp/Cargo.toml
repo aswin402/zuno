@@ -1,0 +1,19 @@
+[package]
+name = "zuno-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zuno-mcp"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zuno-audio = { path = "../zuno-audio" }
+zuno-core = { path = "../zuno-core" }
+
+[dev-dependencies]
+tempfile.workspace = true
