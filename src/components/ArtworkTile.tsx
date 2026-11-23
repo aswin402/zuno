@@ -47,7 +47,7 @@ export function ArtworkTile({
   return (
     <div
       className={cn(
-        'relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-b from-[#1f1f23] via-[#151518] to-[#0f0f12]',
+        'relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-b from-accent/70 via-secondary to-card',
         className,
       )}
     >
@@ -59,9 +59,9 @@ export function ArtworkTile({
       >
         <defs>
           <radialGradient id={`g-${h}`} cx={`${cx}%`} cy={`${cy}%`} r="65%">
-            <stop offset="0%" stopColor="#3f3f46" stopOpacity="0.38" />
-            <stop offset="60%" stopColor="#18181b" stopOpacity="0.12" />
-            <stop offset="100%" stopColor="#09090b" stopOpacity="0" />
+            <stop offset="0%" stopColor="var(--muted-foreground)" stopOpacity="0.28" />
+            <stop offset="60%" stopColor="var(--secondary)" stopOpacity="0.12" />
+            <stop offset="100%" stopColor="var(--background)" stopOpacity="0" />
           </radialGradient>
         </defs>
         <rect width="100" height="100" fill={`url(#g-${h})`} />
@@ -72,12 +72,18 @@ export function ArtworkTile({
             cy={cy}
             r={i * ringStep}
             fill="none"
-            stroke="#fafafa"
-            strokeOpacity={0.14 - i * 0.025}
-            strokeWidth={variant === 'thumb' ? 0.9 : 0.45}
+            stroke="var(--foreground)"
+            strokeOpacity={0.18 - i * 0.03}
+            strokeWidth={variant === 'thumb' ? 1 : 0.5}
           />
         ))}
-        <circle cx={cx} cy={cy} r={variant === 'thumb' ? 4 : 2.2} fill="#fafafa" fillOpacity="0.5" />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={variant === 'thumb' ? 4 : 2.2}
+          fill="var(--foreground)"
+          fillOpacity="0.55"
+        />
       </svg>
     </div>
   )

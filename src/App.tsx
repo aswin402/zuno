@@ -4,12 +4,17 @@ import { DesktopPlayerBar } from '@/components/DesktopPlayerBar'
 import { NowPlayingPanel } from '@/components/NowPlayingPanel'
 import { MobileDock } from '@/components/MobileDock'
 import { HomePage } from '@/pages/HomePage'
+import { LastPlayedPage } from '@/pages/LastPlayedPage'
 import { PlaylistPage } from '@/pages/PlaylistPage'
-import { SearchPage } from '@/pages/SearchPage'
+import { EqualizerPage } from '@/pages/EqualizerPage'
 import { CustomizePage } from '@/pages/CustomizePage'
+import { SearchOverlay } from '@/components/SearchOverlay'
+import { AutoNextBanner } from '@/components/AutoNextBanner'
+import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { Dialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import {
   applyAppearanceToDom,
   DEFAULT_APPEARANCE,
@@ -17,10 +22,20 @@ import {
   saveAppearance,
   type AppearanceSettings,
 } from '@/lib/appearance'
+import { hydrateSavedCustomFonts } from '@/lib/fonts'
+import {
+  applyEqualizerToAudio,
+  EQ_BANDS,
+  findActivePreset,
+  loadEqSettings,
+  resumeEqualizerContext,
+  saveEqSettings,
+  type EqPreset,
+  type EqSettings,
+} from '@/lib/equalizer'
 import type { SortDir, SortField } from '@/lib/sortTracks'
 import {
   zunoApi,
-  type FolderSummary,
   type Playlist,
   type RepeatMode,
   type Track,
@@ -93,9 +108,10 @@ export default function App() {
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false)
   const [listCtx, setListCtx] = useState<ListContext>({ kind: 'all' })
   const [appearance, setAppearance] = useState<AppearanceSettings>(loadAppearance)
+  const [eqSettings, setEqSettings] = useState<EqSettings>(loadEqSettings)
+  const lastNonEqPageRef = useRef<AppPage>('home')
 
   const [tracks, setTracks] = useState<Track[]>([])
-  const [folders, setFolders] = useState<FolderSummary[]>([])
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [lastPlayedIds, setLastPlayedIds] = useState<string[]>(loadLastPlayed)
   const [sortPref, setSortPref] = useState<{ field: SortField; dir: SortDir }>(
@@ -108,9 +124,17 @@ export default function App() {
     field: 'default',
     dir: 'asc',
   })
+  const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Track[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [autoNextBanner, setAutoNextBanner] = useState<{
+    title: string
+    prevIndex: number
+    runId: number
+  } | null>(null)
+  const autoNextTimerRef = useRef<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Track | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [queueIds, setQueueIds] = useState<string[]>([])
@@ -142,6 +166,11 @@ export default function App() {
     saveAppearance(appearance)
   }, [appearance])
 
+  // Hydrate any user-uploaded custom font files once on startup
+  useEffect(() => {
+    hydrateSavedCustomFonts()
+  }, [])
+
   const updateAppearance = useCallback((patch: Partial<AppearanceSettings>) => {
     setAppearance((prev) => ({ ...prev, ...patch }))
   }, [])
@@ -151,6 +180,103 @@ export default function App() {
     notify('Restored default style')
   }, [notify])
 
+  const toggleThemeMode = useCallback(() => {
+    setAppearance((prev) => ({
+      ...prev,
+      mode: prev.mode === 'dark' ? 'light' : 'dark',
+    }))
+  }, [])
+
+  // Persist & live-apply Equalizer DSP settings to the <audio> element
+  useEffect(() => {
+    saveEqSettings(eqSettings)
+    applyEqualizerToAudio(audioRef.current, eqSettings)
+    if (eqSettings.enabled) {
+      resumeEqualizerContext(audioRef.current)
+    }
+  }, [eqSettings])
+
+  useEffect(() => {
+    if (page !== 'equalizer') {
+      lastNonEqPageRef.current = page
+    }
+  }, [page])
+
+  const updateEqSettings = useCallback((patch: Partial<EqSettings>) => {
+    setEqSettings((prev) => ({ ...prev, ...patch }))
+  }, [])
+
+  const handleSelectEqPreset = useCallback(
+    (preset: EqPreset) => {
+      setEqSettings((prev) => ({
+        ...prev,
+        enabled: true,
+        presetId: preset.id,
+        bands: [...preset.bands],
+        preamp: preset.preamp ?? 0,
+      }))
+      notify(`EQ: ${preset.name}`)
+    },
+    [notify],
+  )
+
+  const handleSaveCustomEqPreset = useCallback(
+    (name: string) => {
+      const id = `custom-${Date.now()}`
+      const created: EqPreset = {
+        id,
+        name,
+        tagline: 'Custom sound profile',
+        category: 'custom',
+        bands: [...eqSettings.bands],
+        preamp: eqSettings.preamp,
+        custom: true,
+      }
+      setEqSettings((prev) => ({
+        ...prev,
+        enabled: true,
+        presetId: id,
+        customPresets: [created, ...prev.customPresets],
+      }))
+      notify(`Saved preset "${name}"`)
+    },
+    [eqSettings.bands, eqSettings.preamp, notify],
+  )
+
+  const handleDeleteCustomEqPreset = useCallback(
+    (id: string) => {
+      setEqSettings((prev) => ({
+        ...prev,
+        presetId: prev.presetId === id ? null : prev.presetId,
+        customPresets: prev.customPresets.filter((p) => p.id !== id),
+      }))
+      notify('Deleted custom preset')
+    },
+    [notify],
+  )
+
+  const handleResetEqFlat = useCallback(() => {
+    setEqSettings((prev) => ({
+      ...prev,
+      presetId: 'flat',
+      preamp: 0,
+      bands: EQ_BANDS.map(() => 0),
+    }))
+    notify('Equalizer reset to Flat')
+  }, [notify])
+
+  const handleEnsureAudioAttached = useCallback(() => {
+    applyEqualizerToAudio(audioRef.current, eqSettings, true)
+    resumeEqualizerContext(audioRef.current)
+  }, [eqSettings])
+
+  const activeEqPreset = useMemo(() => findActivePreset(eqSettings), [eqSettings])
+  const eqLabel = eqSettings.enabled
+    ? activeEqPreset
+      ? activeEqPreset.name
+      : 'Custom'
+    : 'Off'
+
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 2200)
@@ -159,13 +285,11 @@ export default function App() {
 
   const refreshLibrary = useCallback(async () => {
     try {
-      const [songRes, folderRes, plRes] = await Promise.all([
+      const [songRes, plRes] = await Promise.all([
         zunoApi.listSongs(),
-        zunoApi.listFolders(),
         zunoApi.listPlaylists(),
       ])
       setTracks(songRes.tracks)
-      setFolders(folderRes)
       setPlaylists(plRes)
     } catch {
       /* backend offline */
@@ -208,13 +332,13 @@ export default function App() {
       lastPlayedIds
         .map((id) => trackById.get(id))
         .filter((t): t is Track => Boolean(t))
-        .slice(0, 6),
+        .slice(0, 30),
     [lastPlayedIds, trackById],
   )
 
   const recordPlayed = useCallback((id: string) => {
     setLastPlayedIds((prev) => {
-      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 10)
+      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 30)
       try {
         localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
       } catch {
@@ -250,15 +374,25 @@ export default function App() {
         el.src = url
       }
       recordPlayed(id)
+      if (eqSettings.enabled) {
+        applyEqualizerToAudio(el, eqSettings, true)
+      }
+      resumeEqualizerContext(el)
       el.play()
         .then(() => setIsPlaying(true))
         .catch(() => setIsPlaying(false))
     },
-    [recordPlayed],
+    [recordPlayed, eqSettings],
   )
 
   const startQueue = useCallback(
-    (ids: string[], startId?: string, label = 'Songs', forceShuffle?: boolean) => {
+    (
+      ids: string[],
+      startId?: string,
+      label = 'Songs',
+      forceShuffle?: boolean,
+      _sourceKey = 'songs',
+    ) => {
       if (ids.length === 0) return
       const useShuffle = forceShuffle ?? shuffle
       if (forceShuffle !== undefined) setShuffle(forceShuffle)
@@ -283,11 +417,17 @@ export default function App() {
           tracks.map((t) => t.id),
           tracks[0].id,
           'Songs',
+          undefined,
+          'songs',
         )
       }
       return
     }
     if (el.paused) {
+      if (eqSettings.enabled) {
+        applyEqualizerToAudio(el, eqSettings, true)
+      }
+      resumeEqualizerContext(el)
       el.play()
         .then(() => setIsPlaying(true))
         .catch(() => {})
@@ -295,7 +435,83 @@ export default function App() {
       el.pause()
       setIsPlaying(false)
     }
-  }, [currentTrack, tracks, startQueue])
+  }, [currentTrack, tracks, startQueue, eqSettings])
+
+  const selectOrToggleTrack = useCallback(
+    (track: Track, subset: Track[], label: string, sourceKey: string) => {
+      if (currentTrack?.id === track.id) {
+        handleTogglePlay()
+        return
+      }
+      startQueue(
+        subset.map((x) => x.id),
+        track.id,
+        label,
+        undefined,
+        sourceKey,
+      )
+    },
+    [currentTrack, handleTogglePlay, startQueue],
+  )
+
+  const triggerAutoNextFuse = useCallback((title: string, prevIndex: number) => {
+    if (autoNextTimerRef.current !== null) {
+      window.clearTimeout(autoNextTimerRef.current)
+    }
+    setAutoNextBanner({ title, prevIndex, runId: Date.now() })
+    autoNextTimerRef.current = window.setTimeout(() => {
+      setAutoNextBanner(null)
+      autoNextTimerRef.current = null
+    }, 2600)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (autoNextTimerRef.current !== null) {
+        window.clearTimeout(autoNextTimerRef.current)
+      }
+    }
+  }, [])
+
+  const handleUndoAutoNext = useCallback(() => {
+    if (!autoNextBanner) return
+    if (autoNextTimerRef.current !== null) {
+      window.clearTimeout(autoNextTimerRef.current)
+      autoNextTimerRef.current = null
+    }
+    const prevIdx = autoNextBanner.prevIndex
+    setAutoNextBanner(null)
+    if (prevIdx >= 0 && prevIdx < queueIds.length) {
+      setQueueIndex(prevIdx)
+      playTrackById(queueIds[prevIdx])
+    }
+  }, [autoNextBanner, queueIds, playTrackById])
+
+  const handleRemoveLastPlayed = useCallback(
+    (trackId: string) => {
+      setLastPlayedIds((prev) => {
+        const next = prev.filter((id) => id !== trackId)
+        try {
+          localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+      notify('Removed from Last Played')
+    },
+    [notify],
+  )
+
+  const handleClearLastPlayed = useCallback(() => {
+    setLastPlayedIds([])
+    try {
+      localStorage.removeItem(LAST_PLAYED_KEY)
+    } catch {
+      /* ignore */
+    }
+    notify('Cleared Last Played history')
+  }, [notify])
 
   const handleNext = useCallback(
     (autoAdvance = false) => {
@@ -309,16 +525,26 @@ export default function App() {
       }
       if (queueIndex + 1 < queueIds.length) {
         const nextIdx = queueIndex + 1
+        const nextId = queueIds[nextIdx]
         setQueueIndex(nextIdx)
-        playTrackById(queueIds[nextIdx])
+        playTrackById(nextId)
+        if (autoAdvance) {
+          const nextTrack = trackById.get(nextId)
+          if (nextTrack) triggerAutoNextFuse(nextTrack.title, queueIndex)
+        }
       } else if (repeat === 'all') {
+        const nextId = queueIds[0]
         setQueueIndex(0)
-        playTrackById(queueIds[0])
+        playTrackById(nextId)
+        if (autoAdvance) {
+          const nextTrack = trackById.get(nextId)
+          if (nextTrack) triggerAutoNextFuse(nextTrack.title, queueIndex)
+        }
       } else {
         setIsPlaying(false)
       }
     },
-    [queueIds, queueIndex, repeat, playTrackById],
+    [queueIds, queueIndex, repeat, playTrackById, trackById, triggerAutoNextFuse],
   )
 
   const handlePrev = useCallback(() => {
@@ -361,6 +587,11 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen((v) => !v)
+        return
+      }
       if (!inInput && e.code === 'Space') {
         e.preventDefault()
         handleTogglePlay()
@@ -369,6 +600,36 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [handleTogglePlay])
+
+  async function handleConfirmDeleteSong() {
+    if (!deleteTarget) return
+    const target = deleteTarget
+    setDeleteTarget(null)
+    try {
+      await zunoApi.deleteSong(target.id)
+      if (currentTrack?.id === target.id && audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.removeAttribute('src')
+        setIsPlaying(false)
+        setQueueIndex(null)
+      }
+      setQueueIds((prev) => prev.filter((id) => id !== target.id))
+      setBaseQueueIds((prev) => prev.filter((id) => id !== target.id))
+      setLastPlayedIds((prev) => {
+        const next = prev.filter((id) => id !== target.id)
+        try {
+          localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+      await refreshLibrary()
+      notify(`Deleted ${target.title}`)
+    } catch (err) {
+      notify(String(err))
+    }
+  }
 
   async function handleRescan() {
     try {
@@ -564,7 +825,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background text-foreground">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
@@ -576,213 +837,298 @@ export default function App() {
         onEnded={() => handleNext(true)}
       />
 
-      {/* Main Workspace */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <DesktopSidebar
-          page={page}
-          activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
-          playlists={playlists}
-          songCount={tracks.length}
-          onGoHome={() => setPage('home')}
-          onGoSearch={() => setPage('search')}
-          onOpenFavorites={openFavoritesPage}
-          onOpenPlaylist={(slug) => {
-            setListCtx({ kind: 'playlist', slug })
-            setPlaylistSort({ field: 'default', dir: 'asc' })
-            setPage('playlist')
-          }}
-          onGoCustomize={() => setPage('customize')}
-          onCreatePlaylist={() => {
-            setCreateName('')
-            setCreateInitialTrackId(undefined)
-            setCreateOpen(true)
-          }}
-          onRescan={handleRescan}
+      {/* Full-height Left Sidebar (spans 100% top-to-bottom, zero bottom gap) */}
+      <DesktopSidebar
+        page={page}
+        searchOpen={searchOpen}
+        activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
+        playlists={playlists}
+        songCount={tracks.length}
+        recentCount={lastPlayedTracks.length}
+        eqEnabled={eqSettings.enabled}
+        mode={appearance.mode}
+        themeTransition={appearance.themeTransition}
+        iconPack={appearance.iconPack}
+        onToggleMode={toggleThemeMode}
+        onGoHome={() => {
+          setSearchOpen(false)
+          setPage('home')
+        }}
+        onGoRecent={() => {
+          setSearchOpen(false)
+          setPage('recent')
+        }}
+        onOpenSearch={() => setSearchOpen(true)}
+        onOpenFavorites={() => {
+          setSearchOpen(false)
+          openFavoritesPage()
+        }}
+        onOpenPlaylist={(slug) => {
+          setSearchOpen(false)
+          setListCtx({ kind: 'playlist', slug })
+          setPlaylistSort({ field: 'default', dir: 'asc' })
+          setPage('playlist')
+        }}
+        onGoEqualizer={() => {
+          setSearchOpen(false)
+          setPage('equalizer')
+        }}
+        onGoCustomize={() => {
+          setSearchOpen(false)
+          setPage('customize')
+        }}
+        onCreatePlaylist={() => {
+          setCreateName('')
+          setCreateInitialTrackId(undefined)
+          setCreateOpen(true)
+        }}
+        onRescan={handleRescan}
+      />
+
+      {/* Right Content Column: Scrollable Pages + Floating Sticky Desktop Player Bar / Mobile Dock */}
+      <div className="zuno-canvas relative flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {page === 'customize' ? (
+          <main className="min-h-0 flex-1 overflow-hidden">
+            <CustomizePage
+              settings={appearance}
+              onChange={updateAppearance}
+              onReset={resetAppearance}
+            />
+          </main>
+        ) : (
+        <CompactScrollArea
+          className="min-h-0 flex-1"
+          viewportClassName={cn(
+            appearance.playerBarStyle === 'floating' && 'lg:pb-24',
+          )}
+        >
+        <main>
+          {page === 'home' && (
+            <HomePage
+              tracks={tracks}
+              playlists={playlists}
+              currentTrackId={currentTrack?.id ?? null}
+              isPlaying={isPlaying}
+              sortField={sortPref.field}
+              sortDir={sortPref.dir}
+              appearance={appearance}
+              onSortChange={handleMainSortChange}
+              onToggleMode={toggleThemeMode}
+              onPlayAll={(subset) => {
+                const list = subset ?? tracks
+                startQueue(
+                  list.map((t) => t.id),
+                  list[0]?.id,
+                  'Songs',
+                  undefined,
+                  'songs',
+                )
+              }}
+              onPlayTrack={(t, subset, label, sourceKey) =>
+                selectOrToggleTrack(t, subset, label, sourceKey)
+              }
+              onDeleteTrack={(t) => setDeleteTarget(t)}
+              onCreatePlaylist={(tid) => {
+                setCreateName('')
+                setCreateInitialTrackId(tid)
+                setCreateOpen(true)
+              }}
+              onAddToPlaylist={handleAddToPlaylist}
+              onOpenRecent={() => setPage('recent')}
+              onOpenSearch={() => setSearchOpen(true)}
+              onRescan={handleRescan}
+            />
+          )}
+
+          {page === 'recent' && (
+            <LastPlayedPage
+              tracks={lastPlayedTracks}
+              playlists={playlists}
+              currentTrackId={currentTrack?.id ?? null}
+              isPlaying={isPlaying}
+              appearance={appearance}
+              onPlayTrack={(t, subset) =>
+                selectOrToggleTrack(t, subset, 'Last Played', 'last-played')
+              }
+              onPlayAll={(subset) =>
+                startQueue(
+                  subset.map((t) => t.id),
+                  subset[0]?.id,
+                  'Last Played',
+                  undefined,
+                  'last-played',
+                )
+              }
+              onRemoveTrack={handleRemoveLastPlayed}
+              onClearAll={handleClearLastPlayed}
+              onAddToPlaylist={handleAddToPlaylist}
+              onCreatePlaylistWithTrack={(tid) => {
+                setCreateName('')
+                setCreateInitialTrackId(tid)
+                setCreateOpen(true)
+              }}
+            />
+          )}
+
+          {page === 'playlist' && (
+            <PlaylistPage
+              overline={activeListMeta.overline}
+              title={activeListMeta.title}
+              tracks={activeListMeta.tracks}
+              currentTrackId={currentTrack?.id ?? null}
+              isPlaying={isPlaying}
+              playlists={playlists}
+              sortField={currentPlaylistSort.field}
+              sortDir={currentPlaylistSort.dir}
+              appearance={appearance}
+              allowDefaultSort={isCustomPlaylist}
+              canDelete={isCustomPlaylist}
+              canRemoveTracks={isCustomPlaylist}
+              onSortChange={handlePlaylistSortChange}
+              onBack={() => setPage('home')}
+              onPlayTrack={(t, ordered) =>
+                selectOrToggleTrack(
+                  t,
+                  ordered,
+                  activeListMeta.title,
+                  activeListMeta.playlistSlug
+                    ? `playlist:${activeListMeta.playlistSlug}`
+                    : 'songs',
+                )
+              }
+              onPlayAll={(ordered) =>
+                startQueue(
+                  ordered.map((x) => x.id),
+                  ordered[0]?.id,
+                  activeListMeta.title,
+                  false,
+                  activeListMeta.playlistSlug
+                    ? `playlist:${activeListMeta.playlistSlug}`
+                    : 'songs',
+                )
+              }
+              onShuffleAll={(ordered) =>
+                startQueue(
+                  ordered.map((x) => x.id),
+                  undefined,
+                  activeListMeta.title,
+                  true,
+                  activeListMeta.playlistSlug
+                    ? `playlist:${activeListMeta.playlistSlug}`
+                    : 'songs',
+                )
+              }
+              onAddToPlaylist={handleAddToPlaylist}
+              onCreatePlaylistWithTrack={(tid) => {
+                setCreateName('')
+                setCreateInitialTrackId(tid)
+                setCreateOpen(true)
+              }}
+              onRemoveTrack={
+                activeListMeta.playlistSlug
+                  ? (tid) =>
+                      handleRemoveFromPlaylist(activeListMeta.playlistSlug!, tid)
+                  : undefined
+              }
+              onDeleteTrack={(t) => setDeleteTarget(t)}
+              onDeletePlaylist={
+                activeListMeta.playlistSlug
+                  ? () => handleDeletePlaylist(activeListMeta.playlistSlug!)
+                  : undefined
+              }
+            />
+          )}
+
+          {page === 'equalizer' && (
+            <EqualizerPage
+              settings={eqSettings}
+              isPlaying={isPlaying}
+              iconPack={appearance.iconPack}
+              audioEl={audioRef.current}
+              onChange={updateEqSettings}
+              onSelectPreset={handleSelectEqPreset}
+              onSaveCustomPreset={handleSaveCustomEqPreset}
+              onDeleteCustomPreset={handleDeleteCustomEqPreset}
+              onResetFlat={handleResetEqFlat}
+              onEnsureAudioAttached={handleEnsureAudioAttached}
+            />
+          )}
+        </main>
+        </CompactScrollArea>
+        )}
+
+        {/* Desktop Floating Sticky Bottom Player Bar (>= 1024px) */}
+        <DesktopPlayerBar
+          track={currentTrack}
+          isPlaying={isPlaying}
+          isFavorite={isCurrentFavorite}
+          position={position}
+          duration={duration}
+          volume={volume}
+          shuffle={shuffle}
+          repeat={repeat}
+          eqEnabled={eqSettings.enabled}
+          eqLabel={eqLabel}
+          eqOpen={page === 'equalizer'}
+          appearance={appearance}
+          onTogglePlay={handleTogglePlay}
+          onPrev={handlePrev}
+          onNext={() => handleNext(false)}
+          onSeekChange={setPosition}
+          onSeekCommit={handleSeekCommit}
+          onVolumeChange={setVolume}
+          onToggleFavorite={handleToggleFavorite}
+          onToggleShuffle={handleToggleShuffle}
+          onCycleRepeat={handleCycleRepeat}
+          onToggleEqualizer={() =>
+            setPage((p) => (p === 'equalizer' ? lastNonEqPageRef.current : 'equalizer'))
+          }
         />
 
-        {/* Primary Content Canvas */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-          <main className="flex-1 overflow-y-auto">
-            {page === 'home' && (
-              <HomePage
-                tracks={tracks}
-                lastPlayed={lastPlayedTracks}
-                playlists={playlists}
-                currentTrackId={currentTrack?.id ?? null}
-                isPlaying={isPlaying}
-                progressPct={progressPct}
-                sortField={sortPref.field}
-                sortDir={sortPref.dir}
-                appearance={appearance}
-                onSortChange={handleMainSortChange}
-                onPlayAll={(subset) => {
-                  const list = subset ?? tracks
-                  startQueue(
-                    list.map((t) => t.id),
-                    list[0]?.id,
-                    'Songs',
-                  )
-                }}
-                onPlayTrack={(t, subset, label = 'Songs') =>
-                  startQueue(
-                    subset.map((x) => x.id),
-                    t.id,
-                    label,
-                  )
-                }
-                onCreatePlaylist={(tid) => {
-                  setCreateName('')
-                  setCreateInitialTrackId(tid)
-                  setCreateOpen(true)
-                }}
-                onAddToPlaylist={handleAddToPlaylist}
-                onOpenSearch={() => setPage('search')}
-                onRescan={handleRescan}
-              />
-            )}
-
-            {page === 'playlist' && (
-              <PlaylistPage
-                overline={activeListMeta.overline}
-                title={activeListMeta.title}
-                tracks={activeListMeta.tracks}
-                currentTrackId={currentTrack?.id ?? null}
-                isPlaying={isPlaying}
-                progressPct={progressPct}
-                playlists={playlists}
-                sortField={currentPlaylistSort.field}
-                sortDir={currentPlaylistSort.dir}
-                appearance={appearance}
-                allowDefaultSort={isCustomPlaylist}
-                canDelete={isCustomPlaylist}
-                canRemoveTracks={isCustomPlaylist}
-                onSortChange={handlePlaylistSortChange}
-                onBack={() => setPage('home')}
-                onPlayTrack={(t, ordered) =>
-                  startQueue(
-                    ordered.map((x) => x.id),
-                    t.id,
-                    activeListMeta.title,
-                  )
-                }
-                onPlayAll={(ordered) =>
-                  startQueue(
-                    ordered.map((x) => x.id),
-                    ordered[0]?.id,
-                    activeListMeta.title,
-                    false,
-                  )
-                }
-                onShuffleAll={(ordered) =>
-                  startQueue(
-                    ordered.map((x) => x.id),
-                    undefined,
-                    activeListMeta.title,
-                    true,
-                  )
-                }
-                onAddToPlaylist={handleAddToPlaylist}
-                onCreatePlaylistWithTrack={(tid) => {
-                  setCreateName('')
-                  setCreateInitialTrackId(tid)
-                  setCreateOpen(true)
-                }}
-                onRemoveTrack={
-                  activeListMeta.playlistSlug
-                    ? (tid) =>
-                        handleRemoveFromPlaylist(activeListMeta.playlistSlug!, tid)
-                    : undefined
-                }
-                onDeletePlaylist={
-                  activeListMeta.playlistSlug
-                    ? () => handleDeletePlaylist(activeListMeta.playlistSlug!)
-                    : undefined
-                }
-              />
-            )}
-
-            {page === 'search' && (
-              <SearchPage
-                query={searchQuery}
-                onQueryChange={setSearchQuery}
-                results={searchResults ?? tracks}
-                folders={folders}
-                playlists={playlists}
-                currentTrackId={currentTrack?.id ?? null}
-                isPlaying={isPlaying}
-                progressPct={progressPct}
-                appearance={appearance}
-                onPlayTrack={(t) => {
-                  const pool = searchResults ?? tracks
-                  startQueue(
-                    pool.map((x) => x.id),
-                    t.id,
-                    searchQuery ? `Search: ${searchQuery}` : 'Songs',
-                  )
-                }}
-                onOpenFolder={(name) => {
-                  setListCtx({ kind: 'folder', name })
-                  setPage('playlist')
-                }}
-                onOpenPlaylist={(slug) => {
-                  setListCtx({ kind: 'playlist', slug })
-                  setPlaylistSort({ field: 'default', dir: 'asc' })
-                  setPage('playlist')
-                }}
-                onAddToPlaylist={handleAddToPlaylist}
-                onCreatePlaylistWithTrack={(tid) => {
-                  setCreateName('')
-                  setCreateInitialTrackId(tid)
-                  setCreateOpen(true)
-                }}
-              />
-            )}
-
-            {page === 'customize' && (
-              <CustomizePage
-                settings={appearance}
-                onChange={updateAppearance}
-                onReset={resetAppearance}
-              />
-            )}
-          </main>
-
-          {/* Mobile Bottom Dock (< 1024px) */}
-          <MobileDock
-            page={page}
-            track={currentTrack}
-            isPlaying={isPlaying}
-            progressPct={progressPct}
-            isFavoritesActive={isFavoritesActive}
-            onTogglePlay={handleTogglePlay}
-            onNext={() => handleNext(false)}
-            onExpandPlayer={() => setMobilePlayerOpen(true)}
-            onNavigate={(next) => setPage(next)}
-            onOpenFavorites={openFavoritesPage}
-          />
-        </div>
+        {/* Mobile Bottom Dock (< 1024px) */}
+        <MobileDock
+          page={page}
+          searchOpen={searchOpen}
+          track={currentTrack}
+          isPlaying={isPlaying}
+          isFavorite={isCurrentFavorite}
+          progressPct={progressPct}
+          isFavoritesActive={isFavoritesActive}
+          eqEnabled={eqSettings.enabled}
+          appearance={appearance}
+          onTogglePlay={handleTogglePlay}
+          onToggleFavorite={handleToggleFavorite}
+          onExpandPlayer={() => setMobilePlayerOpen(true)}
+          onNavigate={(next) => {
+            setSearchOpen(false)
+            setPage(next)
+          }}
+          onOpenSearch={() => setSearchOpen(true)}
+          onOpenFavorites={() => {
+            setSearchOpen(false)
+            openFavoritesPage()
+          }}
+        />
       </div>
 
-      {/* Desktop Minimal Horizontal Bottom Player Bar (>= 1024px) */}
-      <DesktopPlayerBar
-        track={currentTrack}
+      {/* Bencho Search Floating Overlay (Desktop + Mobile) */}
+      <SearchOverlay
+        open={searchOpen}
+        query={searchQuery}
+        results={searchResults ?? tracks}
+        currentTrackId={currentTrack?.id ?? null}
         isPlaying={isPlaying}
-        isFavorite={isCurrentFavorite}
-        position={position}
-        duration={duration}
-        volume={volume}
-        shuffle={shuffle}
-        repeat={repeat}
         appearance={appearance}
-        onTogglePlay={handleTogglePlay}
-        onPrev={handlePrev}
-        onNext={() => handleNext(false)}
-        onSeekChange={setPosition}
-        onSeekCommit={handleSeekCommit}
-        onVolumeChange={setVolume}
-        onToggleFavorite={handleToggleFavorite}
-        onToggleShuffle={handleToggleShuffle}
-        onCycleRepeat={handleCycleRepeat}
+        onQueryChange={setSearchQuery}
+        onSelectTrack={(t, pool) =>
+          selectOrToggleTrack(
+            t,
+            pool,
+            searchQuery ? `Search: ${searchQuery}` : 'Songs',
+            'songs',
+          )
+        }
+        onClose={() => setSearchOpen(false)}
       />
 
       {/* Mobile Full-Screen Now Playing Sheet (< 1024px) */}
@@ -790,8 +1136,14 @@ export default function App() {
         <div className="fixed inset-0 z-40 h-[100dvh] w-full bg-card lg:hidden">
           <NowPlayingPanel
             {...nowPlayingProps}
+            eqEnabled={eqSettings.enabled}
+            appearance={appearance}
             isMobileSheet
             onCloseMobile={() => setMobilePlayerOpen(false)}
+            onOpenEqualizer={() => {
+              setMobilePlayerOpen(false)
+              setPage('equalizer')
+            }}
           />
         </div>
       )}
@@ -831,9 +1183,49 @@ export default function App() {
         </form>
       </Dialog>
 
-      {/* Quiet Toast */}
-      {toast && (
-        <div className="fixed right-5 bottom-24 z-50 rounded-full border border-border bg-secondary px-4 py-2 text-xs text-foreground shadow-xl lg:bottom-20">
+      {/* Delete Song Confirmation Dialog */}
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete Song"
+        subtitle={
+          deleteTarget
+            ? `Permanently remove "${deleteTarget.title}" from your Zuno folder?`
+            : undefined
+        }
+      >
+        <div className="flex justify-end gap-2 pt-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setDeleteTarget(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={handleConfirmDeleteSong}
+          >
+            Delete
+          </Button>
+        </div>
+      </Dialog>
+
+      {/* Auto-Next Fuse Animation Banner (triggers automatically when next song plays) */}
+      {autoNextBanner && (
+        <AutoNextBanner
+          trackTitle={autoNextBanner.title}
+          runId={autoNextBanner.runId}
+          onUndo={handleUndoAutoNext}
+        />
+      )}
+
+      {/* Floating Top-Center Hint Toast (never collides inline with dock or rows) */}
+      {toast && !autoNextBanner && (
+        <div className="pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-popover/95 px-4 py-2 text-xs font-medium text-popover-foreground shadow-2xl backdrop-blur-md animate-dock-pop whitespace-nowrap">
           {toast}
         </div>
       )}

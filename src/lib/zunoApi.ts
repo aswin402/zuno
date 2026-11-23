@@ -64,6 +64,7 @@ type IpcRequest =
   | { op: 'delete_playlist'; name: string }
   | { op: 'add_to_playlist'; name: string; track_ids: string[] }
   | { op: 'remove_from_playlist'; name: string; track_id: string }
+  | { op: 'delete_song'; track_id: string }
   | {
       op: 'play'
       track_id?: string | null
@@ -155,6 +156,12 @@ export const zunoApi = {
     callApi<{ playlist: Playlist; tracks: Track[] }>({
       op: 'remove_from_playlist',
       name,
+      track_id,
+    }),
+
+  deleteSong: (track_id: string) =>
+    callApi<string>({
+      op: 'delete_song',
       track_id,
     }),
 

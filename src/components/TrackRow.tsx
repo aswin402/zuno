@@ -1,5 +1,9 @@
-import { useState } from 'react'
-import { Check, Pause, Play, Plus, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react'
+import { Tooltip } from '@/components/ui/tooltip'
+import { ArtworkTile } from '@/components/ArtworkTile'
+import { Loader2 } from '@/components/PulseBarsLoader'
+import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn, formatTime } from '@/lib/utils'
 import {
   DEFAULT_APPEARANCE,
@@ -14,38 +18,67 @@ interface TrackRowProps {
   index?: number
   active: boolean
   isPlaying: boolean
-  progressPct?: number
   playlists: Playlist[]
   appearance?: AppearanceSettings
+  deleteLabel?: string
   onPlay: () => void
   onAddToPlaylist: (playlistSlug: string, trackId: string) => void
   onCreatePlaylistWithTrack: (trackId: string) => void
-  onRemove?: () => void
+  onDelete: () => void
 }
 
 /**
- * Customizable track row honoring all Customize -> Styles / Icons / Components preferences.
+ * Clean song row with customizable playing style and a single three-dots (...) menu card
+ * containing Add to playlist and Delete actions.
  */
 export function TrackRow({
   track,
   index,
   active,
   isPlaying,
-  progressPct = 0,
   playlists,
   appearance = DEFAULT_APPEARANCE,
+  deleteLabel = 'Delete',
   onPlay,
   onAddToPlaylist,
   onCreatePlaylistWithTrack,
-  onRemove,
+  onDelete,
 }: TrackRowProps) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [menuView, setMenuView] = useState<'main' | 'playlists'>('main')
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const handleOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+        setMenuView('main')
+      }
+    }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMenuOpen(false)
+        setMenuView('main')
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleOutside)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [menuOpen])
+
   const overline =
     track.artist === 'Unknown Artist' && track.folder
       ? track.folder
       : track.artist
 
+  const iconPack = appearance.iconPack
   const iconStyle = appearance.trackIconStyle
+  const playingStyle = appearance.playingStyle
+  const playingHere = active && isPlaying
 
   return (
     <div
@@ -58,11 +91,25 @@ export function TrackRow({
       )}
     >
       <div className="flex items-center gap-3.5">
-        {/* Leading play / number indicator */}
-        {iconStyle === 'number' ? (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center tabular-nums text-xs text-muted-foreground">
-            {active && isPlaying ? (
-              <Pause className="h-3.5 w-3.5 fill-current text-primary" />
+        {/* Leading visual: Equalizer / Pulse Bars styles use clean square cover tile; others use play/number control */}
+        {playingStyle === 'equalizer' || playingStyle === 'pulse-bars' ? (
+          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border bg-card">
+            <ArtworkTile
+              trackId={track.id}
+              hasCover={track.has_cover}
+              seed={track.title}
+              variant="thumb"
+            />
+          </div>
+        ) : iconStyle === 'number' ? (
+          <div className="relative flex h-8 w-8 shrink-0 items-center justify-center tabular-nums text-xs text-muted-foreground">
+            {playingHere ? (
+              <ZunoIcon
+                name="pause"
+                pack={iconPack}
+                filled
+                className="h-3.5 w-3.5 text-primary transition-transform duration-200"
+              />
             ) : (
               <>
                 <span
@@ -73,45 +120,50 @@ export function TrackRow({
                 >
                   {String((index ?? 0) + 1).padStart(2, '0')}
                 </span>
-                <Play className="hidden h-3.5 w-3.5 fill-current text-foreground group-hover:block" />
+                <ZunoIcon
+                  name="play"
+                  pack={iconPack}
+                  filled
+                  className="hidden h-3.5 w-3.5 text-foreground group-hover:block"
+                />
               </>
             )}
           </div>
-        ) : iconStyle === 'minimal' ? (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground group-hover:text-foreground">
-            {active && isPlaying ? (
-              <Pause className="h-4 w-4 fill-current text-primary" />
-            ) : (
-              <Play
-                className={cn(
-                  'h-4 w-4 translate-x-[0.5px] fill-current',
-                  active && 'text-primary',
-                )}
-              />
-            )}
+        ) : iconStyle === 'minimal' || playingStyle === 'minimal' ? (
+          <div className="relative flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground group-hover:text-foreground">
+            <PlayPauseMorph
+              playing={playingHere}
+              active={active}
+              pack={iconPack}
+              minimal
+            />
           </div>
         ) : (
-          <div
-            className={cn(
-              'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors',
-              iconStyle === 'filled'
-                ? active
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-secondary text-foreground group-hover:bg-accent'
-                : active
-                  ? 'border border-primary bg-primary text-primary-foreground'
-                  : 'border border-border bg-card text-foreground group-hover:border-muted-foreground/50',
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+            {playingHere && appearance.showPlayPulse && (
+              <span
+                aria-hidden="true"
+                className="animate-btn-pulse pointer-events-none absolute inset-0 rounded-full border border-primary"
+              />
             )}
-          >
-            {active && isPlaying ? (
-              <Pause className="h-3.5 w-3.5 fill-current" />
-            ) : (
-              <Play className="h-3.5 w-3.5 translate-x-[0.5px] fill-current" />
-            )}
+            <div
+              className={cn(
+                'relative z-10 flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200',
+                iconStyle === 'filled'
+                  ? active
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-secondary text-foreground group-hover:bg-accent'
+                  : active
+                    ? 'border border-primary bg-primary text-primary-foreground'
+                    : 'border border-border bg-card text-foreground group-hover:border-muted-foreground/50',
+              )}
+            >
+              <PlayPauseMorph playing={playingHere} active={active} pack={iconPack} />
+            </div>
           </div>
         )}
 
-        {/* Artist eyebrow + Song Title + Active inline mini progress bar */}
+        {/* Artist eyebrow + Song Title */}
         <div className="min-w-0 flex-1">
           {appearance.showTrackOverline && (
             <p className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
@@ -127,93 +179,206 @@ export function TrackRow({
           >
             {track.title}
           </p>
-
-          {active && appearance.showInlineProgress && (
-            <div className="mt-2 flex items-center">
-              <div className="relative h-[2px] w-full max-w-[180px] rounded-full bg-accent">
-                <div
-                  className="h-full rounded-full bg-primary transition-[width] duration-150"
-                  style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
-                />
-                <span
-                  className="absolute top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary"
-                  style={{ left: `${Math.min(100, Math.max(0, progressPct))}%` }}
-                />
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Duration + Playlist action */}
+        {/* Right: Single Equalizer/PulseBars toggle + Duration + Three-dots (...) menu */}
         <div
-          className="relative flex shrink-0 items-center gap-1.5"
+          ref={menuRef}
+          className="relative flex shrink-0 items-center gap-2"
           onClick={(e) => e.stopPropagation()}
         >
+          {(playingStyle === 'equalizer' || playingStyle === 'pulse-bars') && (
+            <Tooltip label={playingHere ? 'Pause' : 'Play'} side="top">
+              <button
+                type="button"
+                onClick={onPlay}
+                aria-label={playingHere ? 'Pause' : 'Play'}
+                className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-accent cursor-pointer"
+              >
+                {playingHere ? (
+                  playingStyle === 'pulse-bars' ? (
+                    <Loader2
+                      barCount={5}
+                      height={16}
+                      width={2.5}
+                      gap={2}
+                      speed={0.95}
+                    />
+                  ) : (
+                    <span className="flex h-5 items-end justify-center gap-[2.5px]">
+                      <span className="zuno-eq-bar" />
+                      <span className="zuno-eq-bar" />
+                      <span className="zuno-eq-bar" />
+                      <span className="zuno-eq-bar" />
+                    </span>
+                  )
+                ) : (
+                  <ZunoIcon
+                    name="play"
+                    pack={iconPack}
+                    filled
+                    className={cn(
+                      'h-3.5 w-3.5 translate-x-[0.5px] transition-colors',
+                      active
+                        ? 'text-primary'
+                        : 'text-muted-foreground group-hover:text-foreground',
+                    )}
+                  />
+                )}
+              </button>
+            </Tooltip>
+          )}
+
           {appearance.showTrackDuration && (
             <span className="tabular-nums text-xs text-muted-foreground">
               {formatTime(track.duration_secs)}
             </span>
           )}
 
-          {onRemove ? (
+          {/* Three dots (...) options trigger */}
+          <Tooltip label="More" side="top">
             <button
-              onClick={onRemove}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground lg:opacity-0 lg:group-hover:opacity-100 cursor-pointer"
-              title="Remove from playlist"
-              aria-label="Remove from playlist"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <button
-              onClick={() => setMenuOpen((o) => !o)}
+              type="button"
+              onClick={() => {
+                setMenuOpen((o) => {
+                  if (o) setMenuView('main')
+                  return !o
+                })
+              }}
               className={cn(
-                'flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground lg:opacity-0 lg:group-hover:opacity-100 cursor-pointer',
-                menuOpen && 'lg:opacity-100 bg-accent text-foreground',
+                'flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-accent hover:text-foreground cursor-pointer',
+                menuOpen
+                  ? 'bg-accent text-foreground opacity-100'
+                  : 'lg:opacity-0 lg:group-hover:opacity-100',
               )}
-              title="Add to playlist"
-              aria-label="Add to playlist"
+              aria-label="Song options"
+              aria-expanded={menuOpen}
             >
-              <Plus className="h-3.5 w-3.5" />
+              <MoreHorizontal className="h-4 w-4" />
             </button>
-          )}
+          </Tooltip>
 
+          {/* Compact three-dots popover card: Add to playlist + Delete */}
           {menuOpen && (
-            <div className="absolute top-9 right-0 z-30 w-48 rounded-xl border border-border bg-popover p-1.5 shadow-2xl">
-              <p className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Add to playlist
-              </p>
-              {playlists.map((pl) => {
-                const exists = pl.track_ids.includes(track.id)
-                return (
+            <div className="absolute top-9 right-0 z-40 w-48 overflow-hidden rounded-2xl border border-border bg-popover p-1.5 shadow-2xl animate-dock-pop">
+              {menuView === 'main' ? (
+                <div className="space-y-0.5">
                   <button
-                    key={pl.slug}
-                    onClick={() => {
-                      if (!exists) onAddToPlaylist(pl.slug, track.id)
-                      setMenuOpen(false)
-                    }}
-                    className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-secondary cursor-pointer"
+                    type="button"
+                    onClick={() => setMenuView('playlists')}
+                    className="flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
                   >
-                    <span className="truncate">{pl.title}</span>
-                    {exists && <Check className="h-3.5 w-3.5 text-muted-foreground" />}
+                    <span className="flex items-center gap-2">
+                      <ZunoIcon name="playlist" pack={iconPack} className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>Add to playlist</span>
+                    </span>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
-                )
-              })}
-              <div className="my-1 border-t border-border" />
-              <button
-                onClick={() => {
-                  setMenuOpen(false)
-                  onCreatePlaylistWithTrack(track.id)
-                }}
-                className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                New playlist
-              </button>
+
+                  <div className="my-1 border-t border-border/70" />
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      setMenuView('main')
+                      onDelete()
+                    }}
+                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <ZunoIcon name="trash" pack={iconPack} className="h-3.5 w-3.5" />
+                    <span>{deleteLabel}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMenuView('main')}
+                    className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>Add to playlist</span>
+                  </button>
+                  <div className="my-1 border-t border-border/70" />
+                  <div className="max-h-44 overflow-y-auto space-y-0.5">
+                    {playlists.map((pl) => {
+                      const exists = pl.track_ids.includes(track.id)
+                      return (
+                        <button
+                          key={pl.slug}
+                          type="button"
+                          onClick={() => {
+                            if (!exists) onAddToPlaylist(pl.slug, track.id)
+                            setMenuOpen(false)
+                            setMenuView('main')
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                        >
+                          <span className="truncate">{pl.title}</span>
+                          {exists && (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="my-1 border-t border-border/70" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      setMenuView('main')
+                      onCreatePlaylistWithTrack(track.id)
+                    }}
+                    className="flex w-full items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
+                    <span>New playlist</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+function PlayPauseMorph({
+  playing,
+  active,
+  pack,
+  minimal = false,
+}: {
+  playing: boolean
+  active: boolean
+  pack: AppearanceSettings['iconPack']
+  minimal?: boolean
+}) {
+  return (
+    <span className="relative flex h-4 w-4 items-center justify-center">
+      <ZunoIcon
+        name="play"
+        pack={pack}
+        filled
+        className={cn(
+          'absolute h-3.5 w-3.5 translate-x-[0.5px] transition-all duration-200',
+          minimal && active && 'text-primary',
+          playing ? 'scale-50 opacity-0 rotate-12' : 'scale-100 opacity-100 rotate-0',
+        )}
+      />
+      <ZunoIcon
+        name="pause"
+        pack={pack}
+        filled
+        className={cn(
+          'absolute h-3.5 w-3.5 transition-all duration-200',
+          minimal && active && 'text-primary',
+          playing ? 'scale-100 opacity-100 rotate-0' : 'scale-50 opacity-0 -rotate-12',
+        )}
+      />
+    </span>
   )
 }

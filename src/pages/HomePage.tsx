@@ -1,49 +1,48 @@
 import { useMemo } from 'react'
-import { Clock, Play, RefreshCw, Search } from 'lucide-react'
 import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
+import { EaseThemeToggle } from '@/components/EaseThemeToggle'
+import { ZunoIcon } from '@/components/ZunoIcon'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Playlist, Track } from '@/lib/zunoApi'
 
 interface HomePageProps {
   tracks: Track[]
-  lastPlayed: Track[]
   playlists: Playlist[]
   currentTrackId: string | null
   isPlaying: boolean
-  progressPct: number
   sortField: SortField
   sortDir: SortDir
   appearance: AppearanceSettings
   onSortChange: (field: SortField, dir: SortDir) => void
+  onToggleMode: () => void
   onPlayAll: (subset?: Track[]) => void
-  onPlayTrack: (track: Track, subset: Track[], label?: string) => void
+  onPlayTrack: (track: Track, subset: Track[], label: string, sourceKey: string) => void
+  onDeleteTrack: (track: Track) => void
   onCreatePlaylist: (initialTrackId?: string) => void
   onAddToPlaylist: (slug: string, trackId: string) => void
+  onOpenRecent: () => void
   onOpenSearch: () => void
   onRescan: () => void
 }
 
-/**
- * Main "Songs" Home page:
- * Shows Last Played + Available Songs with Sort By (name, artist, album, time, size, duration).
- */
 export function HomePage({
   tracks,
-  lastPlayed,
   playlists,
   currentTrackId,
   isPlaying,
-  progressPct,
   sortField,
   sortDir,
   appearance,
   onSortChange,
+  onToggleMode,
   onPlayAll,
   onPlayTrack,
+  onDeleteTrack,
   onCreatePlaylist,
   onAddToPlaylist,
+  onOpenRecent,
   onOpenSearch,
   onRescan,
 }: HomePageProps) {
@@ -51,9 +50,10 @@ export function HomePage({
     () => sortTracks(tracks, sortField, sortDir),
     [tracks, sortField, sortDir],
   )
+  const iconPack = appearance.iconPack
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-8 px-5 pb-8 pt-6 sm:px-8">
+    <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -71,69 +71,40 @@ export function HomePage({
               onClick={() => onPlayAll(sortedTracks)}
               className="hidden h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:inline-flex cursor-pointer"
             >
-              <Play className="h-3.5 w-3.5 fill-current" />
+              <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
               Play all
             </button>
           )}
           <button
+            onClick={onOpenRecent}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
+            aria-label="Last played"
+          >
+            <ZunoIcon name="clock" pack={iconPack} className="h-4 w-4" />
+          </button>
+          <EaseThemeToggle
+            mode={appearance.mode}
+            transition={appearance.themeTransition}
+            onToggle={onToggleMode}
+            size="md"
+            className="lg:hidden"
+          />
+          <button
             onClick={onRescan}
             className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
-            title="Rescan songs"
             aria-label="Rescan songs"
           >
-            <RefreshCw className="h-4 w-4" />
+            <ZunoIcon name="refresh" pack={iconPack} className="h-4 w-4" />
           </button>
           <button
             onClick={onOpenSearch}
             className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground lg:hidden cursor-pointer"
-            title="Search"
             aria-label="Search"
           >
-            <Search className="h-4 w-4" />
+            <ZunoIcon name="search" pack={iconPack} className="h-4 w-4" />
           </button>
         </div>
       </div>
-
-      {/* LAST PLAYED */}
-      {appearance.showLastPlayed && (
-        <section className="space-y-2.5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              LAST PLAYED
-            </h2>
-            {lastPlayed.length > 0 && (
-              <span className="tabular-nums text-xs text-muted-foreground">
-                {lastPlayed.length}
-              </span>
-            )}
-          </div>
-
-          {lastPlayed.length === 0 ? (
-            <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-card/50 px-4 py-4 text-xs text-muted-foreground">
-              <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              <span>Songs you play will appear here.</span>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {lastPlayed.map((track, idx) => (
-                <TrackRow
-                  key={track.id}
-                  track={track}
-                  index={idx}
-                  active={track.id === currentTrackId}
-                  isPlaying={isPlaying}
-                  progressPct={progressPct}
-                  playlists={playlists}
-                  appearance={appearance}
-                  onPlay={() => onPlayTrack(track, lastPlayed, 'Last Played')}
-                  onAddToPlaylist={onAddToPlaylist}
-                  onCreatePlaylistWithTrack={(tid) => onCreatePlaylist(tid)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
 
       {/* AVAILABLE SONGS + Sort By */}
       <section className="space-y-2.5">
@@ -170,12 +141,15 @@ export function HomePage({
                 index={idx}
                 active={track.id === currentTrackId}
                 isPlaying={isPlaying}
-                progressPct={progressPct}
                 playlists={playlists}
                 appearance={appearance}
-                onPlay={() => onPlayTrack(track, sortedTracks, 'Songs')}
+                deleteLabel="Delete"
+                onPlay={() =>
+                  onPlayTrack(track, sortedTracks, 'Songs', 'songs')
+                }
                 onAddToPlaylist={onAddToPlaylist}
                 onCreatePlaylistWithTrack={(tid) => onCreatePlaylist(tid)}
+                onDelete={() => onDeleteTrack(track)}
               />
             ))}
           </div>

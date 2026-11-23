@@ -38,6 +38,9 @@ pub enum IpcRequest {
         name: String,
         track_id: String,
     },
+    DeleteSong {
+        track_id: String,
+    },
     Play {
         track_id: Option<String>,
         query: Option<String>,

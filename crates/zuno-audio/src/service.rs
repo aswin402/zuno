@@ -287,6 +287,20 @@ impl ZunoService {
                 Ok(IpcData::PlaylistDetail { playlist, tracks })
             }
 
+            IpcRequest::DeleteSong { track_id } => {
+                let mut st = self.inner.lock().unwrap();
+                let was_current = st.queue.current_track_id() == Some(track_id.as_str());
+                let title = st.library.delete_song(&track_id)?;
+                let existing_ids: std::collections::HashSet<String> =
+                    st.library.tracks().iter().map(|t| t.id.clone()).collect();
+                st.queue.retain_existing(|id| existing_ids.contains(id));
+                if was_current {
+                    st.play_state = PlayState::Stopped;
+                    let _ = self.audio_tx.send(AudioCmd::Stop);
+                }
+                Ok(IpcData::Message(format!("Deleted {title}")))
+            }
+
             IpcRequest::Play {
                 track_id,
                 query,

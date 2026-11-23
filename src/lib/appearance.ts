@@ -1,57 +1,124 @@
-export type ThemePresetId = 'zinc-dark' | 'oled-black' | 'stone-dark' | 'slate-dark' | 'zinc-light'
-export type AccentId = 'mono' | 'emerald' | 'blue' | 'violet' | 'rose' | 'amber'
-export type FontFamilyId = 'geist' | 'inter' | 'jakarta' | 'space' | 'mono' | 'system'
+import { resolveMonoFontStack, resolveUiFontStack } from '@/lib/fonts'
+
+export type ThemeId =
+  | 'zinc'
+  | 'oled'
+  | 'vermilion'
+  | 'stone'
+  | 'amber'
+  | 'crimson'
+  | 'emerald'
+  | 'slate'
+
+export type ThemeMode = 'dark' | 'light'
+export type AccentId = 'mono' | 'vermilion' | 'emerald' | 'blue' | 'violet' | 'rose' | 'amber'
 export type FontSizeId = 'sm' | 'md' | 'lg'
 export type RadiusStyleId = 'sharp' | 'balanced' | 'round'
 export type DensityId = 'compact' | 'comfortable' | 'spacious'
 export type BorderStyleId = 'subtle' | 'crisp' | 'borderless'
+export type SurfaceStyleId =
+  | 'bordered'
+  | 'flat'
+  | 'minimal_top'
+  | 'borderless'
+  | 'glass'
+  | 'elevated'
+export type BgPatternId = 'clean' | 'dot_grid' | 'fine_grid' | 'top_glow' | 'vignette'
+export type ThemeTransitionId = 'circle-blur' | 'circle' | 'rectangle' | 'blinds'
+export type IconPackId =
+  | 'lucide'
+  | 'tabler'
+  | 'iconsax'
+  | 'hugeicons'
+  | 'itshover'
+  | 'pulsoicon'
+  | 'humbleicons'
+  | 'majesticons'
 export type IconStrokeId = 'thin' | 'regular' | 'bold'
 export type TrackIconStyleId = 'ring' | 'filled' | 'minimal' | 'number'
+export type PlayingStyleId = 'pulse' | 'equalizer' | 'pulse-bars' | 'minimal'
+export type PlayButtonStyleId = 'classic' | 'waveform'
 export type PlayerBarStyleId = 'docked' | 'floating'
-export type ScrubberKnobStyleId = 'ring' | 'solid' | 'line'
+export type ScrubberKnobStyleId =
+  | 'ring'
+  | 'solid'
+  | 'line'
+  | 'pill'
+  | 'capsule'
+  | 'waveform'
+  | 'ticks'
+
+export interface CustomColorOverrides {
+  primary?: string
+  background?: string
+  secondary?: string
+  card?: string
+  border?: string
+  foreground?: string
+  mutedForeground?: string
+}
 
 export interface AppearanceSettings {
-  theme: ThemePresetId
+  theme: ThemeId
+  mode: ThemeMode
   accent: AccentId
-  fontFamily: FontFamilyId
+  customColors: CustomColorOverrides
+  fontFamily: string
+  monoFont: string
+  customUiFont: string
+  customMonoFont: string
   fontSize: FontSizeId
   radius: RadiusStyleId
   density: DensityId
   borders: BorderStyleId
+  surfaceStyle: SurfaceStyleId
+  bgPattern: BgPatternId
+  themeTransition: ThemeTransitionId
+  iconPack: IconPackId
   iconStroke: IconStrokeId
   trackIconStyle: TrackIconStyleId
+  playingStyle: PlayingStyleId
+  playButtonStyle: PlayButtonStyleId
   playerBarStyle: PlayerBarStyleId
   scrubberKnob: ScrubberKnobStyleId
   showLastPlayed: boolean
-  showInlineProgress: boolean
+  showPlayPulse: boolean
   showTrackOverline: boolean
   showTrackDuration: boolean
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: 'zinc-dark',
+  theme: 'zinc',
+  mode: 'dark',
   accent: 'mono',
+  customColors: {},
   fontFamily: 'geist',
+  monoFont: 'jetbrains',
+  customUiFont: '',
+  customMonoFont: '',
   fontSize: 'md',
   radius: 'balanced',
   density: 'comfortable',
   borders: 'subtle',
+  surfaceStyle: 'bordered',
+  bgPattern: 'clean',
+  themeTransition: 'circle-blur',
+  iconPack: 'lucide',
   iconStroke: 'regular',
   trackIconStyle: 'ring',
-  playerBarStyle: 'docked',
+  playingStyle: 'pulse',
+  playButtonStyle: 'classic',
+  playerBarStyle: 'floating',
   scrubberKnob: 'ring',
   showLastPlayed: true,
-  showInlineProgress: true,
+  showPlayPulse: true,
   showTrackOverline: true,
   showTrackDuration: true,
 }
 
 const STORAGE_KEY = 'zuno:appearance'
 
-export interface ThemePalette {
-  id: ThemePresetId
-  label: string
-  isDark: boolean
+export interface ModePalette {
   background: string
   foreground: string
   card: string
@@ -65,86 +132,257 @@ export interface ThemePalette {
   primaryForeground: string
 }
 
-export const THEME_PRESETS: ThemePalette[] = [
+export interface DualThemePreset {
+  id: ThemeId
+  label: string
+  dark: ModePalette
+  light: ModePalette
+}
+
+/**
+ * Curated dual-mode (Dark + Light) theme families inspired by Zenko WebUI's 60/30/10 system.
+ * Default stays Obsidian Mono (`zinc`) for Zuno's crisp shadcn monochrome look.
+ */
+export const THEME_PRESETS: DualThemePreset[] = [
   {
-    id: 'zinc-dark',
-    label: 'Zinc Dark',
-    isDark: true,
-    background: '#09090b',
-    foreground: '#fafafa',
-    card: '#121215',
-    popover: '#141417',
-    secondary: '#18181b',
-    mutedForeground: '#a1a1aa',
-    accentBg: '#27272a',
-    border: '#27272a',
-    borderCrisp: '#3f3f46',
-    primary: '#fafafa',
-    primaryForeground: '#09090b',
+    id: 'zinc',
+    label: 'Obsidian Mono',
+    dark: {
+      background: '#09090b',
+      foreground: '#fafafa',
+      card: '#121215',
+      popover: '#141417',
+      secondary: '#18181b',
+      mutedForeground: '#a1a1aa',
+      accentBg: '#27272a',
+      border: '#27272a',
+      borderCrisp: '#3f3f46',
+      primary: '#fafafa',
+      primaryForeground: '#09090b',
+    },
+    light: {
+      background: '#ffffff',
+      foreground: '#09090b',
+      card: '#f8f8f9',
+      popover: '#ffffff',
+      secondary: '#f4f4f5',
+      mutedForeground: '#71717a',
+      accentBg: '#e4e4e7',
+      border: '#e4e4e7',
+      borderCrisp: '#c4c4cc',
+      primary: '#18181b',
+      primaryForeground: '#fafafa',
+    },
   },
   {
-    id: 'oled-black',
-    label: 'OLED Black',
-    isDark: true,
-    background: '#000000',
-    foreground: '#ffffff',
-    card: '#09090b',
-    popover: '#0d0d10',
-    secondary: '#121215',
-    mutedForeground: '#a1a1aa',
-    accentBg: '#202024',
-    border: '#1f1f23',
-    borderCrisp: '#36363c',
-    primary: '#ffffff',
-    primaryForeground: '#000000',
+    id: 'oled',
+    label: 'Pure OLED',
+    dark: {
+      background: '#000000',
+      foreground: '#ffffff',
+      card: '#0a0a0c',
+      popover: '#0e0e11',
+      secondary: '#121216',
+      mutedForeground: '#8e8e97',
+      accentBg: '#202026',
+      border: '#1e1e24',
+      borderCrisp: '#36363f',
+      primary: '#ffffff',
+      primaryForeground: '#000000',
+    },
+    light: {
+      background: '#ffffff',
+      foreground: '#050506',
+      card: '#fafafa',
+      popover: '#ffffff',
+      secondary: '#f3f3f6',
+      mutedForeground: '#6e6e77',
+      accentBg: '#e5e5ea',
+      border: '#e5e5ea',
+      borderCrisp: '#c2c2ca',
+      primary: '#050506',
+      primaryForeground: '#ffffff',
+    },
   },
   {
-    id: 'stone-dark',
-    label: 'Warm Stone',
-    isDark: true,
-    background: '#0c0a09',
-    foreground: '#fafaf9',
-    card: '#151210',
-    popover: '#181512',
-    secondary: '#1c1917',
-    mutedForeground: '#a8a29e',
-    accentBg: '#292524',
-    border: '#292524',
-    borderCrisp: '#44403c',
-    primary: '#fafaf9',
-    primaryForeground: '#0c0a09',
+    id: 'vermilion',
+    label: 'Zenko Vermilion',
+    dark: {
+      background: '#0a0a0b',
+      foreground: '#f5f5f6',
+      card: '#141417',
+      popover: '#111114',
+      secondary: '#18181c',
+      mutedForeground: '#8a8a93',
+      accentBg: '#26262c',
+      border: '#222227',
+      borderCrisp: '#393942',
+      primary: '#ea5829',
+      primaryForeground: '#ffffff',
+    },
+    light: {
+      background: '#fafafa',
+      foreground: '#0b0b0d',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#f1f1f4',
+      mutedForeground: '#6b6b76',
+      accentBg: '#e4e4ea',
+      border: '#e2e2e7',
+      borderCrisp: '#c4c4cf',
+      primary: '#ea5829',
+      primaryForeground: '#ffffff',
+    },
   },
   {
-    id: 'slate-dark',
-    label: 'Slate Night',
-    isDark: true,
-    background: '#090d16',
-    foreground: '#f8fafc',
-    card: '#0f1624',
-    popover: '#11192a',
-    secondary: '#172033',
-    mutedForeground: '#94a3b8',
-    accentBg: '#243047',
-    border: '#1e293b',
-    borderCrisp: '#334155',
-    primary: '#f8fafc',
-    primaryForeground: '#090d16',
+    id: 'stone',
+    label: 'Warm Terracotta',
+    dark: {
+      background: '#0e0c0a',
+      foreground: '#f8f4ef',
+      card: '#181411',
+      popover: '#15120f',
+      secondary: '#211c17',
+      mutedForeground: '#9d9287',
+      accentBg: '#302922',
+      border: '#2e2721',
+      borderCrisp: '#493e35',
+      primary: '#d95b26',
+      primaryForeground: '#ffffff',
+    },
+    light: {
+      background: '#f7f5f0',
+      foreground: '#1c1917',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#ede9e0',
+      mutedForeground: '#78716c',
+      accentBg: '#dfd9ce',
+      border: '#dfdad0',
+      borderCrisp: '#bfb7a8',
+      primary: '#c2410c',
+      primaryForeground: '#ffffff',
+    },
   },
   {
-    id: 'zinc-light',
-    label: 'Zinc Light',
-    isDark: false,
-    background: '#ffffff',
-    foreground: '#09090b',
-    card: '#f8f8f9',
-    popover: '#ffffff',
-    secondary: '#f4f4f5',
-    mutedForeground: '#71717a',
-    accentBg: '#e4e4e7',
-    border: '#e4e4e7',
-    borderCrisp: '#c4c4cc',
-    primary: '#18181b',
-    primaryForeground: '#fafafa',
+    id: 'amber',
+    label: 'Amber Forge',
+    dark: {
+      background: '#0d0b08',
+      foreground: '#faf5eb',
+      card: '#16120d',
+      popover: '#13100b',
+      secondary: '#201a12',
+      mutedForeground: '#a69882',
+      accentBg: '#30271b',
+      border: '#2c2419',
+      borderCrisp: '#473a29',
+      primary: '#f59e0b',
+      primaryForeground: '#0d0b08',
+    },
+    light: {
+      background: '#fbf9f4',
+      foreground: '#1c160b',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#f3eee3',
+      mutedForeground: '#7c6f59',
+      accentBg: '#e6decb',
+      border: '#e5dccb',
+      borderCrisp: '#c7baa0',
+      primary: '#d97706',
+      primaryForeground: '#ffffff',
+    },
+  },
+  {
+    id: 'crimson',
+    label: 'Crimson Noir',
+    dark: {
+      background: '#0b090a',
+      foreground: '#fafafa',
+      card: '#151013',
+      popover: '#120e10',
+      secondary: '#1e161a',
+      mutedForeground: '#a08b94',
+      accentBg: '#2e2228',
+      border: '#2a1f24',
+      borderCrisp: '#46343c',
+      primary: '#e11d48',
+      primaryForeground: '#ffffff',
+    },
+    light: {
+      background: '#fbf8f9',
+      foreground: '#190c11',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#f4ecef',
+      mutedForeground: '#7d646f',
+      accentBg: '#e7d9df',
+      border: '#e6d8de',
+      borderCrisp: '#cab4be',
+      primary: '#e11d48',
+      primaryForeground: '#ffffff',
+    },
+  },
+  {
+    id: 'emerald',
+    label: 'Emerald Term',
+    dark: {
+      background: '#070c0a',
+      foreground: '#f0fdf4',
+      card: '#0e1713',
+      popover: '#0b120f',
+      secondary: '#14211b',
+      mutedForeground: '#7f9c8d',
+      accentBg: '#1e3229',
+      border: '#1c2d25',
+      borderCrisp: '#2f4b3e',
+      primary: '#10b981',
+      primaryForeground: '#052016',
+    },
+    light: {
+      background: '#f6f8f6',
+      foreground: '#101914',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#eaefea',
+      mutedForeground: '#5b6b61',
+      accentBg: '#d8e2d9',
+      border: '#d9e2da',
+      borderCrisp: '#b4c5b6',
+      primary: '#059669',
+      primaryForeground: '#ffffff',
+    },
+  },
+  {
+    id: 'slate',
+    label: 'Midnight Slate',
+    dark: {
+      background: '#0a0c14',
+      foreground: '#f1f5f9',
+      card: '#121624',
+      popover: '#0f121d',
+      secondary: '#181e30',
+      mutedForeground: '#8c96b0',
+      accentBg: '#252e47',
+      border: '#242a40',
+      borderCrisp: '#3b4566',
+      primary: '#818cf8',
+      primaryForeground: '#0a0c14',
+    },
+    light: {
+      background: '#f7f8fc',
+      foreground: '#0f1426',
+      card: '#ffffff',
+      popover: '#ffffff',
+      secondary: '#edf0f9',
+      mutedForeground: '#646d8a',
+      accentBg: '#dce1f1',
+      border: '#dce1f1',
+      borderCrisp: '#b8c1de',
+      primary: '#4f46e5',
+      primaryForeground: '#ffffff',
+    },
   },
 ]
 
@@ -157,7 +395,16 @@ export const ACCENT_PRESETS: {
   lightPrimary?: string
   lightFg?: string
 }[] = [
-  { id: 'mono', label: 'Default', swatch: '#fafafa' },
+  { id: 'mono', label: 'Theme Default', swatch: '#fafafa' },
+  {
+    id: 'vermilion',
+    label: 'Vermilion',
+    swatch: '#ea5829',
+    darkPrimary: '#ea5829',
+    darkFg: '#ffffff',
+    lightPrimary: '#ea5829',
+    lightFg: '#ffffff',
+  },
   {
     id: 'emerald',
     label: 'Emerald',
@@ -169,7 +416,7 @@ export const ACCENT_PRESETS: {
   },
   {
     id: 'blue',
-    label: 'Blue',
+    label: 'Arctic Blue',
     swatch: '#3b82f6',
     darkPrimary: '#60a5fa',
     darkFg: '#081b3a',
@@ -178,8 +425,8 @@ export const ACCENT_PRESETS: {
   },
   {
     id: 'violet',
-    label: 'Violet',
-    swatch: '#8b5cf6',
+    label: 'Indigo',
+    swatch: '#818cf8',
     darkPrimary: '#a78bfa',
     darkFg: '#1e0b3a',
     lightPrimary: '#7c3aed',
@@ -187,8 +434,8 @@ export const ACCENT_PRESETS: {
   },
   {
     id: 'rose',
-    label: 'Rose',
-    swatch: '#f43f5e',
+    label: 'Crimson',
+    swatch: '#e11d48',
     darkPrimary: '#fb7185',
     darkFg: '#2d0611',
     lightPrimary: '#e11d48',
@@ -205,43 +452,20 @@ export const ACCENT_PRESETS: {
   },
 ]
 
-export const FONT_PRESETS: { id: FontFamilyId; label: string; sample: string; stack: string }[] = [
-  {
-    id: 'geist',
-    label: 'Geist',
-    sample: 'Default crisp sans',
-    stack: "'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif",
-  },
-  {
-    id: 'inter',
-    label: 'Inter',
-    sample: 'Clean neutral UI',
-    stack: "'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif",
-  },
-  {
-    id: 'jakarta',
-    label: 'Plus Jakarta',
-    sample: 'Warm geometric',
-    stack: "'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif",
-  },
-  {
-    id: 'space',
-    label: 'Space Grotesk',
-    sample: 'Modern studio',
-    stack: "'Space Grotesk', ui-sans-serif, system-ui, sans-serif",
-  },
-  {
-    id: 'mono',
-    label: 'JetBrains Mono',
-    sample: 'Technical monospace',
-    stack: "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
-  },
-  {
-    id: 'system',
-    label: 'System Native',
-    sample: 'Zero-download OS font',
-    stack: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  },
+export const ICON_PACK_OPTIONS: {
+  id: IconPackId
+  label: string
+  desc: string
+  animated?: boolean
+}[] = [
+  { id: 'lucide', label: 'Lucide', desc: 'Clean balanced strokes' },
+  { id: 'tabler', label: 'Tabler', desc: 'Crisp precision 24px geometry' },
+  { id: 'iconsax', label: 'Iconsax', desc: 'Soft curved duotone lines' },
+  { id: 'hugeicons', label: 'Hugeicons Animated', desc: 'Rounded float micro-motion', animated: true },
+  { id: 'itshover', label: 'ItsHover', desc: 'Interactive spring wiggle', animated: true },
+  { id: 'pulsoicon', label: 'PulsoIcon', desc: 'Bouncy micro-pulse hover', animated: true },
+  { id: 'humbleicons', label: 'Humbleicons', desc: 'Minimal hand-crafted lines' },
+  { id: 'majesticons', label: 'Majesticons', desc: 'Confident bold interface glyphs' },
 ]
 
 const FONT_SIZE_MAP: Record<FontSizeId, string> = {
@@ -256,11 +480,108 @@ const ICON_STROKE_MAP: Record<IconStrokeId, string> = {
   bold: '2.25',
 }
 
+/** Computes crisp readable foreground (#09090b or #ffffff) for any custom hex accent. */
+export function contrastForegroundForHex(hex: string): string {
+  const clean = hex.replace('#', '')
+  if (clean.length !== 6) return '#ffffff'
+  const r = parseInt(clean.slice(0, 2), 16) / 255
+  const g = parseInt(clean.slice(2, 4), 16) / 255
+  const b = parseInt(clean.slice(4, 6), 16) / 255
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return lum > 0.56 ? '#09090b' : '#ffffff'
+}
+
+export function resolveEffectivePalette(s: AppearanceSettings): ModePalette {
+  const preset = THEME_PRESETS.find((t) => t.id === s.theme) ?? THEME_PRESETS[0]
+  const base = s.mode === 'light' ? preset.light : preset.dark
+  const isDark = s.mode === 'dark'
+  const accent = ACCENT_PRESETS.find((a) => a.id === s.accent) ?? ACCENT_PRESETS[0]
+
+  let primary =
+    accent.id === 'mono'
+      ? base.primary
+      : isDark
+        ? (accent.darkPrimary ?? base.primary)
+        : (accent.lightPrimary ?? base.primary)
+
+  let primaryForeground =
+    accent.id === 'mono'
+      ? base.primaryForeground
+      : isDark
+        ? (accent.darkFg ?? base.primaryForeground)
+        : (accent.lightFg ?? base.primaryForeground)
+
+  const cc = s.customColors ?? {}
+  if (cc.primary) {
+    primary = cc.primary
+    primaryForeground = contrastForegroundForHex(cc.primary)
+  }
+
+  return {
+    background: cc.background || base.background,
+    foreground: cc.foreground || base.foreground,
+    card: cc.card || base.card,
+    popover: cc.card || base.popover,
+    secondary: cc.secondary || base.secondary,
+    mutedForeground: cc.mutedForeground || base.mutedForeground,
+    accentBg: base.accentBg,
+    border: cc.border || base.border,
+    borderCrisp: cc.border || base.borderCrisp,
+    primary,
+    primaryForeground,
+  }
+}
+
+const VALID_THEME_IDS: ThemeId[] = [
+  'zinc',
+  'oled',
+  'vermilion',
+  'stone',
+  'amber',
+  'crimson',
+  'emerald',
+  'slate',
+]
+
 export function loadAppearance(): AppearanceSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULT_APPEARANCE
-    return { ...DEFAULT_APPEARANCE, ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+
+    let theme = parsed.theme as string | undefined
+    let mode = parsed.mode as ThemeMode | undefined
+    if (theme === 'zinc-dark') {
+      theme = 'zinc'
+      mode ??= 'dark'
+    } else if (theme === 'zinc-light') {
+      theme = 'zinc'
+      mode ??= 'light'
+    } else if (theme === 'oled-black') {
+      theme = 'oled'
+      mode ??= 'dark'
+    } else if (theme === 'stone-dark') {
+      theme = 'stone'
+      mode ??= 'dark'
+    } else if (theme === 'slate-dark') {
+      theme = 'slate'
+      mode ??= 'dark'
+    }
+
+    const validTheme: ThemeId = VALID_THEME_IDS.includes(theme as ThemeId)
+      ? (theme as ThemeId)
+      : DEFAULT_APPEARANCE.theme
+
+    return {
+      ...DEFAULT_APPEARANCE,
+      ...parsed,
+      theme: validTheme,
+      mode: mode === 'light' || mode === 'dark' ? mode : DEFAULT_APPEARANCE.mode,
+      customColors:
+        parsed.customColors && typeof parsed.customColors === 'object'
+          ? (parsed.customColors as CustomColorOverrides)
+          : {},
+    }
   } catch {
     return DEFAULT_APPEARANCE
   }
@@ -276,25 +597,12 @@ export function saveAppearance(settings: AppearanceSettings): void {
 
 export function applyAppearanceToDom(s: AppearanceSettings): void {
   const root = document.documentElement
-  const palette = THEME_PRESETS.find((t) => t.id === s.theme) ?? THEME_PRESETS[0]
-  const accent = ACCENT_PRESETS.find((a) => a.id === s.accent) ?? ACCENT_PRESETS[0]
-  const font = FONT_PRESETS.find((f) => f.id === s.fontFamily) ?? FONT_PRESETS[0]
+  const palette = resolveEffectivePalette(s)
+  const isDark = s.mode === 'dark'
 
-  root.classList.toggle('dark', palette.isDark)
-
-  const primary =
-    accent.id === 'mono'
-      ? palette.primary
-      : palette.isDark
-        ? (accent.darkPrimary ?? palette.primary)
-        : (accent.lightPrimary ?? palette.primary)
-
-  const primaryFg =
-    accent.id === 'mono'
-      ? palette.primaryForeground
-      : palette.isDark
-        ? (accent.darkFg ?? palette.primaryForeground)
-        : (accent.lightFg ?? palette.primaryForeground)
+  root.classList.toggle('dark', isDark)
+  root.dataset.surface = s.surfaceStyle || 'bordered'
+  root.dataset.bgPattern = s.bgPattern || 'clean'
 
   const border =
     s.borders === 'borderless'
@@ -302,6 +610,9 @@ export function applyAppearanceToDom(s: AppearanceSettings): void {
       : s.borders === 'crisp'
         ? palette.borderCrisp
         : palette.border
+
+  const uiStack = resolveUiFontStack(s.fontFamily, s.customUiFont)
+  const monoStack = resolveMonoFontStack(s.monoFont, s.customMonoFont)
 
   root.style.setProperty('--background', palette.background)
   root.style.setProperty('--foreground', palette.foreground)
@@ -317,10 +628,11 @@ export function applyAppearanceToDom(s: AppearanceSettings): void {
   root.style.setProperty('--accent-foreground', palette.foreground)
   root.style.setProperty('--border', border)
   root.style.setProperty('--input', s.borders === 'borderless' ? palette.border : border)
-  root.style.setProperty('--primary', primary)
-  root.style.setProperty('--primary-foreground', primaryFg)
-  root.style.setProperty('--ring', primary)
-  root.style.setProperty('--zuno-font', font.stack)
+  root.style.setProperty('--primary', palette.primary)
+  root.style.setProperty('--primary-foreground', palette.primaryForeground)
+  root.style.setProperty('--ring', palette.primary)
+  root.style.setProperty('--zuno-font', uiStack)
+  root.style.setProperty('--zuno-mono-font', monoStack)
   root.style.setProperty('--zuno-font-size', FONT_SIZE_MAP[s.fontSize])
   root.style.setProperty('--zuno-icon-stroke', ICON_STROKE_MAP[s.iconStroke])
 

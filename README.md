@@ -6,7 +6,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.1-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.2-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -30,9 +30,11 @@ Most modern cross-platform music players bundle a full Chromium runtime (150–3
 
 ## Features
 
-- **Minimal Cross-Platform UI** — Clean 60 / 30 / 10 shadcn/ui dark theme with a full desktop layout (left sidebar + single-row horizontal bottom player bar) and a native mobile layout (floating mini-player, pill nav, full-screen Now Playing sheet).
-- **Songs Home Screen** — Focused view showing **Last Played** and **Available Songs** with live **Sort by** (`Name`, `Artist`, `Album`, `Time`, `Size`, `Duration`) in both **Ascending** and **Descending** order.
-- **Full Appearance Customization** — Live **Customize** menu for **Themes** (Zinc Dark, OLED Black, Warm Stone, Slate Night, Zinc Light + 10% accent swatches), **Styles** (radius, list density, borders), **Fonts** (6 families + scale), **Icons** (stroke weight + row indicator styles), and **Components** (docked/floating bar, scrubber knob, section toggles).
+- **Minimal Cross-Platform UI** — Strict 60 / 30 / 10 shadcn/ui Dark & Light design with a full-height desktop rail, floating sticky horizontal player bar, compact overlay scrollbars, and a nested two-tier mobile dock.
+- **Songs & Dedicated Last Played** — Focused **Songs** library with live **Sort by** (`Name`, `Artist`, `Album`, `Time`, `Size`, `Duration`) in **Ascending / Descending** order, three-dots (`···`) row menus (*Add to playlist* & *Delete*), and a dedicated **Last Played** history screen.
+- **Bencho Spring Search Overlay (`Ctrl/Cmd + K`)** — Zero-page morphing circle-to-pill search overlay with instant matching results underneath for both desktop and mobile.
+- **10-Band Studio Equalizer** — Live Web Audio DSP (`32 Hz–16 kHz`) with draggable spline curve, subtle monochrome spectrum backdrop, 10 precision vertical faders, Preamp, Soft Limiter, Bass/Mid/Treble quick trims, 16 built-in presets across 4 categories, and unlimited saved custom presets.
+- **Full Appearance Studio** — Hierarchical live-preview **Customize** studio with 8 dual-mode Dark/Light theme families, interactive HSV 60/30/10 Custom Palette Studio, Custom Font Studio (18 self-hosted variable fonts + OS fonts + `.woff2/.ttf/.otf` uploads), 8 icon packs, 4 View Transitions, 6 surface materials, 5 canvas patterns, 4 active-song styles, and 7 progress scrubber styles.
 - **Zero-Copy `.m3u8` Playlists** — Create, manage, and play playlists stored in `zuno/playlists/` without ever copying song files.
 - **Pure-Rust Audio Engine** — Decodes MP3, FLAC, OGG, Opus, WAV, M4A, AAC, AIFF, ALAC, and WebM via `symphonia` + `rodio` with incremental `lofty` tag scanning and on-demand cover art loading.
 - **Built-in CLI, Daemon & MCP Server** — Control Zuno from the UI, terminal, or any MCP-compatible AI client (`Claude`, `Cursor`, `Antigravity`, etc.) sharing one live state over local IPC.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown, Check } from 'lucide-react'
+import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { SORT_OPTIONS, type SortDir, type SortField } from '@/lib/sortTracks'
 
@@ -65,40 +66,46 @@ export function SortControl({
   return (
     <div ref={ref} className="relative flex items-center gap-1.5">
       {/* Sort field selector */}
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          'flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer',
-          open && 'bg-secondary text-foreground',
-        )}
-        title="Sort by"
-      >
-        <ArrowUpDown className="h-3.5 w-3.5" />
-        <span>Sort: {activeOpt.label}</span>
-      </button>
+      <Tooltip label="Choose sort field" side="top">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className={cn(
+            'flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer',
+            open && 'bg-secondary text-foreground',
+          )}
+          aria-label="Sort by"
+        >
+          <ArrowUpDown className="h-3.5 w-3.5" />
+          <span>Sort: {activeOpt.label}</span>
+        </button>
+      </Tooltip>
 
       {/* Dedicated 1-click Ascending / Descending toggle */}
       {canToggleDir && (
-        <button
-          type="button"
-          onClick={() => onChange(field, dir === 'asc' ? 'desc' : 'asc')}
-          className="flex h-8 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-          title={dir === 'asc' ? 'Ascending (click for Descending)' : 'Descending (click for Ascending)'}
-          aria-label={dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
+        <Tooltip
+          label={dir === 'asc' ? 'Ascending · click for Descending' : 'Descending · click for Ascending'}
+          side="top"
         >
-          {dir === 'asc' ? (
-            <>
-              <ArrowUp className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Asc</span>
-            </>
-          ) : (
-            <>
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Desc</span>
-            </>
-          )}
-        </button>
+          <button
+            type="button"
+            onClick={() => onChange(field, dir === 'asc' ? 'desc' : 'asc')}
+            className="flex h-8 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+            aria-label={dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          >
+            {dir === 'asc' ? (
+              <>
+                <ArrowUp className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Asc</span>
+              </>
+            ) : (
+              <>
+                <ArrowDown className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Desc</span>
+              </>
+            )}
+          </button>
+        </Tooltip>
       )}
 
       {open && (

@@ -188,6 +188,25 @@ impl Library {
         Ok(updated)
     }
 
+    pub fn delete_song(&mut self, track_id: &str) -> Result<String> {
+        let track = self
+            .track_by_id(track_id)
+            .cloned()
+            .ok_or_else(|| ZunoError::TrackNotFound(track_id.to_string()))?;
+        let abs = self.paths.resolve_song_path(&track.rel_path)?;
+        if abs.exists() {
+            fs::remove_file(&abs)?;
+        }
+        // Clean references from any playlists holding this track
+        for pl in &mut self.playlists {
+            if pl.track_ids.contains(&track.id) {
+                pl.track_ids.retain(|id| id != &track.id);
+            }
+        }
+        self.rescan()?;
+        Ok(track.title)
+    }
+
     pub fn load_state(&self) -> PersistedState {
         fs::read_to_string(self.paths.state_path())
             .ok()
