@@ -99,7 +99,7 @@ export function DesktopPlayerBar({
           'flex h-16 items-center gap-5 px-5 transition-colors',
           onExpandPlayer && 'cursor-pointer',
           floating
-            ? 'pointer-events-auto mx-auto max-w-4xl rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-md hover:border-muted-foreground/35'
+            ? 'pointer-events-auto mx-auto max-w-4xl rounded-2xl border border-border bg-card shadow-2xl hover:border-muted-foreground/35'
             : 'border-t border-border bg-card',
         )}
       >

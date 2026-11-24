@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
 
@@ -177,31 +178,35 @@ fn main() {
     let ipc_service = Arc::clone(&service);
     let _ = ipc_unix::spawn_unix_ipc_server(ipc_service, sock_path);
 
-    let cover_service = Arc::clone(&service);
+    let cover_server = Arc::new(cover_cache::CoverServer::start(Arc::clone(&service)));
 
     let app = tauri::Builder::default()
         .manage(AppState {
             service,
             quitting: AtomicBool::new(false),
         })
-        // Zero-TCP custom URI scheme for embedded album cover art: `zuno://localhost/cover/<id>`
-        .register_uri_scheme_protocol("zuno", move |_ctx, request| {
-            let path = request.uri().path();
+        // Async zero-TCP custom URI scheme for cached embedded album cover art:
+        // `zuno://localhost/cover/<id>` or `zuno://localhost/cover/<id>?s=96` (thumbnail)
+        .register_asynchronous_uri_scheme_protocol("zuno", move |_ctx, request, responder| {
+            let uri = request.uri();
+            let path = uri.path();
             if let Some(track_id) = path.strip_prefix("/cover/") {
-                if let Some(art) = cover_service.extract_cover(track_id) {
-                    return tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", art.mime_type)
-                        .header("Cache-Control", "public, max-age=86400")
-                        .body(art.bytes)
-                        .unwrap();
-                }
+                let thumb_size = uri.query().and_then(|q| {
+                    q.split('&').find_map(|pair| {
+                        let (k, v) = pair.split_once('=')?;
+                        (k == "s").then(|| v.parse::<u32>().ok()).flatten()
+                    })
+                });
+                cover_server.enqueue(track_id.to_string(), thumb_size, responder);
+                return;
             }
-            tauri::http::Response::builder()
-                .status(404)
-                .header("Content-Type", "text/plain")
-                .body(Vec::new())
-                .unwrap()
+            responder.respond(
+                tauri::http::Response::builder()
+                    .status(404)
+                    .header("Content-Type", "text/plain")
+                    .body(Vec::new())
+                    .unwrap(),
+            );
         })
         .invoke_handler(tauri::generate_handler![
             zuno_ipc,

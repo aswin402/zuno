@@ -1,6 +1,7 @@
-import { memo, useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
+import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
 import type { AppearanceSettings } from '@/lib/appearance'
@@ -22,6 +23,11 @@ interface HomePageProps {
   onDeleteTrack: (track: Track) => void
   onCreatePlaylist: (initialTrackId?: string) => void
   onAddToPlaylist: (slug: string, trackId: string) => void
+}
+
+function estimateTrackRowHeight(a: AppearanceSettings): number {
+  const base = a.density === 'compact' ? 50 : a.density === 'spacious' ? 68 : 60
+  return a.showTrackOverline ? base : base - 8
 }
 
 export const HomePage = memo(function HomePage({
@@ -46,6 +52,22 @@ export const HomePage = memo(function HomePage({
     [tracks, sortField, sortDir],
   )
   const iconPack = appearance.iconPack
+
+  const handlePlayRow = useCallback(
+    (track: Track) => {
+      onPlayTrack(track, sortedTracks, 'Songs', 'songs')
+    },
+    [onPlayTrack, sortedTracks],
+  )
+
+  const handleCreatePlaylistWithTrack = useCallback(
+    (tid: string) => {
+      onCreatePlaylist(tid)
+    },
+    [onCreatePlaylist],
+  )
+
+  const rowHeight = estimateTrackRowHeight(appearance)
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
@@ -124,26 +146,29 @@ export const HomePage = memo(function HomePage({
             </button>
           </div>
         ) : (
-          <div className="space-y-1">
-            {sortedTracks.map((track, idx) => (
-              <TrackRow
-                key={track.id}
-                track={track}
-                index={idx}
-                active={track.id === currentTrackId}
-                isPlaying={isPlaying}
-                playlists={playlists}
-                appearance={appearance}
-                deleteLabel="Delete"
-                onPlay={() =>
-                  onPlayTrack(track, sortedTracks, 'Songs', 'songs')
-                }
-                onAddToPlaylist={onAddToPlaylist}
-                onCreatePlaylistWithTrack={(tid) => onCreatePlaylist(tid)}
-                onDelete={() => onDeleteTrack(track)}
-              />
-            ))}
-          </div>
+          <VirtualTrackList
+            items={sortedTracks}
+            getKey={(t) => t.id}
+            estimateRowHeight={rowHeight}
+            renderItem={(track, idx) => {
+              const active = track.id === currentTrackId
+              return (
+                <TrackRow
+                  track={track}
+                  index={idx}
+                  active={active}
+                  isPlaying={active && isPlaying}
+                  playlists={playlists}
+                  appearance={appearance}
+                  deleteLabel="Delete"
+                  onPlay={handlePlayRow}
+                  onAddToPlaylist={onAddToPlaylist}
+                  onCreatePlaylistWithTrack={handleCreatePlaylistWithTrack}
+                  onDelete={onDeleteTrack}
+                />
+              )
+            }}
+          />
         )}
       </section>
     </div>

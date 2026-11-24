@@ -152,7 +152,7 @@ export function WindowTitlebar({
       <header
         onMouseDown={handleDragMouseDown}
         className={cn(
-          'relative z-[60] flex w-full shrink-0 select-none items-center justify-between border-b border-border/80 bg-card/95 px-3 backdrop-blur-md transition-colors',
+          'relative z-[60] flex w-full shrink-0 select-none items-center justify-between border-b border-border/80 bg-card px-3 transition-colors',
           compact ? 'h-[30px]' : 'h-9',
           className,
         )}

@@ -5,6 +5,20 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] — 2026-11-24
+
+Major large-library performance overhaul (windowed list virtualization, async SIMD Rust thumbnail cache, zero-rerender scrolling, and WebKitGTK compositor optimization) plus cleaner borderless Now Playing controls.
+
+### Added
+- **Asynchronous Rust Cover Thumbnail Server & Persistent Cache (`src-tauri/src/cover_cache.rs`, `src-tauri/src/main.rs`)**: Replaced synchronous main-thread `zuno://` cover art reads with `register_asynchronous_uri_scheme_protocol` backed by a bounded 2-worker thread pool, lock-free file lookup (`crates/zuno-audio/src/service.rs`), SIMD `gdk-pixbuf` resizing down to `96×96` JPEGs (`~4 KB` instead of `1–2 MB`), a 256-entry RAM cache, and a persistent disk thumbnail cache (`~/zuno/.zuno/thumbs/`).
+- **Zero-Dependency Windowed Virtual List (`src/components/VirtualTrackList.tsx`)**: Virtualizes large track lists across `HomePage`, `PlaylistPage`, and the Now Playing `Queue` sheet so only ~25–30 visible rows exist in the DOM even with 10,000+ songs; raised `zunoApi.listSongs()` limit from `500` to `25,000`.
+
+### Fixed & Optimized
+- **Zero-Rerender `CompactScrollArea` (`src/components/CompactScrollArea.tsx`, `src/index.css`)**: Replaced per-scroll React `setState` and `subtree: true` `MutationObserver` with direct `requestAnimationFrame` + GPU `translate3d(...)` DOM ref updates and CSS `contain: layout style` on virtualized rows.
+- **Eliminated WebKitGTK Scroll Blur Stutter (`DesktopPlayerBar.tsx`, `WindowTitlebar.tsx`, `MobileNavbar.tsx`)**: Replaced `backdrop-blur-md` on persistent chrome bars overlapping scrolling lists with crisp opaque surfaces to stop per-frame software Gaussian re-blurring on Linux WebKitGTK.
+- **Fixed Memoization & Lazy Row Rendering (`TrackRow.tsx`, `ArtworkTile.tsx`, `HomePage.tsx`, `PlaylistPage.tsx`, `LastPlayedPage.tsx`, `App.tsx`)**: Removed per-row inline closures and global `isPlaying` fan-out so toggling Play/Pause re-renders only the active row and playback ticks trigger 0 `HomePage` re-renders; deferred `<DropdownMenuContent>` mounting until opened; added `loading="lazy" decoding="async"`, `?s=96` thumbnail URLs, and a pure-CSS fallback in `ArtworkTile`.
+- **Borderless Now Playing `···` Menu Trigger (`src/components/NowPlayingPanel.tsx`)**: Removed the circular `ring-1` border around the `···` button in the full-screen Now Playing header to match the bare `←` and `♡` controls.
+
 ## [0.0.5] — 2026-11-24
 
 Native Linux MPRIS2 media banner & system shortcuts, custom theme-matched frameless desktop titlebar, zero-copy multi-directory music library, pure-Rust equal-power audio crossfade transitions, and Skiper UI component theme options.

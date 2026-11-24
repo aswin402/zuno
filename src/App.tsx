@@ -1267,6 +1267,10 @@ export default function App() {
     setDeleteTarget(t)
   }, [])
 
+  const handleOpenFolders = useCallback(() => {
+    setFoldersOpen(true)
+  }, [])
+
   function handlePlaylistSortChange(field: SortField, dir: SortDir) {
     if (isCustomPlaylist) {
       setPlaylistSort({ field, dir })
@@ -1498,7 +1502,7 @@ export default function App() {
               appearance={appearance}
               onSortChange={handleMainSortChange}
               onPlayAll={handlePlayAllHome}
-              onOpenFolders={() => setFoldersOpen(true)}
+              onOpenFolders={handleOpenFolders}
               onPlayTrack={selectOrToggleTrack}
               onDeleteTrack={handleRequestDeleteTrack}
               onCreatePlaylist={handleOpenCreatePlaylist}

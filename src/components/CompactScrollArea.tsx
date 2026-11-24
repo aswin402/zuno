@@ -1,10 +1,12 @@
 import {
+  createContext,
   type ReactNode,
+  type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
 } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -12,10 +14,16 @@ const MIN_THUMB_PX = 28
 const MAX_THUMB_PX = 44
 const TRACK_INSET_PX = 10
 
+const ScrollViewportContext = createContext<RefObject<HTMLDivElement | null> | null>(null)
+
+export function useScrollViewport(): RefObject<HTMLDivElement | null> | null {
+  return useContext(ScrollViewportContext)
+}
+
 /**
- * Compact overlay scroll container inspired by Zenko WebUI's CompactScrollArea.
- * Hides bulky native scrollbars and draws a short, rounded, theme-tinted pill thumb
- * with smooth pointer dragging and quiet fade-on-idle.
+ * Zero-rerender compact overlay scroll container.
+ * Updates the pill scrollbar thumb directly via DOM refs inside rAF (0 React setState calls
+ * during scroll and zero subtree MutationObserver overhead) for silky 60 FPS WebKitGTK scrolling.
  */
 export function CompactScrollArea({
   children,
@@ -30,14 +38,11 @@ export function CompactScrollArea({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const [metrics, setMetrics] = useState({
-    overflow: false,
-    thumbHeight: 34,
-    thumbTop: TRACK_INSET_PX,
-  })
-  const [dragging, setDragging] = useState(false)
-  const [scrolling, setScrolling] = useState(false)
+  const trackRef = useRef<HTMLDivElement>(null)
+  const thumbRef = useRef<HTMLDivElement>(null)
+  const rafRef = useRef<number>(0)
   const hideTimerRef = useRef<number | undefined>(undefined)
+  const thumbHeightRef = useRef<number>(34)
   const dragStateRef = useRef<{
     pointerId: number
     startY: number
@@ -46,115 +51,129 @@ export function CompactScrollArea({
     travel: number
   } | null>(null)
 
-  const syncMetrics = useCallback(() => {
+  const syncDom = useCallback(() => {
     const el = viewportRef.current
-    if (!el) return
+    const track = trackRef.current
+    const thumb = thumbRef.current
+    if (!el || !track || !thumb) return
+
     const { scrollTop, scrollHeight, clientHeight } = el
     const maxScroll = Math.max(0, scrollHeight - clientHeight)
     if (maxScroll <= 1 || clientHeight <= TRACK_INSET_PX * 2) {
-      setMetrics((prev) =>
-        prev.overflow ? { overflow: false, thumbHeight: 34, thumbTop: TRACK_INSET_PX } : prev,
-      )
+      track.style.display = 'none'
       return
     }
+
+    track.style.display = 'block'
     const trackHeight = Math.max(24, clientHeight - TRACK_INSET_PX * 2)
     const proportional = Math.round((clientHeight / scrollHeight) * trackHeight)
     const thumbHeight = Math.max(MIN_THUMB_PX, Math.min(MAX_THUMB_PX, proportional))
     const travel = Math.max(1, trackHeight - thumbHeight)
     const thumbTop = TRACK_INSET_PX + (scrollTop / maxScroll) * travel
-    setMetrics((prev) =>
-      prev.overflow &&
-      prev.thumbHeight === thumbHeight &&
-      Math.abs(prev.thumbTop - thumbTop) < 0.5
-        ? prev
-        : { overflow: true, thumbHeight, thumbTop },
-    )
+
+    thumbHeightRef.current = thumbHeight
+    thumb.style.height = `${thumbHeight}px`
+    thumb.style.transform = `translate3d(0, ${thumbTop}px, 0)`
   }, [])
 
+  const scheduleSync = useCallback(() => {
+    if (rafRef.current) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      syncDom()
+    })
+  }, [syncDom])
+
   useLayoutEffect(() => {
-    syncMetrics()
+    syncDom()
     const el = viewportRef.current
     const content = contentRef.current
     if (!el) return
 
-    let pendingRaf = 0
-    const schedule = () => {
-      if (!pendingRaf) {
-        pendingRaf = requestAnimationFrame(() => {
-          pendingRaf = 0
-          syncMetrics()
-        })
-      }
-    }
-
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null
+    const ro =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleSync) : null
     ro?.observe(el)
     if (content) ro?.observe(content)
 
-    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(schedule) : null
-    mo?.observe(content ?? el, { childList: true, subtree: true })
-
     return () => {
-      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = 0
+      }
       ro?.disconnect()
-      mo?.disconnect()
     }
-  }, [syncMetrics])
+  }, [syncDom, scheduleSync])
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el) return
+
+    const onScroll = () => {
+      scheduleSync()
+      const thumb = thumbRef.current
+      if (thumb && thumb.dataset.scrolling !== 'true') {
+        thumb.dataset.scrolling = 'true'
+      }
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
-    },
-    [],
-  )
+      hideTimerRef.current = window.setTimeout(() => {
+        if (thumbRef.current) thumbRef.current.dataset.scrolling = 'false'
+      }, 900)
+    }
 
-  const handleScroll = () => {
-    syncMetrics()
-    setScrolling(true)
-    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
-    hideTimerRef.current = window.setTimeout(() => setScrolling(false), 900)
-  }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
+    }
+  }, [scheduleSync])
 
   return (
-    <div className={cn('group/scroll relative min-h-0 overflow-hidden', className)}>
-      <div
-        ref={viewportRef}
-        onScroll={handleScroll}
-        className={cn(
-          'zuno-scrollbar-hide w-full overflow-y-auto overscroll-contain',
-          !autoHeight && 'h-full',
-          viewportClassName,
-        )}
-      >
-        <div ref={contentRef} className="min-w-0">
-          {children}
-        </div>
-      </div>
-
-      {metrics.overflow && (
+    <ScrollViewportContext.Provider value={viewportRef}>
+      <div className={cn('group/scroll relative min-h-0 overflow-hidden', className)}>
         <div
+          ref={viewportRef}
+          className={cn(
+            'zuno-scrollbar-hide w-full overflow-y-auto overscroll-contain',
+            !autoHeight && 'h-full',
+            viewportClassName,
+          )}
+        >
+          <div ref={contentRef} className="min-w-0">
+            {children}
+          </div>
+        </div>
+
+        <div
+          ref={trackRef}
+          style={{ display: 'none' }}
           aria-hidden="true"
           onPointerDown={(e) => {
             if (e.target !== e.currentTarget) return
             const el = viewportRef.current
             if (!el) return
             const rect = e.currentTarget.getBoundingClientRect()
-            const clickY = e.clientY - rect.top - TRACK_INSET_PX - metrics.thumbHeight / 2
+            const clickY = e.clientY - rect.top - TRACK_INSET_PX - thumbHeightRef.current / 2
             const trackHeight = Math.max(24, el.clientHeight - TRACK_INSET_PX * 2)
-            const travel = Math.max(1, trackHeight - metrics.thumbHeight)
+            const travel = Math.max(1, trackHeight - thumbHeightRef.current)
             const ratio = Math.max(0, Math.min(1, clickY / travel))
-            el.scrollTo({ top: ratio * (el.scrollHeight - el.clientHeight), behavior: 'smooth' })
+            el.scrollTo({
+              top: ratio * (el.scrollHeight - el.clientHeight),
+              behavior: 'smooth',
+            })
           }}
           className="absolute inset-y-0 right-0.5 z-10 w-2.5 select-none"
         >
           <div
+            ref={thumbRef}
+            data-scrolling="false"
+            data-dragging="false"
             onPointerDown={(e) => {
               e.preventDefault()
               e.stopPropagation()
               const el = viewportRef.current
               if (!el) return
               const trackHeight = Math.max(24, el.clientHeight - TRACK_INSET_PX * 2)
-              const travel = Math.max(1, trackHeight - metrics.thumbHeight)
+              const travel = Math.max(1, trackHeight - thumbHeightRef.current)
               dragStateRef.current = {
                 pointerId: e.pointerId,
                 startY: e.clientY,
@@ -162,7 +181,7 @@ export function CompactScrollArea({
                 maxScroll: Math.max(1, el.scrollHeight - el.clientHeight),
                 travel,
               }
-              setDragging(true)
+              e.currentTarget.dataset.dragging = 'true'
               e.currentTarget.setPointerCapture(e.pointerId)
             }}
             onPointerMove={(e) => {
@@ -176,34 +195,20 @@ export function CompactScrollArea({
             onPointerUp={(e) => {
               if (dragStateRef.current?.pointerId === e.pointerId) {
                 dragStateRef.current = null
-                setDragging(false)
+                e.currentTarget.dataset.dragging = 'false'
                 if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
                   e.currentTarget.releasePointerCapture(e.pointerId)
                 }
               }
             }}
-            onPointerCancel={() => {
+            onPointerCancel={(e) => {
               dragStateRef.current = null
-              setDragging(false)
+              e.currentTarget.dataset.dragging = 'false'
             }}
-            style={{
-              height: metrics.thumbHeight,
-              transform: `translateY(${metrics.thumbTop}px)`,
-              backgroundColor: dragging
-                ? 'var(--primary)'
-                : 'color-mix(in srgb, var(--primary) 42%, transparent)',
-            }}
-            className={cn(
-              'mx-auto rounded-full transition-[width,opacity,background-color] duration-150',
-              dragging
-                ? 'w-[4.5px] opacity-100 cursor-grabbing'
-                : scrolling
-                  ? 'w-[3.5px] opacity-85 cursor-grab hover:w-[4.5px] hover:opacity-100'
-                  : 'w-[3px] opacity-35 cursor-grab group-hover/scroll:opacity-80 hover:w-[4.5px] hover:opacity-100',
-            )}
+            className="zuno-scroll-thumb mx-auto will-change-transform rounded-full"
           />
         </div>
-      )}
-    </div>
+      </div>
+    </ScrollViewportContext.Provider>
   )
 }

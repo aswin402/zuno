@@ -176,7 +176,7 @@ export const zunoApi = {
     callApi<{ total: number; tracks: Track[] }>({
       op: 'list_songs',
       folder: folder ?? null,
-      limit: 500,
+      limit: 25000,
       offset: 0,
     }),
 
@@ -299,10 +299,12 @@ export const zunoApi = {
   queueClear: () => callApi<PlaybackStatus>({ op: 'queue_clear' }),
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,
-  coverUrl: (trackId: string) =>
-    isTauriRuntime()
-      ? `zuno://localhost/cover/${encodeURIComponent(trackId)}`
-      : `/api/cover/${encodeURIComponent(trackId)}`,
+  coverUrl: (trackId: string, size?: number) => {
+    const q = size ? `?s=${size}` : ''
+    return isTauriRuntime()
+      ? `zuno://localhost/cover/${encodeURIComponent(trackId)}${q}`
+      : `/api/cover/${encodeURIComponent(trackId)}${q}`
+  },
 
   async mcpRpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     const res = await fetch('/mcp', {

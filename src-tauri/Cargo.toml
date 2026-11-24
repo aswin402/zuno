@@ -24,5 +24,6 @@ zuno-audio = { path = "../crates/zuno-audio" }
 zuno-core = { path = "../crates/zuno-core" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gdk-pixbuf = "0.18"
 gio = "0.18"
 glib = "0.18"

@@ -221,7 +221,12 @@ impl ZunoService {
     }
 
     pub fn extract_cover(&self, track_id: &str) -> Option<CoverArt> {
-        self.inner.lock().unwrap().library.extract_cover(track_id)
+        let abs = {
+            let st = self.inner.lock().unwrap();
+            let track = st.library.track_by_id(track_id)?;
+            st.library.resolve_track_path(track).ok()?
+        };
+        zuno_core::scanner::extract_cover_art(&abs)
     }
 
     pub fn resolve_track_file(&self, track_id: &str) -> Option<(PathBuf, String)> {

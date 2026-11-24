@@ -1,3 +1,4 @@
+import { memo, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { zunoApi } from '@/lib/zunoApi'
 
@@ -19,21 +20,31 @@ function hashSeed(input: string): number {
 }
 
 /**
- * Displays real embedded cover art when present, or a refined monochrome zinc
- * architectural motif (strictly 60/30/10 shadcn dark — zero extra colors).
+ * Displays cached embedded cover art (96px thumbnails for lists, full-res for Now Playing)
+ * with lazy async decoding, or a lightweight monochrome architectural fallback.
  */
-export function ArtworkTile({
+export const ArtworkTile = memo(function ArtworkTile({
   trackId,
   hasCover,
   seed,
   variant = 'card',
   className,
 }: ArtworkTileProps) {
-  if (trackId && hasCover) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [trackId])
+
+  if (trackId && hasCover && !failed) {
+    const thumbSize = variant === 'thumb' ? 96 : variant === 'card' ? 256 : undefined
     return (
       <img
-        src={zunoApi.coverUrl(trackId)}
+        src={zunoApi.coverUrl(trackId, thumbSize)}
         alt={seed}
+        loading={variant === 'arch' ? 'eager' : 'lazy'}
+        decoding="async"
+        onError={() => setFailed(true)}
         className={cn('h-full w-full object-cover', className)}
       />
     )
@@ -42,7 +53,28 @@ export function ArtworkTile({
   const h = hashSeed(seed || 'zuno')
   const cx = 42 + (h % 17)
   const cy = variant === 'arch' ? 54 + ((h >> 4) % 12) : 46 + ((h >> 4) % 12)
-  const ringStep = variant === 'thumb' ? 14 : 11
+
+  // Ultra-fast pure CSS fallback for small list thumbnails (avoids per-row SVG gradients)
+  if (variant === 'thumb') {
+    return (
+      <div
+        className={cn(
+          'relative flex h-full w-full items-center justify-center overflow-hidden bg-secondary',
+          className,
+        )}
+        style={{
+          backgroundImage: `radial-gradient(circle at ${cx}% ${cy}%, color-mix(in srgb, var(--foreground) 16%, transparent) 0%, transparent 65%)`,
+        }}
+        aria-hidden="true"
+      >
+        <span className="h-5 w-5 rounded-full border border-foreground/15 flex items-center justify-center">
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/45" />
+        </span>
+      </div>
+    )
+  }
+
+  const ringStep = 11
 
   return (
     <div
@@ -74,17 +106,11 @@ export function ArtworkTile({
             fill="none"
             stroke="var(--foreground)"
             strokeOpacity={0.18 - i * 0.03}
-            strokeWidth={variant === 'thumb' ? 1 : 0.5}
+            strokeWidth={0.5}
           />
         ))}
-        <circle
-          cx={cx}
-          cy={cy}
-          r={variant === 'thumb' ? 4 : 2.2}
-          fill="var(--foreground)"
-          fillOpacity="0.55"
-        />
+        <circle cx={cx} cy={cy} r={2.2} fill="var(--foreground)" fillOpacity="0.55" />
       </svg>
     </div>
   )
-}
+})

@@ -1,3 +1,4 @@
+import { memo, useCallback } from 'react'
 import { Clock } from 'lucide-react'
 import { TrackRow } from '@/components/TrackRow'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -23,7 +24,7 @@ interface LastPlayedPageProps {
  * Dedicated Last Played history page showing recently listened songs with 1-click play,
  * three-dots playlist/remove actions, and Clear history.
  */
-export function LastPlayedPage({
+export const LastPlayedPage = memo(function LastPlayedPage({
   tracks,
   playlists,
   currentTrackId,
@@ -37,6 +38,27 @@ export function LastPlayedPage({
   onCreatePlaylistWithTrack,
 }: LastPlayedPageProps) {
   const iconPack = appearance.iconPack
+
+  const handlePlayRow = useCallback(
+    (track: Track) => {
+      onPlayTrack(track, tracks)
+    },
+    [onPlayTrack, tracks],
+  )
+
+  const handleDeleteRow = useCallback(
+    (track: Track) => {
+      onRemoveTrack(track.id)
+    },
+    [onRemoveTrack],
+  )
+
+  const handleCreatePlaylistWithTrack = useCallback(
+    (tid: string) => {
+      onCreatePlaylistWithTrack(tid)
+    },
+    [onCreatePlaylistWithTrack],
+  )
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-10 pt-6 sm:px-8">
@@ -92,24 +114,27 @@ export function LastPlayedPage({
         </div>
       ) : (
         <div className="space-y-1">
-          {tracks.map((track, idx) => (
-            <TrackRow
-              key={track.id}
-              track={track}
-              index={idx}
-              active={track.id === currentTrackId}
-              isPlaying={isPlaying}
-              playlists={playlists}
-              appearance={appearance}
-              deleteLabel="Remove from recent"
-              onPlay={() => onPlayTrack(track, tracks)}
-              onAddToPlaylist={onAddToPlaylist}
-              onCreatePlaylistWithTrack={onCreatePlaylistWithTrack}
-              onDelete={() => onRemoveTrack(track.id)}
-            />
-          ))}
+          {tracks.map((track, idx) => {
+            const active = track.id === currentTrackId
+            return (
+              <TrackRow
+                key={track.id}
+                track={track}
+                index={idx}
+                active={active}
+                isPlaying={active && isPlaying}
+                playlists={playlists}
+                appearance={appearance}
+                deleteLabel="Remove from recent"
+                onPlay={handlePlayRow}
+                onAddToPlaylist={onAddToPlaylist}
+                onCreatePlaylistWithTrack={handleCreatePlaylistWithTrack}
+                onDelete={handleDeleteRow}
+              />
+            )
+          })}
         </div>
       )}
     </div>
   )
-}
+})

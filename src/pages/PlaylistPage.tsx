@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
+import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
@@ -33,7 +34,12 @@ interface PlaylistPageProps {
   onDeletePlaylist?: () => void
 }
 
-export function PlaylistPage({
+function estimateTrackRowHeight(a: AppearanceSettings): number {
+  const base = a.density === 'compact' ? 50 : a.density === 'spacious' ? 68 : 60
+  return a.showTrackOverline ? base : base - 8
+}
+
+export const PlaylistPage = memo(function PlaylistPage({
   overline,
   title,
   tracks,
@@ -62,6 +68,33 @@ export function PlaylistPage({
     [tracks, sortField, sortDir],
   )
   const iconPack = appearance.iconPack
+
+  const handlePlayRow = useCallback(
+    (track: Track) => {
+      onPlayTrack(track, sortedTracks)
+    },
+    [onPlayTrack, sortedTracks],
+  )
+
+  const handleDeleteRow = useCallback(
+    (track: Track) => {
+      if (canRemoveTracks && onRemoveTrack) {
+        onRemoveTrack(track.id)
+      } else {
+        onDeleteTrack(track)
+      }
+    },
+    [canRemoveTracks, onRemoveTrack, onDeleteTrack],
+  )
+
+  const handleCreatePlaylistWithTrack = useCallback(
+    (tid: string) => {
+      onCreatePlaylistWithTrack(tid)
+    },
+    [onCreatePlaylistWithTrack],
+  )
+
+  const rowHeight = estimateTrackRowHeight(appearance)
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
@@ -133,29 +166,30 @@ export function PlaylistPage({
           No tracks yet. Click ··· on any song to add it here.
         </div>
       ) : (
-        <div className="space-y-1">
-          {sortedTracks.map((track, idx) => (
-            <TrackRow
-              key={track.id}
-              track={track}
-              index={idx}
-              active={track.id === currentTrackId}
-              isPlaying={isPlaying}
-              playlists={playlists}
-              appearance={appearance}
-              deleteLabel={canRemoveTracks ? 'Remove from playlist' : 'Delete'}
-              onPlay={() => onPlayTrack(track, sortedTracks)}
-              onAddToPlaylist={onAddToPlaylist}
-              onCreatePlaylistWithTrack={onCreatePlaylistWithTrack}
-              onDelete={
-                canRemoveTracks && onRemoveTrack
-                  ? () => onRemoveTrack(track.id)
-                  : () => onDeleteTrack(track)
-              }
-            />
-          ))}
-        </div>
+        <VirtualTrackList
+          items={sortedTracks}
+          getKey={(t) => t.id}
+          estimateRowHeight={rowHeight}
+          renderItem={(track, idx) => {
+            const active = track.id === currentTrackId
+            return (
+              <TrackRow
+                track={track}
+                index={idx}
+                active={active}
+                isPlaying={active && isPlaying}
+                playlists={playlists}
+                appearance={appearance}
+                deleteLabel={canRemoveTracks ? 'Remove from playlist' : 'Delete'}
+                onPlay={handlePlayRow}
+                onAddToPlaylist={onAddToPlaylist}
+                onCreatePlaylistWithTrack={handleCreatePlaylistWithTrack}
+                onDelete={handleDeleteRow}
+              />
+            )
+          }}
+        />
       )}
     </div>
   )
-}
+})

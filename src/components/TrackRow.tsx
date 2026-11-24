@@ -28,10 +28,10 @@ interface TrackRowProps {
   playlists: Playlist[]
   appearance?: AppearanceSettings
   deleteLabel?: string
-  onPlay: () => void
+  onPlay: (track: Track) => void
   onAddToPlaylist: (playlistSlug: string, trackId: string) => void
   onCreatePlaylistWithTrack: (trackId: string) => void
-  onDelete: () => void
+  onDelete: (track: Track) => void
 }
 
 /**
@@ -66,7 +66,7 @@ export const TrackRow = memo(function TrackRow({
 
   return (
     <div
-      onClick={onPlay}
+      onClick={() => onPlay(track)}
       className={cn(
         'group relative transition-colors cursor-pointer',
         menuOpen && 'z-30',
@@ -175,7 +175,7 @@ export const TrackRow = memo(function TrackRow({
             <Tooltip label={playingHere ? 'Pause' : 'Play'} side="top">
               <button
                 type="button"
-                onClick={onPlay}
+                onClick={() => onPlay(track)}
                 aria-label={playingHere ? 'Pause' : 'Play'}
                 className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-accent cursor-pointer"
               >
@@ -241,6 +241,7 @@ export const TrackRow = memo(function TrackRow({
               </DropdownMenuTrigger>
             </Tooltip>
 
+            {menuOpen && (
             <DropdownMenuContent align="end" className="w-52">
               {menuView === 'main' ? (
                 <>
@@ -266,7 +267,7 @@ export const TrackRow = memo(function TrackRow({
                     destructive
                     onSelect={() => {
                       setMenuView('main')
-                      onDelete()
+                      onDelete(track)
                     }}
                   >
                     <ZunoIcon name="trash" pack={iconPack} className="h-3.5 w-3.5" />
@@ -322,6 +323,7 @@ export const TrackRow = memo(function TrackRow({
                 </>
               )}
             </DropdownMenuContent>
+            )}
           </DropdownMenu>
         </div>
       </div>

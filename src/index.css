@@ -468,13 +468,40 @@ button:hover .zuno-pack-pulso,
   );
 }
 
-/* ── CompactScrollArea native scrollbar suppression ── */
+/* ── CompactScrollArea native scrollbar suppression & zero-rerender thumb ── */
 .zuno-scrollbar-hide {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 .zuno-scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+.zuno-scroll-thumb {
+  width: 3px;
+  opacity: 0.35;
+  cursor: grab;
+  background-color: color-mix(in srgb, var(--primary) 42%, transparent);
+  transition: width 150ms ease, opacity 150ms ease, background-color 150ms ease;
+}
+.group\/scroll:hover .zuno-scroll-thumb {
+  opacity: 0.8;
+}
+.zuno-scroll-thumb[data-scrolling="true"] {
+  width: 3.5px;
+  opacity: 0.85;
+}
+.zuno-scroll-thumb:hover {
+  width: 4.5px;
+  opacity: 1;
+}
+.zuno-scroll-thumb[data-dragging="true"] {
+  width: 4.5px;
+  opacity: 1;
+  cursor: grabbing;
+  background-color: var(--primary);
+}
+.zuno-vrow {
+  contain: layout style;
 }
 
 /* ── Skiper26 + Zenko View Transitions (circle-blur, circle, polygon, bottom-up, rectangle, blinds) ── */

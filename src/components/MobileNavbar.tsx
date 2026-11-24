@@ -84,7 +84,7 @@ export function MobileNavbar({
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/90 px-4 backdrop-blur-md lg:hidden">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background px-4 lg:hidden">
         <button
           type="button"
           onClick={onGoHome}

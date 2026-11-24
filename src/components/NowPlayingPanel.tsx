@@ -14,6 +14,7 @@ import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
+import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn, formatTime } from '@/lib/utils'
 import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
@@ -283,11 +284,8 @@ export function NowPlayingPanel({
               <DropdownMenuTrigger
                 aria-label="Playback options"
                 className={cn(
-                  'h-9 w-9 text-foreground hover:bg-secondary active:scale-95',
-                  moreOpen && 'bg-secondary',
-                  !moreOpen &&
-                    (shuffle || repeat !== 'off' || eqEnabled) &&
-                    'ring-1 ring-primary/40',
+                  'h-9 w-9 text-muted-foreground hover:bg-secondary hover:text-foreground active:scale-95',
+                  moreOpen && 'bg-secondary text-foreground',
                 )}
               >
                 <MoreHorizontal className="h-[19px] w-[19px]" />
@@ -733,8 +731,11 @@ export function NowPlayingPanel({
                     Queue is empty
                   </p>
                 ) : (
-                  <div className="space-y-1">
-                    {queueTracks.map((item, idx) => {
+                  <VirtualTrackList
+                    items={queueTracks}
+                    getKey={(item, idx) => `${item.id}-${idx}`}
+                    estimateRowHeight={56}
+                    renderItem={(item, idx) => {
                       const isCurrent = idx === queueIndex
                       const playingHere = isCurrent && isPlaying
                       const itemArtist =
@@ -743,7 +744,6 @@ export function NowPlayingPanel({
                           : item.artist
                       return (
                         <button
-                          key={`${item.id}-${idx}`}
                           type="button"
                           onClick={() => {
                             if (isCurrent) {
@@ -859,8 +859,8 @@ export function NowPlayingPanel({
                           </div>
                         </button>
                       )
-                    })}
-                  </div>
+                    }}
+                  />
                 )}
               </CompactScrollArea>
             )}
