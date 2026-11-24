@@ -1568,7 +1568,8 @@ export default function App() {
             <ScrollProgressOverlay styleVariant={appearance.scrollProgressStyle} />
           }
           viewportClassName={cn(
-            appearance.playerBarStyle === 'floating' && 'lg:pb-24',
+            currentTrack ? 'pb-36' : 'pb-20',
+            appearance.playerBarStyle === 'floating' ? 'lg:pb-24' : 'lg:pb-0',
             appearance.navStyle !== 'sidebar' && 'lg:pt-14',
           )}
         >

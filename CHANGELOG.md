@@ -5,6 +5,13 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.10] — 2026-11-25
+
+Sticky floating mobile bottom dock with background bar removed.
+
+### Changed
+- **Sticky Floating Mobile Bottom Dock (`src/components/MobileDock.tsx`, `src/App.tsx`)**: Converted the mobile bottom navigation + mini-player dock into a true floating sticky overlay (`pointer-events-none absolute inset-x-0 bottom-0 z-20`) with the outer gradient background removed so tracks scroll cleanly behind the dock pill, paired with adaptive mobile bottom scroll clearance (`pb-36` / `pb-20`) in `CompactScrollArea`.
+
 ## [0.0.9] — 2026-11-25
 
 Desktop Now Playing Queue trigger & smooth bidirectional drawer transition fix.
