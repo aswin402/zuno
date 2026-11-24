@@ -350,11 +350,6 @@ export default function App() {
     })
   }, [])
 
-  const effectiveDuration =
-    duration > 0 ? duration : (currentTrack?.duration_secs ?? 0)
-  const progressPct =
-    effectiveDuration > 0 ? (position / effectiveDuration) * 100 : 0
-
   const favoritesPlaylist = useMemo(
     () =>
       playlists.find((p) => p.slug === 'favorites' || p.slug === 'fav') ?? null,
@@ -1174,7 +1169,6 @@ export default function App() {
           track={currentTrack}
           isPlaying={isPlaying}
           isFavorite={isCurrentFavorite}
-          progressPct={progressPct}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
           onToggleFavorite={handleToggleFavorite}

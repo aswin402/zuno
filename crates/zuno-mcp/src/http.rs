@@ -1,8 +1,9 @@
 use crate::ZunoClient;
 use crate::mcp::handle_jsonrpc_message;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
 
@@ -13,12 +14,27 @@ use zuno_core::ipc::{IpcRequest, IpcResponse};
 /// - `GET  /api/audio/<id>`   — Byte-range audio file streaming (for browser audio playback)
 /// - `GET  /api/info`         — Root paths & live MCP endpoint metadata
 /// - `GET  /health`           — Health check
-pub fn run_http_mcp(addr: &str, token: Option<String>, client: Arc<ZunoClient>) -> io::Result<()> {
+/// - `GET  /*`                — Optional built static Web UI (`--web-dir`)
+pub fn run_http_mcp(
+    addr: &str,
+    token: Option<String>,
+    web_dir: Option<PathBuf>,
+    client: Arc<ZunoClient>,
+) -> io::Result<()> {
     let listener = TcpListener::bind(addr)?;
-    eprintln!("Zuno HTTP + MCP listening on http://{addr} (POST /mcp, POST /api)");
+    let web_dir = web_dir.and_then(|d| fs::canonicalize(d).ok());
+    if let Some(ref dir) = web_dir {
+        eprintln!(
+            "Zuno HTTP + UI + MCP listening on http://{addr} (web: {})",
+            dir.display()
+        );
+    } else {
+        eprintln!("Zuno HTTP + MCP listening on http://{addr} (POST /mcp, POST /api)");
+    }
 
     let token = Arc::new(token);
     let addr_str = Arc::new(addr.to_string());
+    let web_dir = Arc::new(web_dir);
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
@@ -26,8 +42,15 @@ pub fn run_http_mcp(addr: &str, token: Option<String>, client: Arc<ZunoClient>) 
         let client = Arc::clone(&client);
         let token = Arc::clone(&token);
         let addr_str = Arc::clone(&addr_str);
+        let web_dir = Arc::clone(&web_dir);
         std::thread::spawn(move || {
-            let _ = handle_http_connection(stream, token.as_deref(), &addr_str, &client);
+            let _ = handle_http_connection(
+                stream,
+                token.as_deref(),
+                &addr_str,
+                web_dir.as_deref(),
+                &client,
+            );
         });
     }
     Ok(())
@@ -37,6 +60,7 @@ fn handle_http_connection(
     mut stream: TcpStream,
     expected_token: Option<&str>,
     listen_addr: &str,
+    web_dir: Option<&Path>,
     client: &ZunoClient,
 ) -> io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -177,12 +201,91 @@ fn handle_http_connection(
         };
     }
 
+    if (method == "GET" || method == "HEAD")
+        && let Some(root) = web_dir
+        && !path.starts_with("/api")
+        && path != "/mcp"
+    {
+        return serve_static_file(&mut stream, root, path, method == "HEAD");
+    }
+
     write_http(
         &mut stream,
         404,
         "application/json",
         b"{\"error\":\"not found; use POST /mcp or POST /api\"}",
     )
+}
+
+fn serve_static_file(
+    stream: &mut TcpStream,
+    web_root: &Path,
+    req_path: &str,
+    head_only: bool,
+) -> io::Result<()> {
+    let clean = req_path.trim_start_matches('/');
+    let rel = if clean.is_empty() { "index.html" } else { clean };
+    if rel.contains("..") {
+        return write_http_with_body(stream, 400, "text/plain", b"bad path", !head_only);
+    }
+
+    let candidate = web_root.join(rel);
+    let target = match fs::canonicalize(&candidate) {
+        Ok(p) if p.starts_with(web_root) && p.is_file() => p,
+        _ => {
+            // SPA fallback for client routes without a file extension
+            if !rel.contains('.') {
+                web_root.join("index.html")
+            } else {
+                return write_http_with_body(stream, 404, "text/plain", b"not found", !head_only);
+            }
+        }
+    };
+
+    let bytes = match fs::read(&target) {
+        Ok(b) => b,
+        Err(_) => {
+            return write_http_with_body(stream, 404, "text/plain", b"not found", !head_only);
+        }
+    };
+    let mime = static_mime(&target);
+    let cache = if rel.starts_with("assets/") || rel.starts_with("fonts/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    )?;
+    if !head_only {
+        stream.write_all(&bytes)?;
+    }
+    stream.flush()
+}
+
+fn static_mime(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "json" => "application/json; charset=utf-8",
+        "webmanifest" => "application/manifest+json; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 fn stream_audio_file(

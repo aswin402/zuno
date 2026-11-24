@@ -1,4 +1,5 @@
 import { ArtworkTile } from '@/components/ArtworkTile'
+import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
@@ -13,7 +14,6 @@ interface MobileDockProps {
   track: Track | null
   isPlaying: boolean
   isFavorite: boolean
-  progressPct: number
   appearance: AppearanceSettings
   onTogglePlay: () => void
   onToggleFavorite: () => void
@@ -24,7 +24,7 @@ interface MobileDockProps {
 
 /**
  * Nested two-tier Mobile Dock:
- * - Upper tier: Integrated circular-cover mini player with PulseHeart & Play/Pause + hairline progress seam.
+ * - Upper tier: Integrated circular-cover mini player with PulseHeart & Play/Pause.
  * - Lower tier: 4-tab contrasting curved nav tray (Songs, Search, Recent, Playlists)
  *   where the active tab morphs into a top accent tick + bold label.
  */
@@ -34,7 +34,6 @@ export function MobileDock({
   track,
   isPlaying,
   isFavorite,
-  progressPct,
   appearance,
   onTogglePlay,
   onToggleFavorite,
@@ -112,11 +111,23 @@ export function MobileDock({
                 />
               </div>
 
-              {/* Title + Artist */}
+              {/* Title + compact music-running bars + Artist */}
               <div className="min-w-0">
-                <p className="truncate text-[14px] font-semibold leading-tight text-foreground">
-                  {track.title}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-[14px] font-semibold leading-tight text-foreground">
+                    {track.title}
+                  </p>
+                  {isPlaying && (
+                    <Loader2
+                      barCount={4}
+                      height={13}
+                      width={2}
+                      gap={2}
+                      speed={0.95}
+                      className="shrink-0"
+                    />
+                  )}
+                </div>
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
                   {artistLabel}
                 </p>
@@ -159,14 +170,6 @@ export function MobileDock({
                   />
                 </button>
               )}
-            </div>
-
-            {/* Subtle progress hairline along seam */}
-            <div className="pointer-events-none absolute inset-x-6 bottom-0 h-[2px] overflow-hidden rounded-full bg-accent/60">
-              <div
-                className="h-full rounded-full bg-primary transition-[width] duration-150"
-                style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
-              />
             </div>
           </div>
         )}

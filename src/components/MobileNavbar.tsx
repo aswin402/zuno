@@ -3,6 +3,7 @@ import { Menu, X } from 'lucide-react'
 import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
+import { ZunoLogo } from '@/components/ZunoLogo'
 import { cn } from '@/lib/utils'
 import type { IconPackId, ThemeMode, ThemeTransitionId } from '@/lib/appearance'
 import type { Playlist } from '@/lib/zunoApi'
@@ -73,9 +74,10 @@ export function MobileNavbar({
         <button
           type="button"
           onClick={onGoHome}
-          className="text-[16px] font-semibold tracking-tight text-foreground cursor-pointer"
+          className="flex items-center gap-2 text-[16px] font-semibold tracking-tight text-foreground cursor-pointer"
         >
-          Zuno
+          <ZunoLogo className="h-6 w-6" />
+          <span>Zuno</span>
         </button>
 
         {/* Outside controls: Theme Toggle right next to the Navbar Menu button */}

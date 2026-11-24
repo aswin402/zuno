@@ -34,6 +34,9 @@ enum Commands {
         /// Optional Bearer auth token when running HTTP MCP
         #[arg(long)]
         token: Option<String>,
+        /// Optional built Web UI directory (defaults to ~/.local/share/zuno/web if present)
+        #[arg(long)]
+        web_dir: Option<PathBuf>,
     },
     /// Run a lightweight headless background audio daemon listening on the local Unix socket
     Daemon,
@@ -147,6 +150,19 @@ impl ZunoClient {
     }
 }
 
+fn default_web_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|v| !v.is_empty())
+                .map(|h| PathBuf::from(h).join(".local").join("share"))
+        })?;
+    let dir = base.join("zuno").join("web");
+    dir.join("index.html").is_file().then_some(dir)
+}
+
 fn main() {
     let cli = Cli::parse();
     let paths = match cli.dir {
@@ -162,15 +178,18 @@ fn main() {
     let command = cli.command.unwrap_or(Commands::Mcp {
         http: None,
         token: None,
+        web_dir: None,
     });
 
     match command {
         Commands::Mcp {
             http: Some(addr),
             token,
+            web_dir,
         } => {
+            let resolved_web_dir = web_dir.or_else(default_web_dir);
             let client = Arc::new(ZunoClient::new(paths));
-            if let Err(e) = http::run_http_mcp(&addr, token, client) {
+            if let Err(e) = http::run_http_mcp(&addr, token, resolved_web_dir, client) {
                 eprintln!("zuno-mcp HTTP error: {e}");
                 std::process::exit(1);
             }

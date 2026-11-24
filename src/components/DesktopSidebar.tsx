@@ -2,6 +2,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
+import { ZunoLogo } from '@/components/ZunoLogo'
 import { cn } from '@/lib/utils'
 import type { IconPackId, ThemeMode, ThemeTransitionId } from '@/lib/appearance'
 import type { Playlist } from '@/lib/zunoApi'
@@ -74,9 +75,14 @@ export function DesktopSidebar({
         <div className="flex flex-col">
         {/* Brand + Theme Toggle + Rescan */}
         <div className="mb-6 flex items-center justify-between px-2.5">
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">
-            Zuno
-          </span>
+          <button
+            type="button"
+            onClick={onGoHome}
+            className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground cursor-pointer"
+          >
+            <ZunoLogo className="h-[22px] w-[22px]" />
+            <span>Zuno</span>
+          </button>
           <div className="flex items-center gap-0.5">
             <Tooltip
               label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}

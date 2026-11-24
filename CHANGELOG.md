@@ -5,6 +5,23 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] — 2026-11-24
+
+Minimalist monochrome branding, unified full-screen Now Playing for desktop & mobile, EaseUI dropdown menus, mobile navigation overhaul, and one-command Linux desktop installation.
+
+### Added
+- **Minimalist Black & White Zuno Logo & Icons** (`public/zuno-logo.svg`, `public/icon-192.png`, `public/icon-512.png`, `public/manifest.webmanifest`, `src/components/ZunoLogo.tsx`): Precision obsidian squircle emblem with four stepped pure-white acoustic bars forming a minimalist Play silhouette, wired as browser favicon, PWA/touch icons, sidebar & mobile navbar brand mark, and Linux desktop icon.
+- **Mobile Top Navbar & Slide-Over Menu** (`src/components/MobileNavbar.tsx`): Dedicated mobile top bar with the animated **Theme Toggle** placed outside beside the Menu button and a slide-over drawer containing **Equalizer** (with active preset badge), **Theme & Customize**, **Search songs**, **Rescan library**, and **Playlists**.
+- **Dedicated Playlists Hub** (`src/pages/PlaylistsPage.tsx`): Dedicated Playlists overview pinning **Favorites** first followed by all zero-copy `.m3u8` playlists with artwork/icon tiles, song counts, total durations, 1-tap play buttons, and **+ New** playlist creation.
+- **Full-Screen Now Playing for Desktop & Mobile** (`src/components/NowPlayingPanel.tsx`, `src/components/DesktopPlayerBar.tsx`): Minimal two-zone curved player accessible by clicking the desktop bottom dock or tapping the mobile mini-player, featuring centered typography, customizable `<Scrubber>` progress bar, split `elapsed | total` timestamps, contrasting **Previous / Play-Pause / Next** bottom tray, and a swipe-up/clickable **Queue & Playlists** bottom sheet.
+- **EaseUI Dropdown Menus** (`src/components/ui/dropdown-menu.tsx`): Adopted `@easeui/dropdown-menu` physics (`cubic-bezier(0.23, 1, 0.32, 1)`, `150ms` open / `100ms` close, automatic upward flipping, keyboard navigation, destructive item styling) across `TrackRow`, `SortControl`, `NowPlayingPanel`, and `DesktopPlayerBar`.
+- **Self-Contained Static UI Hosting & Linux Installer** (`crates/zuno-mcp/src/http.rs`, `scripts/install-linux.sh`): `zuno-mcp` now serves the built production frontend directly via `--web-dir` (or automatically from `~/.local/share/zuno/web`), paired with a zero-sudo Linux installer setting up `zuno`, `zuno-mcp`, hicolor icons, and `zuno.desktop`.
+
+### Changed
+- Replaced **Favorites** in the 4-tab mobile bottom dock (`MobileDock.tsx`) with **Playlists** (`Songs`, `Search`, `Recent`, `Playlists`).
+- Replaced the clipped hairline progress seam on the mobile mini-player dock with compact animated playing bars (`Loader2`) inline beside the active track title.
+- Added `--destructive` CSS variables (light & dark) in `src/index.css` and `disabled` tooltip suppression in `src/components/ui/tooltip.tsx` so hover hints never overlap open upward-flipped menus.
+
 ## [0.0.2] — 2026-11-23
 
 Major UI, audio DSP, and customization upgrade — zero extra npm runtime dependencies added.
