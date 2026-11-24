@@ -116,6 +116,65 @@ export function EaseThemeToggle({
 
   const iconCls = size === 'md' ? 'h-4 w-4' : 'h-3.5 w-3.5'
 
+  // SmoothUI Kinetic Theme Toggle (@smoothui/theme-toggle): tactile dual-layer spring morph
+  if (toggleStyle === 'smoothui' && !showLabel) {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+        aria-pressed={!isDark}
+        className={cn(
+          'group/smooth relative inline-flex items-center justify-center overflow-hidden rounded-full border border-border bg-card text-foreground shadow-xs transition-all duration-300 hover:border-primary/50 hover:bg-secondary active:scale-90 cursor-pointer',
+          size === 'md' ? 'h-9 w-9' : 'h-7 w-7',
+          className,
+        )}
+      >
+        <span className="relative flex h-4 w-4 items-center justify-center">
+          {/* Sun layer */}
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            className={cn(
+              'absolute h-3.5 w-3.5 transition-all duration-400 ease-[cubic-bezier(0.34,1.56,0.64,1)]',
+              isDark
+                ? 'translate-y-4 rotate-90 scale-50 opacity-0'
+                : 'translate-y-0 rotate-0 scale-100 opacity-100',
+            )}
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="4" fill="currentColor" fillOpacity="0.2" />
+            <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77" />
+          </svg>
+          {/* Moon layer */}
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            className={cn(
+              'absolute h-3.5 w-3.5 transition-all duration-400 ease-[cubic-bezier(0.34,1.56,0.64,1)]',
+              isDark
+                ? 'translate-y-0 rotate-0 scale-100 opacity-100'
+                : '-translate-y-4 -rotate-90 scale-50 opacity-0',
+            )}
+            aria-hidden="true"
+          >
+            <path
+              d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z"
+              fill="currentColor"
+              fillOpacity="0.22"
+            />
+          </svg>
+        </span>
+      </button>
+    )
+  }
+
   // Variant 5 (@skiper-ui/skiper4 Switch Pill): sleek compact sliding capsule
   if (toggleStyle === 'skiper-5' && !showLabel) {
     return (
@@ -203,6 +262,38 @@ export function ThemeToggleGlyph({
   maskId: string
   className?: string
 }) {
+  // SmoothUI Kinetic Toggle glyph (for preview & labeled mode)
+  if (style === 'smoothui') {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        className={cn(
+          className,
+          'transition-transform duration-400 ease-[cubic-bezier(0.34,1.56,0.64,1)]',
+          isDark ? 'rotate-0' : 'rotate-90',
+        )}
+        aria-hidden="true"
+      >
+        {isDark ? (
+          <path
+            d="M20.2 14.5A8.2 8.2 0 0 1 9.5 3.8a8.2 8.2 0 1 0 10.7 10.7Z"
+            fill="currentColor"
+            fillOpacity="0.24"
+          />
+        ) : (
+          <>
+            <circle cx="12" cy="12" r="4.2" fill="currentColor" fillOpacity="0.22" />
+            <path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2.5 12h2M19.5 12h2M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" />
+          </>
+        )}
+      </svg>
+    )
+  }
+
   // Skiper 4 Variant 1: Split Half-Disc (Yin-Yang rotation)
   if (style === 'skiper-1') {
     return (

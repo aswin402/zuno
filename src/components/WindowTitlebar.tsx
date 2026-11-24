@@ -20,6 +20,8 @@ interface WindowTitlebarProps {
   isPlaying: boolean
   /** Preview mode used inside Customize Studio (disables OS window calls & resize borders). */
   preview?: boolean
+  /** Notifies parent App shell when window maximizes/restores so rounded outer corners adapt. */
+  onMaximizedChange?: (maximized: boolean) => void
   className?: string
 }
 
@@ -47,6 +49,7 @@ export function WindowTitlebar({
   currentTrack,
   isPlaying,
   preview = false,
+  onMaximizedChange,
   className,
 }: WindowTitlebarProps) {
   const native = !preview && isTauriRuntime()
@@ -57,7 +60,10 @@ export function WindowTitlebar({
     let active = true
     const sync = () => {
       zunoWindow.isMaximized().then((m) => {
-        if (active) setMaximized(m)
+        if (active) {
+          setMaximized(m)
+          onMaximizedChange?.(m)
+        }
       })
     }
     sync()
@@ -66,7 +72,7 @@ export function WindowTitlebar({
       active = false
       window.removeEventListener('resize', sync)
     }
-  }, [native])
+  }, [native, onMaximizedChange])
 
   if (!preview && !native) {
     return null
@@ -93,7 +99,10 @@ export function WindowTitlebar({
       setMaximized((m) => !m)
       return
     }
-    zunoWindow.toggleMaximize().then(setMaximized)
+    zunoWindow.toggleMaximize().then((m) => {
+      setMaximized(m)
+      onMaximizedChange?.(m)
+    })
   }
 
   const handleClose = () => {

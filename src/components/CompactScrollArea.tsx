@@ -27,16 +27,22 @@ export function useScrollViewport(): RefObject<HTMLDivElement | null> | null {
  */
 export function CompactScrollArea({
   children,
+  overlay,
   className,
   viewportClassName,
+  viewportRefOut,
   autoHeight = false,
 }: {
   children: ReactNode
+  /** Optional scroll-linked overlay (e.g. Skiper 89/94/95 progress indicator) inside ScrollViewportContext. */
+  overlay?: ReactNode
   className?: string
   viewportClassName?: string
+  viewportRefOut?: RefObject<HTMLDivElement | null>
   autoHeight?: boolean
 }) {
-  const viewportRef = useRef<HTMLDivElement>(null)
+  const internalRef = useRef<HTMLDivElement>(null)
+  const viewportRef = viewportRefOut ?? internalRef
   const contentRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const thumbRef = useRef<HTMLDivElement>(null)
@@ -142,6 +148,8 @@ export function CompactScrollArea({
             {children}
           </div>
         </div>
+
+        {overlay}
 
         <div
           ref={trackRef}

@@ -154,6 +154,7 @@ fn show_or_create_main_window(app: &AppHandle) {
         .min_inner_size(360.0, 540.0)
         .resizable(true)
         .decorations(false)
+        .transparent(true)
         .build();
 }
 

@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.6-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.7-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -190,6 +190,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.4** — Standalone native Linux Tauri v2 desktop binary (`~9.8 MB`), pure-Rust 10-band biquad EQ + soft limiter, Destroy-WebView tray background playback, compile-time embedded Web UI in `zuno-mcp`, and audio/RAM/CPU smoothness optimizations.
 - [x] **v0.0.5** — Native Linux MPRIS2 D-Bus media banner & system media keys, custom themed frameless desktop titlebar, zero-copy multi-directory music library, pure-Rust equal-power crossfade transitions, full-screen Customize Studio, and Skiper UI component options.
 - [x] **v0.0.6** — Large-library performance overhaul: windowed list virtualization (`VirtualTrackList`), async Rust `gdk-pixbuf` thumbnail cache (`~4 KB` covers), zero-rerender `CompactScrollArea`, WebKitGTK compositor optimization, and borderless Now Playing header controls.
+- [x] **v0.0.7** — Rounded curved frameless desktop window corners, Skiper 89/94/95 zero-rerender scroll progress indicators, Great UI Blur Scroll Reveal & theme transitions, SmoothUI Kinetic theme toggle, and SmoothUI/Great UI floating desktop navigation themes.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

@@ -5,6 +5,19 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.7] — 2026-11-24
+
+Rounded curved frameless desktop window corners, zero-rerender Skiper 89/94/95 scroll progress indicators, Great UI Blur Scroll Reveal & View Transition animations, SmoothUI Kinetic theme toggle, and SmoothUI/Great UI floating desktop navigation themes.
+
+### Added
+- **Rounded Curved Frameless Desktop Window (`src-tauri/tauri.conf.json`, `src-tauri/src/main.rs`, `src/index.css`, `src/lib/appearance.ts`, `src/components/WindowTitlebar.tsx`, `src/App.tsx`)**: Enabled native GTK3/WebKitGTK window transparency and configurable **App Window Corner Curve** options (*Sharp `0px`*, *Soft `10px`*, *Curved `16px`* default, *Pill `22px`*) that automatically flatten when maximized.
+- **Scroll Progress Indicators & Scroll Row Reveal (`src/components/ScrollProgressOverlay.tsx`, `src/components/CompactScrollArea.tsx`, `src/components/VirtualTrackList.tsx`, `src/pages/HomePage.tsx`, `src/pages/PlaylistPage.tsx`)**:
+  - **Skiper 89 / 94 / 95 Scroll Progress**: Zero-rerender `requestAnimationFrame` DOM-ref scroll indicators — *Skiper 89* draggable circular progress ring with `%` readout, *Skiper 94* vertical right-edge rail gauge with clipped `%` pill badge, and *Skiper 95* (default) top `2px` precision hairline with tick scale badge.
+  - **Great UI Blur Scroll Reveal & Smooth Cascade**: Optional GPU-friendly row reveal effects on virtualized track lists (`Off`, `Smooth Cascade`, `Great UI Blur Scroll Reveal`).
+- **Floating Desktop Navigation Themes (`src/components/FloatingNavigation.tsx`, `src/App.tsx`)**: Switchable desktop navigation layouts alongside **Classic Sidebar** — *SmoothUI Floating Navbar* (detached top pill with active indicator dot and zero-rerender auto-hide on scroll), *Great UI Floating Dock Menu* (morphing pill dock with expandable Studio & Playlists submenu), and *Great UI Floating Capsule Menu* (minimal corner pill expanding into a staggered full-canvas menu overlay).
+- **Great UI Theme Transitions & SmoothUI Kinetic Toggle (`src/components/EaseThemeToggle.tsx`, `src/index.css`, `src/lib/appearance.ts`)**: Added *Great UI Circular Wipe*, *Great UI Blur Fade*, and *Great UI Directional Swipe* View Transition effects plus the *SmoothUI Kinetic* dual-layer spring sun/moon toggle variant.
+- **Customize Studio Controls (`src/pages/CustomizePage.tsx`)**: Added **App Window Corner Curve**, **Desktop Navigation Theme**, **Scroll Progress Indicator** (with live miniature previews), **Scroll Row Reveal Effect**, and recommended badges across Customize Studio.
+
 ## [0.0.6] — 2026-11-24
 
 Major large-library performance overhaul (windowed list virtualization, async SIMD Rust thumbnail cache, zero-rerender scrolling, and WebKitGTK compositor optimization) plus cleaner borderless Now Playing controls.

@@ -8,6 +8,8 @@ import {
   useState,
 } from 'react'
 import { useScrollViewport } from '@/components/CompactScrollArea'
+import { cn } from '@/lib/utils'
+import type { ScrollRevealStyleId } from '@/lib/appearance'
 
 interface VirtualTrackListProps<T> {
   items: T[]
@@ -19,6 +21,8 @@ interface VirtualTrackListProps<T> {
   scrollElementRef?: RefObject<HTMLElement | null>
   /** Gap between rows in px (matches Tailwind space-y-1 = 4px). */
   gapPx?: number
+  /** Optional Great UI Blur Scroll Reveal / Slide entrance animation on rows. */
+  revealStyle?: ScrollRevealStyleId
   renderItem: (item: T, index: number) => ReactNode
 }
 
@@ -36,6 +40,7 @@ export function VirtualTrackList<T>({
   overscan = 8,
   scrollElementRef,
   gapPx = 4,
+  revealStyle = 'none',
   renderItem,
 }: VirtualTrackListProps<T>) {
   const ctxViewport = useScrollViewport()
@@ -121,11 +126,20 @@ export function VirtualTrackList<T>({
     }
   }, [shouldVirtualize, viewportRef, recomputeRange])
 
+  const revealCls =
+    revealStyle === 'blur-reveal'
+      ? 'zuno-reveal-blur'
+      : revealStyle === 'slide-fade'
+        ? 'zuno-reveal-slide'
+        : ''
+
   if (!shouldVirtualize) {
     return (
       <div className="space-y-1">
         {items.map((item, idx) => (
-          <div key={getKey(item, idx)}>{renderItem(item, idx)}</div>
+          <div key={getKey(item, idx)} className={revealCls || undefined}>
+            {renderItem(item, idx)}
+          </div>
         ))}
       </div>
     )
@@ -147,7 +161,7 @@ export function VirtualTrackList<T>({
             <div
               key={getKey(item, absIdx)}
               ref={localIdx === 0 ? sampleRef : undefined}
-              className="zuno-vrow"
+              className={cn('zuno-vrow', revealCls)}
             >
               {renderItem(item, absIdx)}
             </div>

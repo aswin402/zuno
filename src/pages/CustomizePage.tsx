@@ -25,6 +25,7 @@ import {
 } from '@/components/EaseThemeToggle'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { Scrubber } from '@/components/Scrubber'
+import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
 import { ThemeSelector } from '@/components/ThemeSelector'
 import { Tooltip } from '@/components/ui/tooltip'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
@@ -37,6 +38,7 @@ import {
   ICON_PACK_OPTIONS,
   resolveEffectivePalette,
   THEME_PRESETS,
+  windowRadiusClass,
   type AppearanceSettings,
   type BgPatternId,
   type BorderStyleId,
@@ -44,10 +46,13 @@ import {
   type DensityId,
   type FontSizeId,
   type IconStrokeId,
+  type NavStyleId,
   type PlayButtonStyleId,
   type PlayerBarStyleId,
   type PlayingStyleId,
   type RadiusStyleId,
+  type ScrollProgressStyleId,
+  type ScrollRevealStyleId,
   type ScrubberKnobStyleId,
   type SurfaceStyleId,
   type ThemeId,
@@ -58,6 +63,7 @@ import {
   type TitlebarAlignId,
   type TitlebarStyleId,
   type TrackIconStyleId,
+  type WindowRadiusId,
 } from '@/lib/appearance'
 
 type StudioPageId =
@@ -91,19 +97,19 @@ const STUDIO_PAGES: StudioNavItem[] = [
   {
     id: 'window_chrome',
     group: 'Global Theme',
-    label: 'Top Titlebar & Window',
+    label: 'Window, Chrome & Nav',
     description:
-      'Customize the themed desktop top bar, close/minimize/restore controls, alignment, and live track pill.',
-    keywords: 'titlebar top bar window chrome close minimize maximize restore macos traffic lights pill geometric',
+      'Rounded desktop window corners, themed top bar controls, and floating navigation themes (SmoothUI & Great UI).',
+    keywords: 'titlebar top bar window chrome rounded corners close minimize maximize restore macos floating navbar dock menu smoothui great-ui',
     icon: AppWindow,
   },
   {
     id: 'surfaces',
     group: 'Global Theme',
-    label: 'Surfaces, Toggle & Motion',
+    label: 'Surfaces, Scroll & Motion',
     description:
-      'Surface materials, canvas patterns, Skiper 4 theme toggle buttons, Skiper 26 reveal transitions, and geometry.',
-    keywords: 'surface glass flat bordered pattern dot grid glow vignette transition blinds circle polygon skiper4 skiper26 toggle radius density text size',
+      'Surface materials, Skiper 89/94/95 scroll progress, Great UI blur reveal, SmoothUI/Skiper 4 toggles & transitions.',
+    keywords: 'surface glass flat bordered pattern dot grid glow vignette scroll progress skiper89 skiper94 skiper95 blur reveal transition blinds circle swipe blur-fade polygon skiper4 skiper26 smoothui toggle radius density text size',
     icon: Layers,
   },
   {
@@ -605,7 +611,12 @@ export function CustomizePage({
                 toggleStyle={settings.themeToggleStyle}
                 onToggleMode={handleToggleMode}
               >
-                <div className="w-full max-w-xl overflow-hidden rounded-xl border border-border bg-background shadow-lg">
+                <div
+                  className={cn(
+                    'w-full max-w-xl overflow-hidden border border-border bg-background shadow-lg transition-[border-radius] duration-200',
+                    windowRadiusClass(settings.windowRadius),
+                  )}
+                >
                   <WindowTitlebar
                     preview
                     styleVariant={settings.titlebarStyle}
@@ -632,6 +643,83 @@ export function CustomizePage({
                   </div>
                 </div>
               </LivePreviewStage>
+
+              <Group
+                title="App Window Corner Curve"
+                description="Outer corner roundness of the frameless desktop app window (automatically flattens when maximized)."
+              >
+                <Segmented<WindowRadiusId>
+                  value={settings.windowRadius}
+                  onChange={(windowRadius) => onChange({ windowRadius })}
+                  options={[
+                    { value: 'sharp', label: 'Sharp (0px)' },
+                    { value: 'soft', label: 'Soft (10px)' },
+                    { value: 'curved', label: 'Curved (16px · Recommended)' },
+                    { value: 'pill', label: 'Extra Curved (22px)' },
+                  ]}
+                />
+              </Group>
+
+              <Group
+                title="Desktop Navigation Theme (SmoothUI & Great UI)"
+                description="Choose between the classic full-height sidebar or floating pill navigation bars."
+              >
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {(
+                    [
+                      {
+                        id: 'sidebar',
+                        label: 'Classic Sidebar',
+                        desc: 'Full-height left rail with inline playlists & counts',
+                      },
+                      {
+                        id: 'floating-navbar',
+                        label: 'Floating Navbar (SmoothUI)',
+                        desc: 'Detached top pill with active dot & auto-hide on scroll',
+                        recommended: true,
+                      },
+                      {
+                        id: 'floating-dock',
+                        label: 'Floating Dock Menu (Great UI)',
+                        desc: 'Morphing active pill dock with expandable Studio submenu',
+                      },
+                      {
+                        id: 'floating-menu',
+                        label: 'Floating Capsule Menu (Great UI)',
+                        desc: 'Minimal corner pill expanding into a full-canvas menu',
+                      },
+                    ] as { id: NavStyleId; label: string; desc: string; recommended?: boolean }[]
+                  ).map((opt) => {
+                    const active = settings.navStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ navStyle: opt.id })}
+                        className={cn(
+                          'flex flex-col gap-1 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                            <span>{opt.label}</span>
+                            {opt.recommended && (
+                              <span className="rounded-full bg-primary/15 px-1.5 py-0.5 font-mono text-[9.5px] font-medium text-primary">
+                                Rec
+                              </span>
+                            )}
+                          </span>
+                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{opt.desc}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
 
               <Group
                 title="Window Controls Style"
@@ -809,13 +897,156 @@ export function CustomizePage({
               </Group>
 
               <Group
-                title="Theme Toggle Button Style (Skiper 4)"
+                title="Scroll Progress Indicator (Skiper 89 / 94 / 95)"
+                description="Choose a zero-lag scroll progress effect while browsing your song library."
+              >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {(
+                    [
+                      {
+                        id: 'none',
+                        label: 'None (Minimal)',
+                        desc: 'Quiet pill scrollbar only',
+                      },
+                      {
+                        id: 'skiper89',
+                        label: 'Skiper 89 · Ring Pill',
+                        desc: 'Draggable circular progress ring + % counter',
+                      },
+                      {
+                        id: 'skiper94',
+                        label: 'Skiper 94 · Vertical Rail',
+                        desc: 'Edge gauge with clipped % readout',
+                      },
+                      {
+                        id: 'skiper95',
+                        label: 'Skiper 95 · Top Hairline',
+                        desc: 'Precision top progress line + tick badge',
+                        recommended: true,
+                      },
+                    ] as {
+                      id: ScrollProgressStyleId
+                      label: string
+                      desc: string
+                      recommended?: boolean
+                    }[]
+                  ).map((opt) => {
+                    const active = settings.scrollProgressStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ scrollProgressStyle: opt.id })}
+                        className={cn(
+                          'flex flex-col justify-between gap-3 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        <div className="flex h-20 w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-background/70 px-3">
+                          {opt.id === 'none' ? (
+                            <span className="font-mono text-[10.5px] text-muted-foreground/70">
+                              Clean scroll
+                            </span>
+                          ) : (
+                            <ScrollProgressOverlay styleVariant={opt.id} previewRatio={0.62} />
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="truncate text-xs font-semibold text-foreground">
+                              {opt.label}
+                            </span>
+                            {active ? (
+                              <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                            ) : opt.recommended ? (
+                              <span className="rounded-full bg-primary/15 px-1.5 py-0.5 font-mono text-[9px] text-primary">
+                                Rec
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            {opt.desc}
+                          </span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <Group
+                title="Scroll Row Reveal Effect (Great UI)"
+                description="Subtle GPU-accelerated entrance effect as songs scroll into view."
+              >
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                  {(
+                    [
+                      {
+                        id: 'none',
+                        label: 'Instant (Off)',
+                        desc: 'Zero animation — fastest possible scroll',
+                      },
+                      {
+                        id: 'slide-fade',
+                        label: 'Smooth Cascade',
+                        desc: 'Crisp micro-slide + fade reveal (zero blur cost)',
+                        recommended: true,
+                      },
+                      {
+                        id: 'blur-reveal',
+                        label: 'Blur Scroll Reveal (Great UI)',
+                        desc: 'Soft unblur + float entrance on newly revealed rows',
+                      },
+                    ] as {
+                      id: ScrollRevealStyleId
+                      label: string
+                      desc: string
+                      recommended?: boolean
+                    }[]
+                  ).map((opt) => {
+                    const active = settings.scrollRevealStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ scrollRevealStyle: opt.id })}
+                        className={cn(
+                          'flex flex-col gap-1 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="text-xs font-semibold text-foreground">
+                            {opt.label}
+                          </span>
+                          {active ? (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          ) : opt.recommended ? (
+                            <span className="rounded-full bg-primary/15 px-1.5 py-0.5 font-mono text-[9px] text-primary">
+                              Rec
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{opt.desc}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <Group
+                title="Theme Toggle Button Style (SmoothUI & Skiper 4)"
                 description="Choose the animated Dark / Light toggle button icon shown in the sidebar, navbar, and studio."
               >
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
                   {(
                     [
                       { id: 'eclipse', label: 'Eclipse Mask', desc: 'Smooth crescent cutout & sun rays' },
+                      { id: 'smoothui', label: 'SmoothUI Kinetic', desc: 'Tactile dual-layer spring morph' },
                       { id: 'skiper-1', label: 'Split Disc', desc: 'Skiper 4 · Rotating Yin-Yang half disc' },
                       { id: 'skiper-2', label: 'Horizon Sun', desc: 'Skiper 4 · Rising sun over horizon' },
                       { id: 'skiper-3', label: 'Expand Dot', desc: 'Skiper 4 · Dotted sun morphing orb' },
@@ -862,14 +1093,16 @@ export function CustomizePage({
               </Group>
 
               <Group
-                title="Dark / Light Reveal Transition (Skiper 26)"
+                title="Dark / Light Reveal Transition (Great UI & Skiper 26)"
                 description="View Transition reveal animation & starting origin when switching between Dark and Light mode."
               >
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                   {(
                     [
-                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Soft blurred radial ripple' },
-                      { id: 'circle', label: 'Crisp Circle', desc: 'Sharp geometric circle expand' },
+                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Skiper 26 · Soft blurred radial ripple' },
+                      { id: 'circle', label: 'Circular Wipe', desc: 'Great UI · Sharp circular clip-path' },
+                      { id: 'blur-fade', label: 'Blur Fade', desc: 'Great UI · Soft blur cross-fade' },
+                      { id: 'swipe', label: 'Directional Swipe', desc: 'Great UI · Smooth horizontal sweep' },
                       { id: 'polygon', label: 'Diagonal Polygon', desc: 'Skiper 26 · Angled polygon wipe' },
                       { id: 'bottom-up', label: 'Bottom-Up Curtain', desc: 'Skiper 26 · Rising vertical reveal' },
                       { id: 'rectangle', label: 'Top-Down Sweep', desc: 'Clean downward curtain' },

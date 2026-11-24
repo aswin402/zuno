@@ -13,7 +13,9 @@ import { CustomizePage } from '@/pages/CustomizePage'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { AutoNextBanner } from '@/components/AutoNextBanner'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
+import { FloatingNavigation } from '@/components/FloatingNavigation'
 import { MusicFoldersModal } from '@/components/MusicFoldersModal'
+import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { Dialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -24,6 +26,7 @@ import {
   DEFAULT_APPEARANCE,
   loadAppearance,
   saveAppearance,
+  windowRadiusClass,
   type AppearanceSettings,
 } from '@/lib/appearance'
 import { hydrateSavedCustomFonts } from '@/lib/fonts'
@@ -116,7 +119,9 @@ export default function App() {
   const nativeAudio = isTauriRuntime()
   const [page, setPage] = useState<AppPage>('home')
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false)
+  const [windowMaximized, setWindowMaximized] = useState(false)
   const [listCtx, setListCtx] = useState<ListContext>({ kind: 'all' })
+  const mainScrollRef = useRef<HTMLDivElement | null>(null)
   const [appearance, setAppearance] = useState<AppearanceSettings>(loadAppearance)
   const [eqSettings, setEqSettings] = useState<EqSettings>(loadEqSettings)
   const lastNonEqPageRef = useRef<AppPage>('home')
@@ -175,6 +180,11 @@ export default function App() {
     [tracks],
   )
   const notify = useCallback((msg: string) => setToast(msg), [])
+
+  // Enable transparent root edges in frameless Tauri desktop mode so outer window corners curve cleanly
+  useEffect(() => {
+    document.documentElement.classList.toggle('zuno-tauri-window', nativeAudio)
+  }, [nativeAudio])
 
   // Apply appearance CSS custom properties live whenever settings change
   useEffect(() => {
@@ -1339,8 +1349,15 @@ export default function App() {
     },
   }
 
+  const roundedFrame = nativeAudio && !windowMaximized
+
   return (
-    <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className={cn(
+        'flex h-[100dvh] w-full flex-col overflow-hidden bg-background text-foreground transition-[border-radius] duration-150',
+        roundedFrame && cn(windowRadiusClass(appearance.windowRadius), 'border border-border/85'),
+      )}
+    >
       {/* Custom Themed Native Desktop Window Titlebar (Tauri frameless chrome) */}
       <WindowTitlebar
         styleVariant={appearance.titlebarStyle}
@@ -1349,6 +1366,7 @@ export default function App() {
         compact={appearance.titlebarCompact}
         currentTrack={currentTrack}
         isPlaying={isPlaying}
+        onMaximizedChange={setWindowMaximized}
       />
 
       <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
@@ -1388,60 +1406,120 @@ export default function App() {
         />
       )}
 
-      {/* Full-height Left Sidebar (spans 100% top-to-bottom, zero bottom gap) */}
-      <DesktopSidebar
-        page={page}
-        searchOpen={searchOpen}
-        activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
-        playlists={playlists}
-        songCount={tracks.length}
-        recentCount={lastPlayedTracks.length}
-        sourceCount={Math.max(1, sources.length)}
-        eqEnabled={eqSettings.enabled}
-        mode={appearance.mode}
-        themeTransition={appearance.themeTransition}
-        themeTransitionStart={appearance.themeTransitionStart}
-        themeToggleStyle={appearance.themeToggleStyle}
-        iconPack={appearance.iconPack}
-        onToggleMode={toggleThemeMode}
-        onGoHome={() => {
-          setSearchOpen(false)
-          setPage('home')
-        }}
-        onGoRecent={() => {
-          setSearchOpen(false)
-          setPage('recent')
-        }}
-        onOpenSearch={() => setSearchOpen(true)}
-        onOpenFavorites={() => {
-          setSearchOpen(false)
-          openFavoritesPage()
-        }}
-        onOpenPlaylist={(slug) => {
-          setSearchOpen(false)
-          setListCtx({ kind: 'playlist', slug })
-          setPlaylistSort({ field: 'default', dir: 'asc' })
-          setPage('playlist')
-        }}
-        onGoEqualizer={() => {
-          setSearchOpen(false)
-          setPage('equalizer')
-        }}
-        onGoCustomize={() => {
-          setSearchOpen(false)
-          setPage('customize')
-        }}
-        onOpenFolders={() => setFoldersOpen(true)}
-        onCreatePlaylist={() => {
-          setCreateName('')
-          setCreateInitialTrackId(undefined)
-          setCreateOpen(true)
-        }}
-        onRescan={handleRescan}
-      />
+      {/* Full-height Left Sidebar (shown when Desktop Navigation Theme is 'sidebar') */}
+      {appearance.navStyle === 'sidebar' && (
+        <DesktopSidebar
+          page={page}
+          searchOpen={searchOpen}
+          activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
+          playlists={playlists}
+          songCount={tracks.length}
+          recentCount={lastPlayedTracks.length}
+          sourceCount={Math.max(1, sources.length)}
+          eqEnabled={eqSettings.enabled}
+          mode={appearance.mode}
+          themeTransition={appearance.themeTransition}
+          themeTransitionStart={appearance.themeTransitionStart}
+          themeToggleStyle={appearance.themeToggleStyle}
+          iconPack={appearance.iconPack}
+          onToggleMode={toggleThemeMode}
+          onGoHome={() => {
+            setSearchOpen(false)
+            setPage('home')
+          }}
+          onGoRecent={() => {
+            setSearchOpen(false)
+            setPage('recent')
+          }}
+          onOpenSearch={() => setSearchOpen(true)}
+          onOpenFavorites={() => {
+            setSearchOpen(false)
+            openFavoritesPage()
+          }}
+          onOpenPlaylist={(slug) => {
+            setSearchOpen(false)
+            setListCtx({ kind: 'playlist', slug })
+            setPlaylistSort({ field: 'default', dir: 'asc' })
+            setPage('playlist')
+          }}
+          onGoEqualizer={() => {
+            setSearchOpen(false)
+            setPage('equalizer')
+          }}
+          onGoCustomize={() => {
+            setSearchOpen(false)
+            setPage('customize')
+          }}
+          onOpenFolders={() => setFoldersOpen(true)}
+          onCreatePlaylist={() => {
+            setCreateName('')
+            setCreateInitialTrackId(undefined)
+            setCreateOpen(true)
+          }}
+          onRescan={handleRescan}
+        />
+      )}
 
-      {/* Right Content Column: Mobile Top Navbar + Scrollable Pages + Floating Sticky Desktop Player Bar / Mobile Dock */}
+      {/* Right Content Column: Mobile Top Navbar + Floating Desktop Nav + Scrollable Pages + Player Bar / Mobile Dock */}
       <div className="zuno-canvas relative flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {/* Alternative Desktop Floating Navigation Themes (SmoothUI Floating Navbar / Great UI Floating Dock & Menu) */}
+        <FloatingNavigation
+          navStyle={appearance.navStyle}
+          page={page}
+          searchOpen={searchOpen}
+          activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
+          playlists={playlists}
+          songCount={tracks.length}
+          recentCount={lastPlayedTracks.length}
+          sourceCount={Math.max(1, sources.length)}
+          eqEnabled={eqSettings.enabled}
+          mode={appearance.mode}
+          themeTransition={appearance.themeTransition}
+          themeTransitionStart={appearance.themeTransitionStart}
+          themeToggleStyle={appearance.themeToggleStyle}
+          iconPack={appearance.iconPack}
+          scrollElementRef={mainScrollRef}
+          onToggleMode={toggleThemeMode}
+          onGoHome={() => {
+            setSearchOpen(false)
+            setPage('home')
+          }}
+          onGoRecent={() => {
+            setSearchOpen(false)
+            setPage('recent')
+          }}
+          onOpenSearch={() => setSearchOpen(true)}
+          onOpenFavorites={() => {
+            setSearchOpen(false)
+            openFavoritesPage()
+          }}
+          onOpenPlaylistsHub={() => {
+            setSearchOpen(false)
+            setPage('playlists')
+          }}
+          onOpenPlaylist={(slug) => {
+            setSearchOpen(false)
+            setListCtx({ kind: 'playlist', slug })
+            setPlaylistSort({ field: 'default', dir: 'asc' })
+            setPage('playlist')
+          }}
+          onGoEqualizer={() => {
+            setSearchOpen(false)
+            setPage('equalizer')
+          }}
+          onGoCustomize={() => {
+            setSearchOpen(false)
+            setPage('customize')
+          }}
+          onOpenFolders={handleOpenFolders}
+          onCreatePlaylist={() => {
+            setCreateName('')
+            setCreateInitialTrackId(undefined)
+            setCreateOpen(true)
+          }}
+          onRescan={handleRescan}
+        />
+
         <MobileNavbar
           page={page}
           activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
@@ -1485,8 +1563,13 @@ export default function App() {
 
         <CompactScrollArea
           className="min-h-0 flex-1"
+          viewportRefOut={mainScrollRef}
+          overlay={
+            <ScrollProgressOverlay styleVariant={appearance.scrollProgressStyle} />
+          }
           viewportClassName={cn(
             appearance.playerBarStyle === 'floating' && 'lg:pb-24',
+            appearance.navStyle !== 'sidebar' && 'lg:pt-14',
           )}
         >
         <main>

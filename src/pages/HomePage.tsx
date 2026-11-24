@@ -150,6 +150,7 @@ export const HomePage = memo(function HomePage({
             items={sortedTracks}
             getKey={(t) => t.id}
             estimateRowHeight={rowHeight}
+            revealStyle={appearance.scrollRevealStyle}
             renderItem={(track, idx) => {
               const active = track.id === currentTrackId
               return (

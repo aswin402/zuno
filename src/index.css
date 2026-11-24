@@ -90,6 +90,13 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* Native frameless Tauri window: transparent viewport edges so outer window corners stay genuinely curved */
+  html.zuno-tauri-window,
+  html.zuno-tauri-window body,
+  html.zuno-tauri-window #root {
+    background-color: transparent !important;
+  }
+
   * {
     border-color: var(--border);
     scrollbar-width: thin;
@@ -504,7 +511,7 @@ button:hover .zuno-pack-pulso,
   contain: layout style;
 }
 
-/* ── Skiper26 + Zenko View Transitions (circle-blur, circle, polygon, bottom-up, rectangle, blinds) ── */
+/* ── Skiper26 + Great UI + Zenko View Transitions ── */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -515,6 +522,15 @@ html[data-zuno-vt="circle"]::view-transition-new(root) {
 }
 html[data-zuno-vt="circle-blur"]::view-transition-new(root) {
   animation: zuno-vt-circle-blur 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-zuno-vt="blur-fade"]::view-transition-old(root) {
+  animation: zuno-vt-blur-fade-out 420ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+html[data-zuno-vt="blur-fade"]::view-transition-new(root) {
+  animation: zuno-vt-blur-fade-in 480ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+html[data-zuno-vt="swipe"]::view-transition-new(root) {
+  animation: zuno-vt-swipe 480ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 html[data-zuno-vt="polygon"]::view-transition-new(root) {
   animation: zuno-vt-polygon 580ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -548,6 +564,18 @@ html[data-zuno-vt="blinds"]::view-transition-new(root) {
   from { clip-path: circle(0% at var(--zuno-vt-origin, 50% 0%)); filter: blur(10px); }
   to   { clip-path: circle(150% at var(--zuno-vt-origin, 50% 0%)); filter: blur(0px); }
 }
+@keyframes zuno-vt-blur-fade-out {
+  from { opacity: 1; filter: blur(0px); transform: scale(1); }
+  to   { opacity: 0; filter: blur(8px); transform: scale(0.992); }
+}
+@keyframes zuno-vt-blur-fade-in {
+  from { opacity: 0; filter: blur(10px); transform: scale(1.008); }
+  to   { opacity: 1; filter: blur(0px); transform: scale(1); }
+}
+@keyframes zuno-vt-swipe {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
 @keyframes zuno-vt-polygon {
   from { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); }
   50%  { clip-path: polygon(0 0, 100% 0, 62% 100%, 0 100%); }
@@ -564,6 +592,36 @@ html[data-zuno-vt="blinds"]::view-transition-new(root) {
 @keyframes zuno-vt-blinds {
   from { --zuno-vt-slat: -20px; }
   to   { --zuno-vt-slat: 72px; }
+}
+
+/* ── Great UI Blur Scroll Reveal & Cascade Slide Reveal (GPU-friendly) ── */
+@keyframes zuno-blur-reveal {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0px);
+    transform: translate3d(0, 0, 0);
+  }
+}
+@keyframes zuno-slide-reveal {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+.zuno-reveal-blur {
+  animation: zuno-blur-reveal 210ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.zuno-reveal-slide {
+  animation: zuno-slide-reveal 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* ── Mobile Dock Active Tab Entrance ── */

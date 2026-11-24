@@ -27,6 +27,8 @@ export type BgPatternId = 'clean' | 'dot_grid' | 'fine_grid' | 'top_glow' | 'vig
 export type ThemeTransitionId =
   | 'circle-blur'
   | 'circle'
+  | 'blur-fade'
+  | 'swipe'
   | 'polygon'
   | 'bottom-up'
   | 'rectangle'
@@ -40,11 +42,16 @@ export type ThemeTransitionStartId =
   | 'bottom-right'
 export type ThemeToggleStyleId =
   | 'eclipse'
+  | 'smoothui'
   | 'skiper-1'
   | 'skiper-2'
   | 'skiper-3'
   | 'skiper-4'
   | 'skiper-5'
+export type ScrollProgressStyleId = 'none' | 'skiper89' | 'skiper94' | 'skiper95'
+export type ScrollRevealStyleId = 'none' | 'blur-reveal' | 'slide-fade'
+export type NavStyleId = 'sidebar' | 'floating-navbar' | 'floating-dock' | 'floating-menu'
+export type WindowRadiusId = 'sharp' | 'soft' | 'curved' | 'pill'
 export type IconPackId =
   | 'lucide'
   | 'skiper99'
@@ -99,6 +106,10 @@ export interface AppearanceSettings {
   themeTransition: ThemeTransitionId
   themeTransitionStart: ThemeTransitionStartId
   themeToggleStyle: ThemeToggleStyleId
+  scrollProgressStyle: ScrollProgressStyleId
+  scrollRevealStyle: ScrollRevealStyleId
+  navStyle: NavStyleId
+  windowRadius: WindowRadiusId
   iconPack: IconPackId
   iconStroke: IconStrokeId
   trackIconStyle: TrackIconStyleId
@@ -136,6 +147,10 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   themeTransition: 'circle-blur',
   themeTransitionStart: 'trigger',
   themeToggleStyle: 'eclipse',
+  scrollProgressStyle: 'skiper95',
+  scrollRevealStyle: 'none',
+  navStyle: 'sidebar',
+  windowRadius: 'curved',
   iconPack: 'lucide',
   iconStroke: 'regular',
   trackIconStyle: 'ring',
@@ -682,6 +697,20 @@ export function applyAppearanceToDom(s: AppearanceSettings): void {
 
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.setAttribute('content', palette.background)
+}
+
+export function windowRadiusClass(radius: WindowRadiusId): string {
+  switch (radius) {
+    case 'sharp':
+      return 'rounded-none'
+    case 'soft':
+      return 'rounded-[10px]'
+    case 'pill':
+      return 'rounded-[22px]'
+    case 'curved':
+    default:
+      return 'rounded-[16px]'
+  }
 }
 
 export function rowRadiusClass(radius: RadiusStyleId): string {
