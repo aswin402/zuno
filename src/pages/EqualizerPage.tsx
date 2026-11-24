@@ -52,11 +52,11 @@ export function EqualizerPage({
 }: EqualizerPageProps) {
   const gradId = useId()
   const svgRef = useRef<SVGSVGElement | null>(null)
+  const spectrumPathRef = useRef<SVGPathElement | null>(null)
   const [category, setCategory] = useState<EqCategory>('all')
   const [dragBand, setDragBand] = useState<number | null>(null)
   const [savingOpen, setSavingOpen] = useState(false)
   const [presetName, setPresetName] = useState('')
-  const [spectrumPath, setSpectrumPath] = useState('')
 
   const activePreset = useMemo(() => findActivePreset(settings), [settings])
   const effectiveBands = useMemo(
@@ -74,37 +74,47 @@ export function EqualizerPage({
     if (isPlaying) onEnsureAudioAttached()
   }, [isPlaying, onEnsureAudioAttached])
 
-  // Subtle live monochrome spectrum ribbon behind the curve (only runs while playing)
+  // Zero-rerender live monochrome spectrum ribbon (mutates single SVG path via ref at ~30fps,
+  // pauses automatically when tab is hidden to save CPU)
   useEffect(() => {
+    const pathEl = spectrumPathRef.current
     if (!isPlaying || !audioEl) {
-      setSpectrumPath('')
+      if (pathEl) pathEl.setAttribute('d', '')
       return
     }
     let raf = 0
+    let lastDraw = 0
     const bins = new Uint8Array(new ArrayBuffer(64))
 
-    const tick = () => {
-      if (readSpectrumData(audioEl, bins)) {
-        const usableBins = 32
-        const usableW = CURVE_W - PAD_X * 2
-        const baseY = CURVE_H - PAD_Y
-        const maxH = (CURVE_H - PAD_Y * 2) * 0.62
-        const pts: string[] = [`M ${PAD_X} ${baseY}`]
+    const tick = (now: number) => {
+      if (!document.hidden && now - lastDraw >= 32) {
+        lastDraw = now
+        const el = spectrumPathRef.current
+        if (el && readSpectrumData(audioEl, bins)) {
+          const usableBins = 32
+          const usableW = CURVE_W - PAD_X * 2
+          const baseY = CURVE_H - PAD_Y
+          const maxH = (CURVE_H - PAD_Y * 2) * 0.62
+          const pts: string[] = [`M ${PAD_X} ${baseY}`]
 
-        for (let i = 0; i < usableBins; i++) {
-          const x = PAD_X + (i / (usableBins - 1)) * usableW
-          const norm = (bins[i] ?? 0) / 255
-          const y = baseY - norm * maxH
-          pts.push(`L ${x.toFixed(1)} ${y.toFixed(1)}`)
+          for (let i = 0; i < usableBins; i++) {
+            const x = PAD_X + (i / (usableBins - 1)) * usableW
+            const norm = (bins[i] ?? 0) / 255
+            const y = baseY - norm * maxH
+            pts.push(`L ${x.toFixed(1)} ${y.toFixed(1)}`)
+          }
+          pts.push(`L ${CURVE_W - PAD_X} ${baseY} Z`)
+          el.setAttribute('d', pts.join(' '))
         }
-        pts.push(`L ${CURVE_W - PAD_X} ${baseY} Z`)
-        setSpectrumPath(pts.join(' '))
       }
       raf = requestAnimationFrame(tick)
     }
 
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      if (spectrumPathRef.current) spectrumPathRef.current.setAttribute('d', '')
+    }
   }, [isPlaying, audioEl])
 
   const allPresets = useMemo(
@@ -379,13 +389,12 @@ export function EqualizerPage({
             ))}
 
             {/* Ultra-subtle live monochrome spectrum ribbon when playing */}
-            {spectrumPath && (
-              <path
-                d={spectrumPath}
-                fill="var(--foreground)"
-                opacity="0.06"
-              />
-            )}
+            <path
+              ref={spectrumPathRef}
+              d=""
+              fill="var(--foreground)"
+              opacity="0.06"
+            />
 
             {/* Area fill under the spline */}
             <path

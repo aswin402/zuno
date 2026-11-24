@@ -1,0 +1,24 @@
+[package]
+name = "zuno"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zuno — ultra-lightweight native Linux desktop music player (Tauri v2 + Rust audio)"
+
+[[bin]]
+name = "zuno"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+zuno-audio = { path = "../crates/zuno-audio" }
+zuno-core = { path = "../crates/zuno-core" }

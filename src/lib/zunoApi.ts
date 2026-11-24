@@ -80,6 +80,21 @@ type IpcRequest =
   | { op: 'previous' }
   | { op: 'seek'; position_secs: number }
   | { op: 'set_volume'; volume: number }
+  | {
+      op: 'set_eq'
+      enabled: boolean
+      preamp: number
+      limiter: boolean
+      bands: number[]
+    }
+  | {
+      op: 'set_queue'
+      track_ids: string[]
+      start_id?: string | null
+      label?: string | null
+      shuffle?: boolean | null
+    }
+  | { op: 'jump_queue'; index: number }
   | { op: 'set_mode'; shuffle?: boolean | null; repeat?: RepeatMode | null }
   | { op: 'queue_get' }
   | { op: 'queue_add'; track_ids: string[]; play_next: boolean }
@@ -89,7 +104,31 @@ type IpcResponse<T = unknown> =
   | { status: 'ok'; data: { type: string; value: T } }
   | { status: 'err'; message: string }
 
+interface TauriInternals {
+  invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
+}
+
+function getTauriInternals(): TauriInternals | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as { __TAURI_INTERNALS__?: TauriInternals }
+  return w.__TAURI_INTERNALS__ ?? null
+}
+
+/** True when running inside the native Tauri v2 desktop window (direct Rust IPC + Rodio audio). */
+export function isTauriRuntime(): boolean {
+  return getTauriInternals() !== null
+}
+
 async function callApi<T>(req: IpcRequest): Promise<T> {
+  const tauri = getTauriInternals()
+  if (tauri) {
+    const json = await tauri.invoke<IpcResponse<T>>('zuno_ipc', { req })
+    if (json.status === 'err') {
+      throw new Error(json.message)
+    }
+    return json.data.value
+  }
+
   const res = await fetch('/api', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -107,6 +146,10 @@ async function callApi<T>(req: IpcRequest): Promise<T> {
 
 export const zunoApi = {
   async getInfo(): Promise<ServerInfo> {
+    const tauri = getTauriInternals()
+    if (tauri) {
+      return await tauri.invoke<ServerInfo>('zuno_info')
+    }
     const res = await fetch('/api/info')
     if (!res.ok) throw new Error('Unable to reach Zuno backend')
     return (await res.json()) as ServerInfo
@@ -188,6 +231,26 @@ export const zunoApi = {
   seek: (position_secs: number) =>
     callApi<PlaybackStatus>({ op: 'seek', position_secs }),
   setVolume: (volume: number) => callApi<PlaybackStatus>({ op: 'set_volume', volume }),
+  setEq: (opts: {
+    enabled: boolean
+    preamp: number
+    limiter: boolean
+    bands: number[]
+  }) => callApi<string>({ op: 'set_eq', ...opts }),
+  setQueue: (opts: {
+    track_ids: string[]
+    start_id?: string | null
+    label?: string | null
+    shuffle?: boolean | null
+  }) =>
+    callApi<PlaybackStatus>({
+      op: 'set_queue',
+      track_ids: opts.track_ids,
+      start_id: opts.start_id ?? null,
+      label: opts.label ?? null,
+      shuffle: opts.shuffle ?? null,
+    }),
+  jumpQueue: (index: number) => callApi<PlaybackStatus>({ op: 'jump_queue', index }),
   setMode: (opts: { shuffle?: boolean | null; repeat?: RepeatMode | null }) =>
     callApi<PlaybackStatus>({
       op: 'set_mode',
@@ -208,7 +271,10 @@ export const zunoApi = {
   queueClear: () => callApi<PlaybackStatus>({ op: 'queue_clear' }),
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,
-  coverUrl: (trackId: string) => `/api/cover/${encodeURIComponent(trackId)}`,
+  coverUrl: (trackId: string) =>
+    isTauriRuntime()
+      ? `zuno://localhost/cover/${encodeURIComponent(trackId)}`
+      : `/api/cover/${encodeURIComponent(trackId)}`,
 
   async mcpRpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     const res = await fetch('/mcp', {

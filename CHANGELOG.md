@@ -5,6 +5,20 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] — 2026-11-24
+
+Standalone native Linux desktop app (Tauri v2), pure-Rust 10-band Equalizer DSP, single-binary embedded UI, and major RAM/CPU/audio smoothness optimizations.
+
+### Added
+- **Standalone Native Tauri v2 Desktop App (`src-tauri/`)**: Single ~9.8 MB stripped native Linux binary (`zuno`) with embedded frontend assets (`custom-protocol`), direct in-process Tauri IPC (`zuno_ipc` / `zuno_info`), zero-TCP custom `zuno://localhost/cover/<id>` artwork scheme, live Unix Domain Socket IPC (`~/zuno/.zuno/zuno.sock`) shared with `zuno-mcp`, and a minimalist B&W **System Tray** with **Destroy-WebView-on-Close** background playback mode.
+- **Pure-Rust 10-Band ISO Equalizer + Soft Limiter (`crates/zuno-audio/src/eq.rs`)**: Zero-allocation Direct Form II Transposed biquad DSP (`32 Hz–16 kHz`) with atomic lock-free updates, click-free dry/wet crossfade, automatic headroom compensation, and transparent soft limiting inside `RodioEngine`, plus `SetEq`, `SetQueue`, and `JumpQueue` IPC commands.
+- **Compile-Time Embedded Web UI in `zuno-mcp` (`crates/zuno-mcp/build.rs`)**: Compiles `dist/` directly into `zuno-mcp` (`~4.7 MB` self-contained single binary, `~4.7–5.6 MB` RSS) so neither binary requires external web folders or Node.js at runtime.
+
+### Fixed & Optimized
+- **Eliminated Audio Stuttering & Per-Chunk Disk Rescans**: Cached in-memory `ZunoService` track lookups for `/api/audio/:id` & `/api/cover/:id` (cutting 128 KiB range latency to `~1.9 ms/chunk`), enabled `TCP_NODELAY`, enlarged HTTP & Rodio read buffers to `128 KiB`, added immutable/long-lived HTTP `Cache-Control` headers, fixed RFC 7233 suffix ranges, and enabled `<audio preload="auto">`.
+- **Eliminated Browser Web Audio Crackling & Clipping Noise**: Switched Web Audio `AudioContext` to `{ latencyHint: 'playback' }`, replaced live `disconnect()`/`connect()` node swaps with click-free parallel dry/wet crossfading, added auto-headroom trim, and suspended `AudioContext` while paused (`0%` idle Web Audio CPU).
+- **Zero-Wakeup Idle Audio Thread & Lean UI Rendering**: Switched `zuno-audio` thread to blocking `rx.recv()` while idle (`0` wakeups/sec), replaced 60 FPS React `setState` in `EqualizerPage` spectrum with a 30 FPS direct SVG ref mutation, quantized playback ticks, memoized `HomePage` & `TrackRow`, removed external Google Fonts requests from `index.html`, and paused all CSS animations when the window is hidden (`.zuno-hidden`).
+
 ## [0.0.3] — 2026-11-24
 
 Minimalist monochrome branding, unified full-screen Now Playing for desktop & mobile, EaseUI dropdown menus, mobile navigation overhaul, and one-command Linux desktop installation.

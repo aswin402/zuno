@@ -337,11 +337,15 @@ export function buildEqSplinePath(
 interface EqAudioGraph {
   ctx: AudioContext
   source: MediaElementAudioSourceNode
+  dryGain: GainNode
   preamp: GainNode
   filters: BiquadFilterNode[]
   limiter: DynamicsCompressorNode
+  limiterGain: GainNode
+  directWetGain: GainNode
+  wetGain: GainNode
+  outputSum: GainNode
   analyser: AnalyserNode
-  limiterConnected: boolean
 }
 
 const audioGraphs = new WeakMap<HTMLAudioElement, EqAudioGraph>()
@@ -357,8 +361,14 @@ function getOrCreateGraph(audio: HTMLAudioElement): EqAudioGraph | null {
   if (!AudioCtx) return null
 
   try {
-    const ctx = new AudioCtx()
+    // Use 'playback' latencyHint so Linux PipeWire/PulseAudio allocates a smooth,
+    // glitch-free playback buffer instead of tiny low-latency buffers that crackle/underrun.
+    const ctx = new AudioCtx({ latencyHint: 'playback' })
     const source = ctx.createMediaElementSource(audio)
+
+    const dryGain = ctx.createGain()
+    dryGain.gain.value = 1
+
     const preamp = ctx.createGain()
     preamp.gain.value = 1
 
@@ -373,18 +383,37 @@ function getOrCreateGraph(audio: HTMLAudioElement): EqAudioGraph | null {
       return filter
     })
 
+    // Gentle transparent brickwall limiter (prevents digital clipping distortion without pumping)
     const limiter = ctx.createDynamicsCompressor()
-    limiter.threshold.value = -1.5
-    limiter.knee.value = 6
+    limiter.threshold.value = -1.0
+    limiter.knee.value = 4
     limiter.ratio.value = 12
-    limiter.attack.value = 0.003
-    limiter.release.value = 0.15
+    limiter.attack.value = 0.002
+    limiter.release.value = 0.14
+
+    const limiterGain = ctx.createGain()
+    limiterGain.gain.value = 1
+
+    const directWetGain = ctx.createGain()
+    directWetGain.gain.value = 0
+
+    const wetGain = ctx.createGain()
+    wetGain.gain.value = 0
+
+    const outputSum = ctx.createGain()
+    outputSum.gain.value = 1
 
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 128
     analyser.smoothingTimeConstant = 0.82
 
-    // Chain: source -> preamp -> filters[0..9] -> limiter -> analyser -> destination
+    // Static, click-free parallel routing (never disconnect/reconnect live nodes mid-stream):
+    //   Dry path : source -> dryGain -> outputSum -> destination
+    //   Wet path : source -> preamp -> filters[0..9] -> {limiter -> limiterGain | directWetGain} -> wetGain -> outputSum
+    //   Meter tap: outputSum -> analyser (side-tap only, never adds latency to output)
+    source.connect(dryGain)
+    dryGain.connect(outputSum)
+
     source.connect(preamp)
     let node: AudioNode = preamp
     for (const f of filters) {
@@ -392,17 +421,28 @@ function getOrCreateGraph(audio: HTMLAudioElement): EqAudioGraph | null {
       node = f
     }
     node.connect(limiter)
-    limiter.connect(analyser)
-    analyser.connect(ctx.destination)
+    limiter.connect(limiterGain)
+    limiterGain.connect(wetGain)
+
+    node.connect(directWetGain)
+    directWetGain.connect(wetGain)
+
+    wetGain.connect(outputSum)
+    outputSum.connect(ctx.destination)
+    outputSum.connect(analyser)
 
     const graph: EqAudioGraph = {
       ctx,
       source,
+      dryGain,
       preamp,
       filters,
       limiter,
+      limiterGain,
+      directWetGain,
+      wetGain,
+      outputSum,
       analyser,
-      limiterConnected: true,
     }
     audioGraphs.set(audio, graph)
     return graph
@@ -416,6 +456,14 @@ export function resumeEqualizerContext(audio: HTMLAudioElement | null): void {
   const graph = audioGraphs.get(audio)
   if (graph && graph.ctx.state === 'suspended') {
     graph.ctx.resume().catch(() => {})
+  }
+}
+
+export function suspendEqualizerContext(audio: HTMLAudioElement | null): void {
+  if (!audio) return
+  const graph = audioGraphs.get(audio)
+  if (graph && graph.ctx.state === 'running') {
+    graph.ctx.suspend().catch(() => {})
   }
 }
 
@@ -433,36 +481,35 @@ export function applyEqualizerToAudio(
   if (!graph) return
 
   const now = graph.ctx.currentTime
-  const tc = 0.025
+  const tc = 0.02
 
-  const targetPreampLinear = settings.enabled
-    ? Math.pow(10, settings.preamp / 20)
-    : 1
+  // Smooth clickless crossfade between bit-exact dry bypass and active EQ path
+  const isWet = settings.enabled
+  graph.dryGain.gain.setTargetAtTime(isWet ? 0 : 1, now, tc)
+  graph.wetGain.gain.setTargetAtTime(isWet ? 1 : 0, now, tc)
+
+  // Automatic gentle headroom trim when boosting bands with limiter enabled to prevent
+  // digital clipping crackle/noise on already-loud mastered tracks.
+  const peakBandBoost = Math.max(0, ...settings.bands)
+  const totalBoost = Math.max(0, settings.preamp + peakBandBoost)
+  const autoHeadroomDb =
+    isWet && settings.limiter && totalBoost > 2.5
+      ? -(totalBoost - 2.5) * 0.45
+      : 0
+
+  const effectivePreampDb = isWet ? settings.preamp + autoHeadroomDb : 0
+  const targetPreampLinear = Math.pow(10, effectivePreampDb / 20)
   graph.preamp.gain.setTargetAtTime(targetPreampLinear, now, tc)
 
   graph.filters.forEach((filter, idx) => {
-    const db = settings.enabled ? (settings.bands[idx] ?? 0) : 0
+    const db = isWet ? (settings.bands[idx] ?? 0) : 0
     filter.gain.setTargetAtTime(db, now, tc)
   })
 
-  // Toggle limiter node routing cleanly when setting changes
-  const wantLimiter = settings.enabled && settings.limiter
-  if (wantLimiter !== graph.limiterConnected) {
-    const lastFilter = graph.filters[graph.filters.length - 1]
-    try {
-      lastFilter.disconnect()
-      graph.limiter.disconnect()
-      if (wantLimiter) {
-        lastFilter.connect(graph.limiter)
-        graph.limiter.connect(graph.analyser)
-      } else {
-        lastFilter.connect(graph.analyser)
-      }
-      graph.limiterConnected = wantLimiter
-    } catch {
-      /* ignore routing edge */
-    }
-  }
+  // Smooth clickless limiter toggle via parallel gain crossfade (no live disconnect pops)
+  const useLimiter = isWet && settings.limiter
+  graph.limiterGain.gain.setTargetAtTime(useLimiter ? 1 : 0, now, tc)
+  graph.directWetGain.gain.setTargetAtTime(useLimiter ? 0 : 1, now, tc)
 }
 
 export function readSpectrumData(

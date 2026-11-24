@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Zuno Linux user-space installer (zero sudo required)
+# Zuno Linux Native Desktop + CLI Installer (zero sudo required)
 # Installs:
-#   ~/.local/bin/zuno-mcp                                — ~3.5 MB Rust engine + static UI + MCP server
-#   ~/.local/bin/zuno                                    — desktop & CLI launcher
-#   ~/.local/share/zuno/web/                             — built production frontend
+#   ~/.local/bin/zuno                                    — standalone native Tauri v2 single binary (WebKitGTK + Rust Rodio + 10-band Rust EQ + Tray)
+#   ~/.local/bin/zuno-mcp                                — ~4.7 MB single-binary CLI, daemon, HTTP UI & MCP server
 #   ~/.local/share/icons/hicolor/{scalable,256x256,512x512}/apps/zuno.{svg,png}
 #   ~/.local/share/applications/zuno.desktop             — Application Menu shortcut
 
@@ -14,37 +13,40 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/zuno"
-WEB_DIR="$DATA_DIR/zuno/web"
 APP_DIR="$DATA_DIR/applications"
 ICON_BASE="$DATA_DIR/icons/hicolor"
 
 cd "$ROOT_DIR"
 
 echo "==> Checking build artifacts..."
-if [ ! -f "target/release/zuno-mcp" ]; then
-  echo "==> Building Rust release binary (zuno-mcp)..."
-  cargo build --release -p zuno-mcp
-fi
-
 if [ ! -f "dist/index.html" ]; then
   echo "==> Building production Web UI (dist/)..."
   npm run build
 fi
 
-echo "==> Installing into $BIN_DIR and $DATA_DIR..."
-mkdir -p "$BIN_DIR" "$WEB_DIR" "$APP_DIR" "$STATE_DIR" \
+if [ ! -f "target/release/zuno" ]; then
+  echo "==> Building native Tauri v2 desktop binary (zuno)..."
+  cargo build --release -p zuno
+fi
+
+if [ ! -f "target/release/zuno-mcp" ]; then
+  echo "==> Building CLI & MCP binary (zuno-mcp)..."
+  cargo build --release -p zuno-mcp
+fi
+
+echo "==> Installing native Zuno into $BIN_DIR and $DATA_DIR..."
+mkdir -p "$BIN_DIR" "$APP_DIR" \
   "$ICON_BASE/scalable/apps" \
   "$ICON_BASE/256x256/apps" \
   "$ICON_BASE/512x512/apps" \
   "$HOME/zuno/songs" \
   "$HOME/zuno/playlists"
 
+install -m 755 "target/release/zuno" "$BIN_DIR/zuno"
 install -m 755 "target/release/zuno-mcp" "$BIN_DIR/zuno-mcp"
 
-rm -rf "$WEB_DIR"
-mkdir -p "$WEB_DIR"
-cp -a dist/. "$WEB_DIR/"
+# Clean up any legacy external web/ folder (frontend is now compiled straight into the binaries)
+rm -rf "$DATA_DIR/zuno/web"
 
 install -m 644 "public/zuno-logo.svg" "$ICON_BASE/scalable/apps/zuno.svg"
 if [ -f "public/icon-512.png" ]; then
@@ -53,70 +55,6 @@ fi
 if [ -f "public/icon-192.png" ]; then
   install -m 644 "public/icon-192.png" "$ICON_BASE/256x256/apps/zuno.png"
 fi
-
-cat > "$BIN_DIR/zuno" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-PORT="${ZUNO_PORT:-47620}"
-HOST="${ZUNO_HOST:-127.0.0.1}"
-URL="http://${HOST}:${PORT}"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/zuno"
-WEB_DIR="$DATA_DIR/zuno/web"
-PID_FILE="$STATE_DIR/server.pid"
-LOG_FILE="$STATE_DIR/zuno.log"
-BIN="$HOME/.local/bin/zuno-mcp"
-
-mkdir -p "$STATE_DIR"
-
-# Subcommands: `zuno stop` or CLI passthrough (`zuno doctor`, `zuno play`, etc.)
-if [ "${1:-}" = "stop" ]; then
-  if [ -f "$PID_FILE" ]; then
-    PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-      kill "$PID"
-      rm -f "$PID_FILE"
-      echo "Zuno server stopped (PID $PID)."
-      exit 0
-    fi
-    rm -f "$PID_FILE"
-  fi
-  echo "Zuno server is not running."
-  exit 0
-elif [ $# -gt 0 ]; then
-  exec "$BIN" "$@"
-fi
-
-# Start single-binary Zuno HTTP + Web UI + MCP server if not already listening
-if ! curl -sf "$URL/health" >/dev/null 2>&1; then
-  nohup "$BIN" mcp --http "${HOST}:${PORT}" --web-dir "$WEB_DIR" \
-    >"$LOG_FILE" 2>&1 </dev/null &
-  echo $! > "$PID_FILE"
-
-  for _ in $(seq 1 30); do
-    if curl -sf "$URL/health" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 0.1
-  done
-fi
-
-# Launch in standalone app window if a Chromium-family browser is present, else default browser
-for browser in google-chrome chromium chromium-browser brave-browser vivaldi-stable microsoft-edge; do
-  if command -v "$browser" >/dev/null 2>&1; then
-    nohup "$browser" --app="$URL" --class=zuno >/dev/null 2>&1 </dev/null &
-    exit 0
-  fi
-done
-
-if command -v xdg-open >/dev/null 2>&1; then
-  nohup xdg-open "$URL" >/dev/null 2>&1 </dev/null &
-else
-  echo "Zuno is running at $URL"
-fi
-EOF
-chmod 755 "$BIN_DIR/zuno"
 
 cat > "$APP_DIR/zuno.desktop" <<EOF
 [Desktop Entry]
@@ -143,11 +81,10 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "Zuno installed successfully!"
-echo "  Launcher : $BIN_DIR/zuno"
-echo "  Backend  : $BIN_DIR/zuno-mcp"
-echo "  Web UI   : $WEB_DIR"
-echo "  Desktop  : $APP_DIR/zuno.desktop"
-echo "  Library  : $HOME/zuno/songs"
+echo "Zuno native desktop app installed successfully!"
+echo "  Native App    : $BIN_DIR/zuno ($(du -h "$BIN_DIR/zuno" | cut -f1))"
+echo "  CLI / MCP     : $BIN_DIR/zuno-mcp ($(du -h "$BIN_DIR/zuno-mcp" | cut -f1))"
+echo "  Desktop Entry : $APP_DIR/zuno.desktop"
+echo "  Music Folder  : $HOME/zuno/songs"
 echo ""
-echo "Run 'zuno' from your terminal or open 'Zuno' from your application menu."
+echo "Launch 'Zuno' from your application menu or run 'zuno' in your terminal."

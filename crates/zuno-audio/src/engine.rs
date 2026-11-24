@@ -1,7 +1,9 @@
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use crate::eq::{EqConfig, EqSource, SharedEq};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use zuno_core::{Result, ZunoError};
 
@@ -13,15 +15,17 @@ pub trait AudioEngine: Send + 'static {
     fn stop(&mut self);
     fn seek(&mut self, pos: Duration) -> Result<()>;
     fn set_volume(&mut self, volume: f32);
+    fn set_eq(&mut self, _eq: EqConfig) {}
     fn position_secs(&self) -> f64;
     fn is_finished(&self) -> bool;
 }
 
-/// Real desktop audio backend using Rodio + Symphonia (pure-Rust decoders).
+/// Real desktop audio backend using Rodio + Symphonia (pure-Rust decoders + 10-band Rust EQ).
 /// Lazily acquires the OS audio device on first playback so startup uses ~0 audio resources.
 pub struct RodioEngine {
     stream: Option<(OutputStream, OutputStreamHandle)>,
     sink: Option<Sink>,
+    eq: Arc<SharedEq>,
     loaded: bool,
 }
 
@@ -30,6 +34,7 @@ impl RodioEngine {
         Self {
             stream: None,
             sink: None,
+            eq: Arc::new(SharedEq::default()),
             loaded: false,
         }
     }
@@ -65,8 +70,9 @@ impl AudioEngine for RodioEngine {
             .map_err(|e| ZunoError::Audio(format!("failed to create audio sink: {e}")))?;
 
         let file = File::open(path)?;
-        let source = Decoder::new(BufReader::new(file))
+        let decoded = Decoder::new(BufReader::with_capacity(128 * 1024, file))
             .map_err(|e| ZunoError::Audio(format!("failed to decode {}: {e}", path.display())))?;
+        let source = EqSource::new(decoded.convert_samples::<f32>(), Arc::clone(&self.eq));
 
         sink.set_volume(volume.clamp(0.0, 1.0));
         sink.append(source);
@@ -108,6 +114,10 @@ impl AudioEngine for RodioEngine {
         if let Some(ref sink) = self.sink {
             sink.set_volume(volume.clamp(0.0, 1.0));
         }
+    }
+
+    fn set_eq(&mut self, eq: EqConfig) {
+        self.eq.update(eq);
     }
 
     fn position_secs(&self) -> f64 {

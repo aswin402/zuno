@@ -129,15 +129,13 @@ impl ZunoClient {
     }
 
     pub fn extract_cover(&self, track_id: &str) -> Option<zuno_core::CoverArt> {
-        let lib = Library::open(self.paths.clone()).ok()?;
-        lib.extract_cover(track_id)
+        let svc = self.get_or_init_headless().ok()?;
+        svc.extract_cover(track_id)
     }
 
     pub fn resolve_track_file(&self, track_id: &str) -> Option<(PathBuf, String)> {
-        let lib = Library::open(self.paths.clone()).ok()?;
-        let track = lib.track_by_id(track_id)?;
-        let abs = self.paths.resolve_song_path(&track.rel_path).ok()?;
-        Some((abs, track.rel_path.clone()))
+        let svc = self.get_or_init_headless().ok()?;
+        svc.resolve_track_file(track_id)
     }
 
     fn get_or_init_headless(&self) -> zuno_core::Result<Arc<ZunoService>> {
@@ -151,6 +149,9 @@ impl ZunoClient {
 }
 
 fn default_web_dir() -> Option<PathBuf> {
+    if http::has_embedded_web() {
+        return None;
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)

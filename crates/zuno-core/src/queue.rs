@@ -67,6 +67,15 @@ impl QueueManager {
         self.current_index
     }
 
+    pub fn jump_to(&mut self, index: usize) -> Option<String> {
+        if index < self.order.len() {
+            self.current_index = Some(index);
+            self.order.get(index).cloned()
+        } else {
+            None
+        }
+    }
+
     pub fn queue_ids(&self) -> &[String] {
         &self.order
     }

@@ -32,12 +32,15 @@ import {
   loadEqSettings,
   resumeEqualizerContext,
   saveEqSettings,
+  suspendEqualizerContext,
   type EqPreset,
   type EqSettings,
 } from '@/lib/equalizer'
 import type { SortDir, SortField } from '@/lib/sortTracks'
 import {
+  isTauriRuntime,
   zunoApi,
+  type PlaybackStatus,
   type Playlist,
   type RepeatMode,
   type Track,
@@ -106,6 +109,7 @@ function shuffleIds(ids: string[], keepFirstId?: string): string[] {
 }
 
 export default function App() {
+  const nativeAudio = isTauriRuntime()
   const [page, setPage] = useState<AppPage>('home')
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false)
   const [listCtx, setListCtx] = useState<ListContext>({ kind: 'all' })
@@ -139,6 +143,7 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<Track | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const lastReportedPosRef = useRef<number>(-1)
   const [queueIds, setQueueIds] = useState<string[]>([])
   const [baseQueueIds, setBaseQueueIds] = useState<string[]>([])
   const [queueIndex, setQueueIndex] = useState<number | null>(null)
@@ -173,6 +178,16 @@ export default function App() {
     hydrateSavedCustomFonts()
   }, [])
 
+  // Pause all CSS animations automatically when window/tab is hidden to save GPU/CPU
+  useEffect(() => {
+    const onVis = () => {
+      document.documentElement.classList.toggle('zuno-hidden', document.hidden)
+    }
+    onVis()
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
+
   const updateAppearance = useCallback((patch: Partial<AppearanceSettings>) => {
     setAppearance((prev) => ({ ...prev, ...patch }))
   }, [])
@@ -189,14 +204,25 @@ export default function App() {
     }))
   }, [])
 
-  // Persist & live-apply Equalizer DSP settings to the <audio> element
+  // Persist & live-apply Equalizer DSP settings (pure Rust biquad DSP in Tauri, Web Audio in browser)
   useEffect(() => {
     saveEqSettings(eqSettings)
+    if (nativeAudio) {
+      zunoApi
+        .setEq({
+          enabled: eqSettings.enabled,
+          preamp: eqSettings.preamp,
+          limiter: eqSettings.limiter,
+          bands: eqSettings.bands,
+        })
+        .catch(() => {})
+      return
+    }
     applyEqualizerToAudio(audioRef.current, eqSettings)
     if (eqSettings.enabled) {
       resumeEqualizerContext(audioRef.current)
     }
-  }, [eqSettings])
+  }, [eqSettings, nativeAudio])
 
   useEffect(() => {
     if (page !== 'equalizer') {
@@ -320,8 +346,80 @@ export default function App() {
   }, [searchQuery])
 
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = volume
-  }, [volume])
+    if (nativeAudio) {
+      zunoApi.setVolume(volume).catch(() => {})
+    } else if (audioRef.current) {
+      audioRef.current.volume = volume
+    }
+  }, [volume, nativeAudio])
+
+  const lastNativeTrackIdRef = useRef<string | null>(null)
+  const applyNativeStatus = useCallback((st: PlaybackStatus) => {
+    setIsPlaying(st.state === 'playing')
+    setPosition(st.position_secs)
+    if (st.duration_secs > 0) setDuration(st.duration_secs)
+    setShuffle(st.shuffle)
+    setRepeat(st.repeat)
+    if (st.queue_index !== null) setQueueIndex(st.queue_index)
+    if (st.active_playlist) setActivePlaylistLabel(st.active_playlist)
+    const tid = st.current_track?.id ?? null
+    if (tid && tid !== lastNativeTrackIdRef.current) {
+      lastNativeTrackIdRef.current = tid
+      setLastPlayedIds((prev) => {
+        const next = [tid, ...prev.filter((x) => x !== tid)].slice(0, 30)
+        try {
+          localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    }
+  }, [])
+
+  // In native Tauri mode, restore live Rust playback & queue on window open/recreate
+  useEffect(() => {
+    if (!nativeAudio) return
+    let cancelled = false
+    Promise.all([zunoApi.getStatus(), zunoApi.queueGet()])
+      .then(([st, q]) => {
+        if (cancelled) return
+        setVolume(st.volume)
+        if (q.tracks.length > 0) {
+          const ids = q.tracks.map((t) => t.id)
+          setQueueIds(ids)
+          setBaseQueueIds(ids)
+        }
+        applyNativeStatus(st)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [nativeAudio, applyNativeStatus])
+
+  // Lightweight in-process status sync while visible in Tauri mode (pauses completely when hidden)
+  useEffect(() => {
+    if (!nativeAudio) return
+    let timer = 0
+    const poll = () => {
+      if (document.hidden) {
+        timer = window.setTimeout(poll, 1200)
+        return
+      }
+      zunoApi
+        .getStatus()
+        .then((st) => {
+          applyNativeStatus(st)
+          timer = window.setTimeout(poll, st.state === 'playing' ? 350 : 1500)
+        })
+        .catch(() => {
+          timer = window.setTimeout(poll, 2000)
+        })
+    }
+    timer = window.setTimeout(poll, isPlaying ? 350 : 1500)
+    return () => window.clearTimeout(timer)
+  }, [nativeAudio, isPlaying, applyNativeStatus])
 
   const currentTrack: Track | null = useMemo(() => {
     if (queueIndex === null) return null
@@ -393,6 +491,25 @@ export default function App() {
       if (ids.length === 0) return
       const useShuffle = forceShuffle ?? shuffle
       if (forceShuffle !== undefined) setShuffle(forceShuffle)
+      if (nativeAudio) {
+        setBaseQueueIds(ids)
+        setActivePlaylistLabel(label)
+        setPosition(0)
+        zunoApi
+          .setQueue({
+            track_ids: ids,
+            start_id: startId ?? ids[0],
+            label,
+            shuffle: forceShuffle ?? null,
+          })
+          .then(async (st) => {
+            const q = await zunoApi.queueGet().catch(() => null)
+            if (q) setQueueIds(q.tracks.map((t) => t.id))
+            applyNativeStatus(st)
+          })
+          .catch(() => {})
+        return
+      }
       const ordered = useShuffle ? shuffleIds(ids, startId) : ids
       const idx = startId ? Math.max(0, ordered.indexOf(startId)) : 0
       setBaseQueueIds(ids)
@@ -402,10 +519,29 @@ export default function App() {
       setPosition(0)
       playTrackById(ordered[idx])
     },
-    [shuffle, playTrackById],
+    [shuffle, playTrackById, nativeAudio, applyNativeStatus],
   )
 
   const handleTogglePlay = useCallback(() => {
+    if (nativeAudio) {
+      if (!currentTrack && queueIds.length === 0) {
+        if (tracks.length > 0) {
+          startQueue(
+            tracks.map((t) => t.id),
+            tracks[0].id,
+            'Songs',
+            undefined,
+            'songs',
+          )
+        }
+        return
+      }
+      zunoApi
+        .togglePause()
+        .then(applyNativeStatus)
+        .catch(() => {})
+      return
+    }
     const el = audioRef.current
     if (!el) return
     if (!currentTrack) {
@@ -430,9 +566,18 @@ export default function App() {
         .catch(() => {})
     } else {
       el.pause()
+      suspendEqualizerContext(el)
       setIsPlaying(false)
     }
-  }, [currentTrack, tracks, startQueue, eqSettings])
+  }, [
+    nativeAudio,
+    currentTrack,
+    queueIds.length,
+    tracks,
+    startQueue,
+    eqSettings,
+    applyNativeStatus,
+  ])
 
   const selectOrToggleTrack = useCallback(
     (track: Track, subset: Track[], label: string, sourceKey: string) => {
@@ -512,6 +657,10 @@ export default function App() {
 
   const handleNext = useCallback(
     (autoAdvance = false) => {
+      if (nativeAudio) {
+        zunoApi.next().then(applyNativeStatus).catch(() => {})
+        return
+      }
       if (queueIds.length === 0 || queueIndex === null) return
       if (autoAdvance && repeat === 'one') {
         if (audioRef.current) {
@@ -541,10 +690,23 @@ export default function App() {
         setIsPlaying(false)
       }
     },
-    [queueIds, queueIndex, repeat, playTrackById, trackById, triggerAutoNextFuse],
+    [
+      nativeAudio,
+      applyNativeStatus,
+      queueIds,
+      queueIndex,
+      repeat,
+      playTrackById,
+      trackById,
+      triggerAutoNextFuse,
+    ],
   )
 
   const handlePrev = useCallback(() => {
+    if (nativeAudio) {
+      zunoApi.previous().then(applyNativeStatus).catch(() => {})
+      return
+    }
     if (queueIds.length === 0 || queueIndex === null) return
     if (audioRef.current && audioRef.current.currentTime > 3) {
       audioRef.current.currentTime = 0
@@ -555,15 +717,33 @@ export default function App() {
       queueIndex > 0 ? queueIndex - 1 : repeat === 'all' ? queueIds.length - 1 : 0
     setQueueIndex(prevIdx)
     playTrackById(queueIds[prevIdx])
-  }, [queueIds, queueIndex, repeat, playTrackById])
+  }, [nativeAudio, applyNativeStatus, queueIds, queueIndex, repeat, playTrackById])
 
-  const handleSeekCommit = useCallback((secs: number) => {
-    if (audioRef.current) audioRef.current.currentTime = secs
-  }, [])
+  const handleSeekCommit = useCallback(
+    (secs: number) => {
+      if (nativeAudio) {
+        zunoApi.seek(secs).then(applyNativeStatus).catch(() => {})
+        return
+      }
+      if (audioRef.current) audioRef.current.currentTime = secs
+    },
+    [nativeAudio, applyNativeStatus],
+  )
 
   const handleToggleShuffle = useCallback(() => {
     const next = !shuffle
     setShuffle(next)
+    if (nativeAudio) {
+      zunoApi
+        .setMode({ shuffle: next })
+        .then(async (st) => {
+          const q = await zunoApi.queueGet().catch(() => null)
+          if (q) setQueueIds(q.tracks.map((t) => t.id))
+          applyNativeStatus(st)
+        })
+        .catch(() => {})
+      return
+    }
     if (baseQueueIds.length > 0) {
       const curId = queueIndex !== null ? queueIds[queueIndex] : undefined
       if (next) {
@@ -574,11 +754,16 @@ export default function App() {
         setQueueIndex(curId ? Math.max(0, baseQueueIds.indexOf(curId)) : 0)
       }
     }
-  }, [shuffle, baseQueueIds, queueIds, queueIndex])
+  }, [nativeAudio, applyNativeStatus, shuffle, baseQueueIds, queueIds, queueIndex])
 
   const handleCycleRepeat = useCallback(() => {
-    setRepeat((r) => (r === 'off' ? 'all' : r === 'all' ? 'one' : 'off'))
-  }, [])
+    const next: RepeatMode =
+      repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off'
+    setRepeat(next)
+    if (nativeAudio) {
+      zunoApi.setMode({ repeat: next }).then(applyNativeStatus).catch(() => {})
+    }
+  }, [nativeAudio, applyNativeStatus, repeat])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -604,9 +789,13 @@ export default function App() {
     setDeleteTarget(null)
     try {
       await zunoApi.deleteSong(target.id)
-      if (currentTrack?.id === target.id && audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current.removeAttribute('src')
+      if (currentTrack?.id === target.id) {
+        if (nativeAudio) {
+          await zunoApi.stop().catch(() => {})
+        } else if (audioRef.current) {
+          audioRef.current.pause()
+          audioRef.current.removeAttribute('src')
+        }
         setIsPlaying(false)
         setQueueIndex(null)
       }
@@ -679,15 +868,18 @@ export default function App() {
     }
   }
 
-  async function handleAddToPlaylist(slug: string, trackId: string) {
-    try {
-      await zunoApi.addToPlaylist(slug, [trackId])
-      await refreshLibrary()
-      notify('Added to playlist')
-    } catch (err) {
-      notify(String(err))
-    }
-  }
+  const handleAddToPlaylist = useCallback(
+    async (slug: string, trackId: string) => {
+      try {
+        await zunoApi.addToPlaylist(slug, [trackId])
+        await refreshLibrary()
+        notify('Added to playlist')
+      } catch (err) {
+        notify(String(err))
+      }
+    },
+    [refreshLibrary, notify],
+  )
 
   async function handleRemoveFromPlaylist(slug: string, trackId: string) {
     try {
@@ -766,7 +958,7 @@ export default function App() {
   const isCustomPlaylist = Boolean(activeListMeta.playlistSlug)
   const currentPlaylistSort = isCustomPlaylist ? playlistSort : sortPref
 
-  function handleMainSortChange(field: SortField, dir: SortDir) {
+  const handleMainSortChange = useCallback((field: SortField, dir: SortDir) => {
     const next = { field, dir }
     setSortPref(next)
     try {
@@ -774,7 +966,31 @@ export default function App() {
     } catch {
       /* ignore */
     }
-  }
+  }, [])
+
+  const handlePlayAllHome = useCallback(
+    (subset?: Track[]) => {
+      const list = subset ?? tracks
+      startQueue(
+        list.map((t) => t.id),
+        list[0]?.id,
+        'Songs',
+        undefined,
+        'songs',
+      )
+    },
+    [tracks, startQueue],
+  )
+
+  const handleOpenCreatePlaylist = useCallback((tid?: string) => {
+    setCreateName('')
+    setCreateInitialTrackId(tid)
+    setCreateOpen(true)
+  }, [])
+
+  const handleRequestDeleteTrack = useCallback((t: Track) => {
+    setDeleteTarget(t)
+  }, [])
 
   function handlePlaylistSortChange(field: SortField, dir: SortDir) {
     if (isCustomPlaylist) {
@@ -795,10 +1011,14 @@ export default function App() {
   const handleSelectQueueIndex = useCallback(
     (idx: number) => {
       if (idx < 0 || idx >= queueIds.length) return
+      if (nativeAudio) {
+        zunoApi.jumpQueue(idx).then(applyNativeStatus).catch(() => {})
+        return
+      }
       setQueueIndex(idx)
       playTrackById(queueIds[idx])
     },
-    [queueIds, playTrackById],
+    [nativeAudio, applyNativeStatus, queueIds, playTrackById],
   )
 
   const nowPlayingProps = {
@@ -842,16 +1062,27 @@ export default function App() {
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background text-foreground">
-      <audio
-        ref={audioRef}
-        onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => {
-          if (Number.isFinite(e.currentTarget.duration)) {
-            setDuration(e.currentTarget.duration)
-          }
-        }}
-        onEnded={() => handleNext(true)}
-      />
+      {!nativeAudio && (
+        <audio
+          ref={audioRef}
+          preload="auto"
+          onTimeUpdate={(e) => {
+            const t = e.currentTarget.currentTime
+            if (Math.abs(t - lastReportedPosRef.current) >= 0.25 || t < 0.05) {
+              lastReportedPosRef.current = t
+              setPosition(t)
+            }
+          }}
+          onPlay={(e) => resumeEqualizerContext(e.currentTarget)}
+          onPause={(e) => suspendEqualizerContext(e.currentTarget)}
+          onLoadedMetadata={(e) => {
+            if (Number.isFinite(e.currentTarget.duration)) {
+              setDuration(e.currentTarget.duration)
+            }
+          }}
+          onEnded={() => handleNext(true)}
+        />
+      )}
 
       {/* Full-height Left Sidebar (spans 100% top-to-bottom, zero bottom gap) */}
       <DesktopSidebar
@@ -966,25 +1197,10 @@ export default function App() {
               sortDir={sortPref.dir}
               appearance={appearance}
               onSortChange={handleMainSortChange}
-              onPlayAll={(subset) => {
-                const list = subset ?? tracks
-                startQueue(
-                  list.map((t) => t.id),
-                  list[0]?.id,
-                  'Songs',
-                  undefined,
-                  'songs',
-                )
-              }}
-              onPlayTrack={(t, subset, label, sourceKey) =>
-                selectOrToggleTrack(t, subset, label, sourceKey)
-              }
-              onDeleteTrack={(t) => setDeleteTarget(t)}
-              onCreatePlaylist={(tid) => {
-                setCreateName('')
-                setCreateInitialTrackId(tid)
-                setCreateOpen(true)
-              }}
+              onPlayAll={handlePlayAllHome}
+              onPlayTrack={selectOrToggleTrack}
+              onDeleteTrack={handleRequestDeleteTrack}
+              onCreatePlaylist={handleOpenCreatePlaylist}
               onAddToPlaylist={handleAddToPlaylist}
             />
           )}

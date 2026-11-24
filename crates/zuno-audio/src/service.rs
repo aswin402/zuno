@@ -1,4 +1,5 @@
 use crate::engine::{AudioEngine, RodioEngine};
+use crate::eq::EqConfig;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -22,6 +23,7 @@ enum AudioCmd {
         reply: mpsc::Sender<Result<()>>,
     },
     SetVolume(f32),
+    SetEq(EqConfig),
     GetPosition(mpsc::Sender<f64>),
     Shutdown,
 }
@@ -83,27 +85,45 @@ impl ZunoService {
         let weak_service = Arc::downgrade(&service);
         let thread_inner = Arc::clone(&inner);
 
-        // Single dedicated audio thread: owns OutputStream/Sink safely & polls track completion.
+        // Single dedicated audio thread: owns OutputStream/Sink safely.
+        // Blocks with zero CPU wakeups while idle/paused, and polls only while actively playing.
         std::thread::Builder::new()
             .name("zuno-audio".into())
             .spawn(move || {
+                let mut active = false;
                 loop {
-                    match rx.recv_timeout(Duration::from_millis(120)) {
+                    let msg = if active {
+                        rx.recv_timeout(Duration::from_millis(250))
+                    } else {
+                        rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                    };
+                    match msg {
                         Ok(AudioCmd::LoadAndPlay {
                             path,
                             volume,
                             reply,
                         }) => {
                             let res = engine.load_and_play(&path, volume);
+                            active = res.is_ok();
                             let _ = reply.send(res);
                         }
-                        Ok(AudioCmd::Pause) => engine.pause(),
-                        Ok(AudioCmd::Resume) => engine.resume(),
-                        Ok(AudioCmd::Stop) => engine.stop(),
+                        Ok(AudioCmd::Pause) => {
+                            engine.pause();
+                            active = false;
+                        }
+                        Ok(AudioCmd::Resume) => {
+                            engine.resume();
+                            active = true;
+                        }
+                        Ok(AudioCmd::Stop) => {
+                            engine.stop();
+                            active = false;
+                        }
                         Ok(AudioCmd::Seek { pos, reply }) => {
                             let _ = reply.send(engine.seek(pos));
                         }
                         Ok(AudioCmd::SetVolume(v)) => engine.set_volume(v),
+                        Ok(AudioCmd::SetEq(eq)) => engine.set_eq(eq),
                         Ok(AudioCmd::GetPosition(reply)) => {
                             let _ = reply.send(engine.position_secs());
                         }
@@ -124,6 +144,7 @@ impl ZunoService {
                                         match next_path {
                                             Some((path, vol)) => {
                                                 if engine.load_and_play(&path, vol).is_err() {
+                                                    active = false;
                                                     if let Ok(mut st) = thread_inner.lock() {
                                                         st.play_state = PlayState::Stopped;
                                                     }
@@ -131,12 +152,15 @@ impl ZunoService {
                                             }
                                             None => {
                                                 engine.stop();
+                                                active = false;
                                                 if let Ok(mut st) = thread_inner.lock() {
                                                     st.play_state = PlayState::Stopped;
                                                 }
                                             }
                                         }
                                     }
+                                } else {
+                                    active = false;
                                 }
                             }
                         }
@@ -154,6 +178,20 @@ impl ZunoService {
 
     pub fn extract_cover(&self, track_id: &str) -> Option<CoverArt> {
         self.inner.lock().unwrap().library.extract_cover(track_id)
+    }
+
+    pub fn resolve_track_file(&self, track_id: &str) -> Option<(PathBuf, String)> {
+        let st = self.inner.lock().unwrap();
+        let track = st.library.track_by_id(track_id)?;
+        let abs = st.library.paths().resolve_song_path(&track.rel_path).ok()?;
+        Some((abs, track.rel_path.clone()))
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|s| s.play_state == PlayState::Playing)
+            .unwrap_or(false)
     }
 
     /// Execute any `IpcRequest` and return a structured `IpcResponse`.
@@ -423,6 +461,74 @@ impl ZunoService {
                     let mut st = self.inner.lock().unwrap();
                     st.volume = v;
                     Self::persist_locked(&st, pos);
+                }
+                Ok(IpcData::Status(self.status()))
+            }
+
+            IpcRequest::SetEq {
+                enabled,
+                preamp,
+                limiter,
+                bands,
+            } => {
+                let mut arr = [0.0f32; 10];
+                for (i, v) in bands.into_iter().take(10).enumerate() {
+                    arr[i] = v.clamp(-12.0, 12.0);
+                }
+                let _ = self.audio_tx.send(AudioCmd::SetEq(EqConfig {
+                    enabled,
+                    preamp_db: preamp.clamp(-12.0, 12.0),
+                    limiter,
+                    bands_db: arr,
+                }));
+                Ok(IpcData::Message("EQ updated".into()))
+            }
+
+            IpcRequest::SetQueue {
+                track_ids,
+                start_id,
+                label,
+                shuffle,
+            } => {
+                let target = {
+                    let mut st = self.inner.lock().unwrap();
+                    if let Some(s) = shuffle {
+                        st.queue.set_shuffle(s);
+                    }
+                    let valid: Vec<String> = track_ids
+                        .into_iter()
+                        .filter(|id| st.library.track_by_id(id).is_some())
+                        .collect();
+                    let chosen = st.queue.set_queue(valid, start_id.as_deref(), label);
+                    chosen.and_then(|id| {
+                        let rel = st.library.track_by_id(&id)?.rel_path.clone();
+                        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+                        Some((abs, st.volume))
+                    })
+                };
+                if let Some((path, vol)) = target {
+                    self.load_audio(path, vol)?;
+                    let mut st = self.inner.lock().unwrap();
+                    st.play_state = PlayState::Playing;
+                    Self::persist_locked(&st, 0.0);
+                }
+                Ok(IpcData::Status(self.status()))
+            }
+
+            IpcRequest::JumpQueue { index } => {
+                let target = {
+                    let mut st = self.inner.lock().unwrap();
+                    st.queue.jump_to(index).and_then(|id| {
+                        let rel = st.library.track_by_id(&id)?.rel_path.clone();
+                        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+                        Some((abs, st.volume))
+                    })
+                };
+                if let Some((path, vol)) = target {
+                    self.load_audio(path, vol)?;
+                    let mut st = self.inner.lock().unwrap();
+                    st.play_state = PlayState::Playing;
+                    Self::persist_locked(&st, 0.0);
                 }
                 Ok(IpcData::Status(self.status()))
             }

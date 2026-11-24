@@ -7,14 +7,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
 
+mod embedded_web {
+    include!(concat!(env!("OUT_DIR"), "/embedded_web.rs"));
+}
+
+pub fn has_embedded_web() -> bool {
+    embedded_web::HAS_EMBEDDED_WEB
+}
+
 /// Ultra-lightweight zero-dependency HTTP server providing:
 /// - `POST /mcp`              — Streamable HTTP MCP JSON-RPC 2.0 endpoint (for AI agents)
 /// - `POST /api`              — Typed `IpcRequest` -> `IpcResponse` bridge (for Web/Tauri preview)
-/// - `GET  /api/cover/<id>`   — On-demand embedded album cover art bytes
-/// - `GET  /api/audio/<id>`   — Byte-range audio file streaming (for browser audio playback)
+/// - `GET  /api/cover/<id>`   — On-demand embedded album cover art bytes (HTTP cached)
+/// - `GET  /api/audio/<id>`   — High-throughput byte-range audio streaming (`TCP_NODELAY`, 128 KiB chunks)
 /// - `GET  /api/info`         — Root paths & live MCP endpoint metadata
 /// - `GET  /health`           — Health check
-/// - `GET  /*`                — Optional built static Web UI (`--web-dir`)
+/// - `GET  /*`                — Embedded single-binary Web UI (or `--web-dir` override)
 pub fn run_http_mcp(
     addr: &str,
     token: Option<String>,
@@ -25,9 +33,11 @@ pub fn run_http_mcp(
     let web_dir = web_dir.and_then(|d| fs::canonicalize(d).ok());
     if let Some(ref dir) = web_dir {
         eprintln!(
-            "Zuno HTTP + UI + MCP listening on http://{addr} (web: {})",
+            "Zuno HTTP + UI + MCP listening on http://{addr} (web-dir: {})",
             dir.display()
         );
+    } else if embedded_web::HAS_EMBEDDED_WEB {
+        eprintln!("Zuno single-binary server listening on http://{addr} (embedded UI + API + MCP)");
     } else {
         eprintln!("Zuno HTTP + MCP listening on http://{addr} (POST /mcp, POST /api)");
     }
@@ -39,6 +49,7 @@ pub fn run_http_mcp(
         let Ok(stream) = stream else {
             continue;
         };
+        let _ = stream.set_nodelay(true);
         let client = Arc::clone(&client);
         let token = Arc::clone(&token);
         let addr_str = Arc::clone(&addr_str);
@@ -141,12 +152,12 @@ fn handle_http_connection(
         let head_only = method == "HEAD";
         if let Some(track_id) = path.strip_prefix("/api/cover/") {
             if let Some(art) = client.extract_cover(track_id) {
-                return write_http_with_body(
+                return write_cached_bytes(
                     &mut stream,
-                    200,
                     &art.mime_type,
                     &art.bytes,
-                    !head_only,
+                    "public, max-age=86400",
+                    head_only,
                 );
             }
             return write_http_with_body(
@@ -201,12 +212,13 @@ fn handle_http_connection(
         };
     }
 
-    if (method == "GET" || method == "HEAD")
-        && let Some(root) = web_dir
-        && !path.starts_with("/api")
-        && path != "/mcp"
-    {
-        return serve_static_file(&mut stream, root, path, method == "HEAD");
+    if (method == "GET" || method == "HEAD") && !path.starts_with("/api") && path != "/mcp" {
+        if let Some(root) = web_dir {
+            return serve_static_file(&mut stream, root, path, method == "HEAD");
+        }
+        if embedded_web::HAS_EMBEDDED_WEB {
+            return serve_embedded_asset(&mut stream, path, method == "HEAD");
+        }
     }
 
     write_http(
@@ -215,6 +227,53 @@ fn handle_http_connection(
         "application/json",
         b"{\"error\":\"not found; use POST /mcp or POST /api\"}",
     )
+}
+
+fn serve_embedded_asset(stream: &mut TcpStream, req_path: &str, head_only: bool) -> io::Result<()> {
+    let clean = req_path.trim_start_matches('/');
+    let rel = if clean.is_empty() { "index.html" } else { clean };
+    if rel.contains("..") {
+        return write_http_with_body(stream, 400, "text/plain", b"bad path", !head_only);
+    }
+
+    let (resolved_key, bytes) = match embedded_web::get_embedded_asset(rel) {
+        Some(b) => (rel, b),
+        None if !rel.contains('.') => match embedded_web::get_embedded_asset("index.html") {
+            Some(b) => ("index.html", b),
+            None => {
+                return write_http_with_body(stream, 404, "text/plain", b"not found", !head_only);
+            }
+        },
+        None => {
+            return write_http_with_body(stream, 404, "text/plain", b"not found", !head_only);
+        }
+    };
+
+    let mime = static_mime(Path::new(resolved_key));
+    let cache = if resolved_key.starts_with("assets/") || resolved_key.starts_with("fonts/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    write_cached_bytes(stream, mime, bytes, cache, head_only)
+}
+
+fn write_cached_bytes(
+    stream: &mut TcpStream,
+    mime: &str,
+    bytes: &[u8],
+    cache_control: &str,
+    head_only: bool,
+) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: {cache_control}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    )?;
+    if !head_only {
+        stream.write_all(bytes)?;
+    }
+    stream.flush()
 }
 
 fn serve_static_file(
@@ -330,12 +389,12 @@ fn stream_audio_file(
     if partial {
         write!(
             stream,
-            "HTTP/1.1 206 Partial Content\r\nContent-Type: {mime}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{total_len}\r\nContent-Length: {chunk_len}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 206 Partial Content\r\nContent-Type: {mime}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{total_len}\r\nContent-Length: {chunk_len}\r\nCache-Control: public, max-age=3600\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
         )?;
     } else {
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nAccept-Ranges: bytes\r\nContent-Length: {chunk_len}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nAccept-Ranges: bytes\r\nContent-Length: {chunk_len}\r\nCache-Control: public, max-age=3600\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
         )?;
     }
 
@@ -344,14 +403,22 @@ fn stream_audio_file(
     }
 
     let mut remaining = chunk_len;
-    let mut buf = [0u8; 32 * 1024];
+    let mut buf = vec![0u8; 128 * 1024];
     while remaining > 0 {
         let to_read = (remaining as usize).min(buf.len());
         let n = file.read(&mut buf[..to_read])?;
         if n == 0 {
             break;
         }
-        stream.write_all(&buf[..n])?;
+        if let Err(e) = stream.write_all(&buf[..n]) {
+            if matches!(
+                e.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            ) {
+                return Ok(());
+            }
+            return Err(e);
+        }
         remaining -= n as u64;
     }
     stream.flush()
@@ -362,12 +429,21 @@ fn parse_byte_range(header: &str, total_len: u64) -> Option<(u64, u64)> {
         return None;
     }
     let rest = header.strip_prefix("bytes=")?;
-    let (start_s, end_s) = rest.split_once('-')?;
-    let start: u64 = if start_s.is_empty() {
-        0
-    } else {
-        start_s.trim().parse().ok()?
-    };
+    let first = rest.split(',').next()?.trim();
+    let (start_s, end_s) = first.split_once('-')?;
+    if start_s.is_empty() {
+        // Suffix range: bytes=-N (last N bytes)
+        let suffix: u64 = end_s.trim().parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        let start = total_len.saturating_sub(suffix);
+        return Some((start, total_len - 1));
+    }
+    let start: u64 = start_s.trim().parse().ok()?;
+    if start >= total_len {
+        return None;
+    }
     let end: u64 = if end_s.is_empty() {
         total_len - 1
     } else {

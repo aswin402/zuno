@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
 import { ZunoIcon } from '@/components/ZunoIcon'
@@ -22,7 +22,7 @@ interface HomePageProps {
   onAddToPlaylist: (slug: string, trackId: string) => void
 }
 
-export function HomePage({
+export const HomePage = memo(function HomePage({
   tracks,
   playlists,
   currentTrackId,
@@ -118,4 +118,4 @@ export function HomePage({
       </section>
     </div>
   )
-}
+})

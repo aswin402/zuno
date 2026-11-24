@@ -3,11 +3,12 @@ members = [
     "crates/zuno-core",
     "crates/zuno-audio",
     "crates/zuno-mcp",
+    "src-tauri",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 license = "MIT"
 description = "Zuno — lightweight, offline-first music player for humans and AI (MCP)"

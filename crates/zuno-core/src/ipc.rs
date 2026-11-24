@@ -59,6 +59,21 @@ pub enum IpcRequest {
     SetVolume {
         volume: f32,
     },
+    SetEq {
+        enabled: bool,
+        preamp: f32,
+        limiter: bool,
+        bands: Vec<f32>,
+    },
+    SetQueue {
+        track_ids: Vec<String>,
+        start_id: Option<String>,
+        label: Option<String>,
+        shuffle: Option<bool>,
+    },
+    JumpQueue {
+        index: usize,
+    },
     SetMode {
         shuffle: Option<bool>,
         repeat: Option<RepeatMode>,

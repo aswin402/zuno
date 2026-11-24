@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react'
 import {
   DropdownMenu,
@@ -38,7 +38,7 @@ interface TrackRowProps {
  * Clean song row with customizable playing style and EaseUI dropdown menu
  * containing Add to playlist and Delete actions.
  */
-export function TrackRow({
+export const TrackRow = memo(function TrackRow({
   track,
   index,
   active,
@@ -327,7 +327,7 @@ export function TrackRow({
       </div>
     </div>
   )
-}
+})
 
 function PlayPauseMorph({
   playing,
