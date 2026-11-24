@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, ChevronUp, MoreHorizontal, X } from 'lucide-react'
 import {
   DropdownMenu,
@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
+import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { Loader2 } from '@/components/PulseBarsLoader'
@@ -90,7 +91,34 @@ export function NowPlayingPanel({
   onCreatePlaylistWithTrack,
 }: NowPlayingPanelProps) {
   const [sheetTab, setSheetTab] = useState<'none' | 'queue' | 'playlists'>('none')
+  const [sheetClosing, setSheetClosing] = useState(false)
+  const closeTimerRef = useRef<number | undefined>(undefined)
   const [moreOpen, setMoreOpen] = useState(false)
+
+  const openSheet = useCallback((tab: 'queue' | 'playlists') => {
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = undefined
+    }
+    setSheetClosing(false)
+    setSheetTab(tab)
+  }, [])
+
+  const closeSheet = useCallback(() => {
+    if (sheetTab === 'none' || sheetClosing) return
+    setSheetClosing(true)
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = undefined
+      setSheetTab('none')
+      setSheetClosing(false)
+    }, 195)
+  }, [sheetTab, sheetClosing])
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current)
+    }
+  }, [])
 
   // Swipe-up (to open Queue/Playlists) & horizontal swipe (Prev/Next) on stage
   const gestureStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null)
@@ -127,14 +155,14 @@ export function NowPlayingPanel({
       if (moreOpen) {
         setMoreOpen(false)
       } else if (sheetTab !== 'none') {
-        setSheetTab('none')
+        closeSheet()
       } else {
         onCloseMobile?.()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [moreOpen, sheetTab, onCloseMobile])
+  }, [moreOpen, sheetTab, closeSheet, onCloseMobile])
 
   // ── Page-level swipe-up (Queue/Playlists) & horizontal track swipe ──
   const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -182,7 +210,7 @@ export function NowPlayingPanel({
     setSwipeX(0)
 
     if (dy <= -46 && Math.abs(dy) > Math.abs(dx) * 1.2) {
-      setSheetTab('queue')
+      openSheet('queue')
     } else if (dx <= -64 && Math.abs(dx) > Math.abs(dy) * 1.3) {
       onNext()
     } else if (dx >= 64 && Math.abs(dx) > Math.abs(dy) * 1.3) {
@@ -211,7 +239,7 @@ export function NowPlayingPanel({
     const dy = e.clientY - sheetDragStartRef.current
     sheetDragStartRef.current = null
     setSheetDragY(0)
-    if (dy > 64) setSheetTab('none')
+    if (dy > 64) closeSheet()
   }
 
   // Bottom contrasting tray colors (high contrast across all 8 dark + light themes)
@@ -230,7 +258,7 @@ export function NowPlayingPanel({
       onPointerUp={handleStagePointerEnd}
       onPointerCancel={handleStagePointerEnd}
       className={cn(
-        'relative flex h-[100dvh] w-full flex-col overflow-hidden select-none touch-none animate-sheet-up',
+        'relative flex h-full w-full flex-col overflow-hidden select-none touch-none animate-sheet-up',
         trayBgClass,
       )}
     >
@@ -240,7 +268,7 @@ export function NowPlayingPanel({
           transform: pullUpY < 0 ? `translateY(${pullUpY * 0.32}px)` : undefined,
         }}
         className={cn(
-          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-8 pt-[max(1rem,env(safe-area-inset-top))]',
+          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-5 pt-[max(1rem,env(safe-area-inset-top))] md:pb-4',
           pullUpY === 0 && 'transition-transform duration-300 ease-out',
           isLight
             ? 'bg-background shadow-[0_18px_42px_rgba(0,0,0,0.22)]'
@@ -338,7 +366,7 @@ export function NowPlayingPanel({
                 {/* Add to playlist */}
                 {track && (
                   <DropdownMenuItem
-                    onSelect={() => setSheetTab('playlists')}
+                    onSelect={() => openSheet('playlists')}
                     className="mt-0.5 gap-2.5"
                   >
                     <ZunoIcon
@@ -465,14 +493,30 @@ export function NowPlayingPanel({
           </div>
         </div>
 
-        {/* Subtle bottom hint inside stage for swipe-up affordance */}
-        <div className="flex shrink-0 justify-center pt-1">
-          <span className="h-1 w-8 rounded-full bg-border/80" aria-hidden="true" />
+        {/* Bottom Queue Trigger: Mobile keeps swipe-up pill line; Desktop uses clean borderless Up Arrow button */}
+        <div
+          className="flex shrink-0 justify-center pt-1"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <span
+            className="h-1 w-8 rounded-full bg-border/80 md:hidden"
+            aria-hidden="true"
+          />
+          <Tooltip label="Open queue" side="top">
+            <button
+              type="button"
+              onClick={() => openSheet('queue')}
+              aria-label="Open queue and playlists"
+              className="group hidden h-9 w-12 items-center justify-center border-0 bg-transparent text-muted-foreground/70 transition-colors hover:text-foreground active:scale-92 cursor-pointer md:inline-flex"
+            >
+              <ChevronUp className="h-5 w-5 transition-transform duration-200 ease-out group-hover:-translate-y-0.5" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
-      {/* ── Contrasting Bottom Tray: Previous · Play/Pause · Next + Swipe-Up Queue/Playlists Cue ── */}
-      <footer className="shrink-0 px-8 pt-4 pb-[max(0.85rem,env(safe-area-inset-bottom))]">
+      {/* ── Contrasting Bottom Tray: Previous · Play/Pause · Next ── */}
+      <footer className="shrink-0 px-8 py-4 pb-[max(0.85rem,env(safe-area-inset-bottom))] md:py-5">
         <div
           className="mx-auto flex max-w-[280px] items-center justify-between"
           onPointerDown={(e) => e.stopPropagation()}
@@ -580,31 +624,33 @@ export function NowPlayingPanel({
           </button>
         </div>
 
-        {/* Swipe-Up Queue / Playlists Handle */}
+        {/* Mobile Swipe-Up Queue / Playlists Cue */}
         <button
           type="button"
-          onClick={() => setSheetTab('queue')}
+          onClick={() => openSheet('queue')}
           style={{
             transform: pullUpY < 0 ? `translateY(${pullUpY * 0.25}px)` : undefined,
           }}
           className={cn(
-            'mx-auto mt-2.5 flex items-center justify-center gap-1 rounded-full px-3 py-1 text-[10.5px] font-medium tracking-wide transition-opacity cursor-pointer',
+            'mx-auto mt-2.5 flex items-center justify-center gap-1 rounded-full px-3 py-1 text-[10.5px] font-medium tracking-wide transition-opacity cursor-pointer md:hidden',
             isLight
               ? 'text-background/55 hover:text-background/90'
               : 'text-muted-foreground/70 hover:text-foreground',
           )}
         >
           <ChevronUp className="h-3.5 w-3.5" />
-          <span className="lg:hidden">Swipe up for queue &amp; playlists</span>
-          <span className="hidden lg:inline">Queue &amp; playlists</span>
+          <span>Swipe up for queue &amp; playlists</span>
         </button>
       </footer>
 
-      {/* ── Swipe-Up Sheet: Queue | Playlists ── */}
+      {/* ── Swipe-Up / Slide-Up Sheet: Queue | Playlists ── */}
       {sheetTab !== 'none' && (
         <div
-          onClick={() => setSheetTab('none')}
-          className="fixed inset-0 z-50 flex items-end bg-black/55 backdrop-blur-xs"
+          onClick={closeSheet}
+          className={cn(
+            'absolute inset-0 z-50 flex items-end bg-black/55 backdrop-blur-xs',
+            sheetClosing ? 'animate-backdrop-out pointer-events-none' : 'animate-backdrop-in',
+          )}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -612,8 +658,9 @@ export function NowPlayingPanel({
               transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined,
             }}
             className={cn(
-              'mx-auto flex h-[76dvh] w-full max-w-xl flex-col rounded-t-[30px] border-t border-border bg-card text-foreground shadow-2xl animate-sheet-up pb-[max(1rem,env(safe-area-inset-bottom))] lg:border-x',
-              sheetDragY === 0 && 'transition-transform duration-200 ease-out',
+              'mx-auto flex h-[76%] max-h-[680px] w-full max-w-xl flex-col rounded-t-[30px] border-t border-border bg-card text-foreground shadow-2xl pb-[max(1rem,env(safe-area-inset-bottom))] lg:border-x',
+              sheetClosing ? 'animate-drawer-down' : 'animate-drawer-up',
+              sheetDragY === 0 && !sheetClosing && 'transition-transform duration-200 ease-out',
             )}
           >
             {/* Swipe-Down Grabber & Segmented Tab Header */}
@@ -710,7 +757,7 @@ export function NowPlayingPanel({
                   )}
                   <button
                     type="button"
-                    onClick={() => setSheetTab('none')}
+                    onClick={closeSheet}
                     aria-label="Close sheet"
                     className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
                   >
@@ -880,7 +927,7 @@ export function NowPlayingPanel({
                         <button
                           type="button"
                           onClick={() => {
-                            setSheetTab('none')
+                            closeSheet()
                             onOpenPlaylist?.(pl.slug)
                           }}
                           className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer"
@@ -937,7 +984,7 @@ export function NowPlayingPanel({
                   <button
                     type="button"
                     onClick={() => {
-                      setSheetTab('none')
+                      closeSheet()
                       onCreatePlaylistWithTrack(track?.id)
                     }}
                     className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-3 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"

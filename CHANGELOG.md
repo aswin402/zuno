@@ -5,6 +5,15 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9] — 2026-11-25
+
+Desktop Now Playing Queue trigger & smooth bidirectional drawer transition fix.
+
+### Fixed & Improved
+- **Desktop Borderless Up-Arrow Queue Button (`src/components/NowPlayingPanel.tsx`)**: Replaced the faint mobile horizontal swipe-handle line on desktop (`md+`) with a clean, borderless `ChevronUp` icon button (with hover lift and themed `Open queue` tooltip) while preserving the swipe-up pill handle on mobile.
+- **Smooth Bidirectional Queue Drawer Transitions (`src/index.css`, `src/components/NowPlayingPanel.tsx`)**: Added GPU-composited `animate-drawer-up` / `animate-drawer-down` and backdrop fade animations so opening and closing the Queue & Playlists sheet glide smoothly in both directions.
+- **Now Playing Full-Height Viewport Fit (`src/components/NowPlayingPanel.tsx`)**: Fixed `h-[100dvh]` overflow under the custom desktop titlebar by switching the player root to `h-full` and the drawer backdrop to `absolute inset-0`.
+
 ## [0.0.8] — 2026-11-24
 
 Reorganized Appearance Studio into a collapsible hierarchical component tree separating all 19 customizable UI & audio components into focused pages with dedicated interactive Live Preview Stages.
