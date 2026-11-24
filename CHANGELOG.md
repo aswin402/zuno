@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] — 2026-11-24
+
+Reorganized Appearance Studio into a collapsible hierarchical component tree separating all 19 customizable UI & audio components into focused pages with dedicated interactive Live Preview Stages.
+
+### Added & Changed
+- **Hierarchical Customize Studio Navigation (`src/pages/CustomizePage.tsx`)**: Replaced crowded multi-section studio pages with 4 collapsible parent branches (*Color Themes & Fonts*, *Window, Chrome & Nav*, *Surfaces, Scroll & Motion*, *Music Components*) containing 19 separated child component pages, complete with tree guide rails, child count badges, collapsed active-branch indicators, `/` component search with auto-expand, 3-level breadcrumbs, Prev/Next stepping, and a 2-level mobile hierarchy strip.
+- **Dedicated Interactive Live Previews (`src/components/StudioPreviews.tsx`)**: Built real interactive preview stages for every separated component — including a live scrollable mini song list for **Skiper 89 / 94 / 95** scroll progress, a **Replay Entrance** stage for **Great UI Blur Scroll Reveal**, an interactive miniature workspace for **Desktop Navigation** (clickable tabs, expandable Studio dock submenu, expandable Capsule overlay), a **Test Maximize** frameless corner preview, live 60/30/10 palette ratio bar, typography & timestamp preview, surface material & canvas pattern swatches, live View Transition origin trigger, clickable Play button & active/idle track row previews, Floating vs Docked player bar preview, and equal-power crossfade overlap curve preview.
+
 ## [0.0.7] — 2026-11-24
 
 Rounded curved frameless desktop window corners, zero-rerender Skiper 89/94/95 scroll progress indicators, Great UI Blur Scroll Reveal & View Transition animations, SmoothUI Kinetic theme toggle, and SmoothUI/Great UI floating desktop navigation themes.
