@@ -27,6 +27,11 @@ impl ZunoWatcher {
         watcher
             .watch(&paths.playlists_dir(), RecursiveMode::NonRecursive)
             .map_err(|e| ZunoError::Io(std::io::Error::other(e.to_string())))?;
+        for extra in paths.load_extra_dirs() {
+            if extra.is_dir() {
+                let _ = watcher.watch(&extra, RecursiveMode::Recursive);
+            }
+        }
 
         // Debounce bursts of filesystem events on a lightweight background thread.
         std::thread::spawn(move || {

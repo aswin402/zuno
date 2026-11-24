@@ -11,6 +11,7 @@ import {
 import { Slider } from '@/components/ui/slider'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
+import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { ZunoIcon } from '@/components/ZunoIcon'
@@ -509,6 +510,54 @@ export function NowPlayingPanel({
                 <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-4" />
                 <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-5" />
               </span>
+            ) : appearance.playButtonStyle === 'vinyl' ? (
+              <span className="relative flex h-11 w-11 items-center justify-center">
+                <svg
+                  viewBox="0 0 36 36"
+                  fill="none"
+                  className={cn(
+                    'h-11 w-11',
+                    isPlaying ? 'animate-vinyl-spin' : 'animate-vinyl-paused',
+                  )}
+                  aria-hidden="true"
+                >
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="16"
+                    stroke="currentColor"
+                    strokeOpacity="0.35"
+                    strokeWidth="1.2"
+                  />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="12"
+                    stroke="currentColor"
+                    strokeOpacity="0.25"
+                    strokeWidth="1"
+                    strokeDasharray="14 7"
+                  />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="8.5"
+                    stroke="currentColor"
+                    strokeOpacity="0.3"
+                    strokeWidth="1"
+                    strokeDasharray="9 5"
+                  />
+                  <circle cx="18" cy="18" r="4" fill="currentColor" fillOpacity="0.85" />
+                </svg>
+                {!isPlaying && (
+                  <ZunoIcon
+                    name="play"
+                    pack={iconPack}
+                    filled
+                    className="pointer-events-none absolute h-4 w-4 translate-x-[1px]"
+                  />
+                )}
+              </span>
             ) : (
               <ZunoIcon
                 name={isPlaying ? 'pause' : 'play'}
@@ -687,6 +736,7 @@ export function NowPlayingPanel({
                   <div className="space-y-1">
                     {queueTracks.map((item, idx) => {
                       const isCurrent = idx === queueIndex
+                      const playingHere = isCurrent && isPlaying
                       const itemArtist =
                         item.artist === 'Unknown Artist' && item.folder
                           ? item.folder
@@ -696,11 +746,14 @@ export function NowPlayingPanel({
                           key={`${item.id}-${idx}`}
                           type="button"
                           onClick={() => {
-                            onSelectQueueIndex?.(idx)
-                            setSheetTab('none')
+                            if (isCurrent) {
+                              onTogglePlay()
+                            } else {
+                              onSelectQueueIndex?.(idx)
+                            }
                           }}
                           className={cn(
-                            'flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left transition-colors cursor-pointer',
+                            'group flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left transition-colors cursor-pointer',
                             isCurrent
                               ? 'bg-secondary text-foreground'
                               : 'hover:bg-secondary/60 text-foreground',
@@ -731,9 +784,79 @@ export function NowPlayingPanel({
                               </p>
                             </div>
                           </div>
-                          <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
-                            {formatTime(item.duration_secs)}
-                          </span>
+
+                          <div className="flex shrink-0 items-center gap-2.5">
+                            {/* Play / Pause animation matching user's active playing style */}
+                            <span className="relative flex h-7 w-7 items-center justify-center">
+                              {playingHere ? (
+                                appearance.playingStyle === 'pulse-bars' ? (
+                                  <Loader2
+                                    barCount={4}
+                                    height={14}
+                                    width={2.2}
+                                    gap={2}
+                                    speed={0.95}
+                                  />
+                                ) : appearance.playingStyle === 'equalizer' ? (
+                                  <span className="flex h-4.5 items-end justify-center gap-[2px]">
+                                    <span className="zuno-eq-bar" />
+                                    <span className="zuno-eq-bar" />
+                                    <span className="zuno-eq-bar" />
+                                    <span className="zuno-eq-bar" />
+                                  </span>
+                                ) : appearance.playingStyle === 'pulse' ? (
+                                  <>
+                                    <span
+                                      aria-hidden="true"
+                                      className="animate-btn-pulse pointer-events-none absolute inset-0 rounded-full border border-primary"
+                                    />
+                                    <span className="relative z-10 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                                      <ZunoIcon
+                                        name="pause"
+                                        pack={iconPack}
+                                        filled
+                                        className="h-3 w-3"
+                                      />
+                                    </span>
+                                  </>
+                                ) : (
+                                  <ZunoIcon
+                                    name="pause"
+                                    pack={iconPack}
+                                    filled
+                                    className="h-3.5 w-3.5 text-primary transition-transform duration-200"
+                                  />
+                                )
+                              ) : isCurrent ? (
+                                <span
+                                  className={cn(
+                                    'flex h-6 w-6 items-center justify-center rounded-full transition-transform duration-200',
+                                    appearance.playingStyle === 'pulse'
+                                      ? 'border border-primary/50 bg-primary/15 text-primary'
+                                      : 'text-primary',
+                                  )}
+                                >
+                                  <ZunoIcon
+                                    name="play"
+                                    pack={iconPack}
+                                    filled
+                                    className="h-3.5 w-3.5 translate-x-[0.5px]"
+                                  />
+                                </span>
+                              ) : (
+                                <ZunoIcon
+                                  name="play"
+                                  pack={iconPack}
+                                  filled
+                                  className="h-3.5 w-3.5 translate-x-[0.5px] text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                                />
+                              )}
+                            </span>
+
+                            <span className="tabular-nums text-[11px] text-muted-foreground">
+                              {formatTime(item.duration_secs)}
+                            </span>
+                          </div>
                         </button>
                       )
                     })}

@@ -1,5 +1,6 @@
 use crate::eq::{EqConfig, EqSource, SharedEq};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use std::f32::consts::FRAC_PI_2;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -16,15 +17,25 @@ pub trait AudioEngine: Send + 'static {
     fn seek(&mut self, pos: Duration) -> Result<()>;
     fn set_volume(&mut self, volume: f32);
     fn set_eq(&mut self, _eq: EqConfig) {}
+    fn set_crossfade(&mut self, _secs: f32) {}
+    /// Advances any active fade-out / fade-in envelopes. Returns true while a transition is active.
+    fn tick_transition(&mut self) -> bool {
+        false
+    }
     fn position_secs(&self) -> f64;
     fn is_finished(&self) -> bool;
 }
 
-/// Real desktop audio backend using Rodio + Symphonia (pure-Rust decoders + 10-band Rust EQ).
+/// Real desktop audio backend using Rodio + Symphonia (pure-Rust decoders + 10-band Rust EQ +
+/// equal-power overlapping crossfade & fade-in transitions).
 /// Lazily acquires the OS audio device on first playback so startup uses ~0 audio resources.
 pub struct RodioEngine {
     stream: Option<(OutputStream, OutputStreamHandle)>,
     sink: Option<Sink>,
+    fading_out: Option<(Sink, Instant, Duration, f32)>,
+    fading_in: Option<(Instant, Duration)>,
+    base_volume: f32,
+    crossfade_secs: f32,
     eq: Arc<SharedEq>,
     loaded: bool,
 }
@@ -34,6 +45,10 @@ impl RodioEngine {
         Self {
             stream: None,
             sink: None,
+            fading_out: None,
+            fading_in: None,
+            base_volume: 0.8,
+            crossfade_secs: 0.0,
             eq: Arc::new(SharedEq::default()),
             loaded: false,
         }
@@ -62,9 +77,27 @@ unsafe impl Send for RodioEngine {}
 
 impl AudioEngine for RodioEngine {
     fn load_and_play(&mut self, path: &Path, volume: f32) -> Result<()> {
-        if let Some(old) = self.sink.take() {
-            old.stop();
+        let vol = volume.clamp(0.0, 1.0);
+        self.base_volume = vol;
+
+        // Clean up any older fading-out sink before starting a new transition
+        if let Some((old_fade, ..)) = self.fading_out.take() {
+            old_fade.stop();
         }
+        self.fading_in = None;
+
+        let mut had_active_outgoing = false;
+        if let Some(old) = self.sink.take() {
+            if self.crossfade_secs > 0.05 && !old.empty() && !old.is_paused() {
+                let start_vol = old.volume().clamp(0.0, 1.0);
+                let dur = Duration::from_secs_f32(self.crossfade_secs);
+                self.fading_out = Some((old, Instant::now(), dur, start_vol));
+                had_active_outgoing = true;
+            } else {
+                old.stop();
+            }
+        }
+
         let handle = self.ensure_stream()?;
         let sink = Sink::try_new(handle)
             .map_err(|e| ZunoError::Audio(format!("failed to create audio sink: {e}")))?;
@@ -74,7 +107,19 @@ impl AudioEngine for RodioEngine {
             .map_err(|e| ZunoError::Audio(format!("failed to decode {}: {e}", path.display())))?;
         let source = EqSource::new(decoded.convert_samples::<f32>(), Arc::clone(&self.eq));
 
-        sink.set_volume(volume.clamp(0.0, 1.0));
+        if self.crossfade_secs > 0.05 {
+            // Smooth fade-in on incoming track (full crossfade when overlapping, gentle swell from silence)
+            let fade_in_secs = if had_active_outgoing {
+                self.crossfade_secs
+            } else {
+                self.crossfade_secs.min(1.5)
+            };
+            sink.set_volume(0.0);
+            self.fading_in = Some((Instant::now(), Duration::from_secs_f32(fade_in_secs)));
+        } else {
+            sink.set_volume(vol);
+        }
+
         sink.append(source);
         sink.play();
 
@@ -84,7 +129,12 @@ impl AudioEngine for RodioEngine {
     }
 
     fn pause(&mut self) {
+        if let Some((old_fade, ..)) = self.fading_out.take() {
+            old_fade.stop();
+        }
+        self.fading_in = None;
         if let Some(ref sink) = self.sink {
+            sink.set_volume(self.base_volume);
             sink.pause();
         }
     }
@@ -96,6 +146,10 @@ impl AudioEngine for RodioEngine {
     }
 
     fn stop(&mut self) {
+        if let Some((old_fade, ..)) = self.fading_out.take() {
+            old_fade.stop();
+        }
+        self.fading_in = None;
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
@@ -111,13 +165,60 @@ impl AudioEngine for RodioEngine {
     }
 
     fn set_volume(&mut self, volume: f32) {
-        if let Some(ref sink) = self.sink {
-            sink.set_volume(volume.clamp(0.0, 1.0));
+        let vol = volume.clamp(0.0, 1.0);
+        self.base_volume = vol;
+        if self.fading_in.is_none()
+            && let Some(ref sink) = self.sink
+        {
+            sink.set_volume(vol);
         }
     }
 
     fn set_eq(&mut self, eq: EqConfig) {
         self.eq.update(eq);
+    }
+
+    fn set_crossfade(&mut self, secs: f32) {
+        self.crossfade_secs = secs.clamp(0.0, 10.0);
+    }
+
+    fn tick_transition(&mut self) -> bool {
+        let now = Instant::now();
+
+        if let Some((ref out_sink, started, dur, start_vol)) = self.fading_out {
+            let t = (now.saturating_duration_since(started).as_secs_f32()
+                / dur.as_secs_f32().max(0.05))
+            .clamp(0.0, 1.0);
+            if t >= 1.0 || out_sink.empty() {
+                if let Some((s, ..)) = self.fading_out.take() {
+                    s.stop();
+                }
+            } else {
+                // Equal-power cosine fade-out
+                let gain = (t * FRAC_PI_2).cos();
+                out_sink.set_volume(start_vol * gain);
+            }
+        }
+
+        if let Some((started, dur)) = self.fading_in {
+            let t = (now.saturating_duration_since(started).as_secs_f32()
+                / dur.as_secs_f32().max(0.05))
+            .clamp(0.0, 1.0);
+            if let Some(ref sink) = self.sink {
+                if t >= 1.0 {
+                    sink.set_volume(self.base_volume);
+                    self.fading_in = None;
+                } else {
+                    // Equal-power sine fade-in
+                    let gain = (t * FRAC_PI_2).sin();
+                    sink.set_volume(self.base_volume * gain);
+                }
+            } else {
+                self.fading_in = None;
+            }
+        }
+
+        self.fading_out.is_some() || self.fading_in.is_some()
     }
 
     fn position_secs(&self) -> f64 {

@@ -13,7 +13,7 @@ use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 const HASH_SAMPLE_BYTES: usize = 64 * 1024;
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 
 /// Audio file extensions supported natively by Zuno (Symphonia + Rodio / Android Media3).
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
@@ -50,70 +50,103 @@ pub fn compute_zuno_id(path: &Path, file_size: u64) -> std::io::Result<String> {
     Ok(hex[..16].to_string())
 }
 
-/// Scan `zuno/songs/` incrementally using `.zuno/index.json` cache to skip unchanged files.
+/// Scan `zuno/songs/` plus any user-linked external music directories incrementally
+/// using `.zuno/index.json` cache to skip unchanged files (zero-copy — audio stays in place).
 pub fn scan_songs(paths: &ZunoPaths) -> Result<Vec<Track>> {
     paths.ensure_dirs()?;
-    let songs_dir = paths.songs_dir();
 
-    // Load prior index cache keyed by relative path for O(1) incremental skips.
-    let cached_by_path: HashMap<String, Track> = load_cached_index(paths)
+    // Load prior index cache keyed by `(source_dir, rel_path)` for O(1) incremental skips.
+    let cached_by_key: HashMap<(Option<String>, String), Track> = load_cached_index(paths)
         .into_iter()
-        .map(|t| (t.rel_path.clone(), t))
+        .map(|t| ((t.source_dir.clone(), t.rel_path.clone()), t))
         .collect();
+
+    let mut roots: Vec<(std::path::PathBuf, Option<String>, String)> = Vec::new();
+    roots.push((paths.songs_dir(), None, String::new()));
+
+    for ext_dir in paths.load_extra_dirs() {
+        if !ext_dir.is_dir() {
+            continue;
+        }
+        let dir_str = ext_dir.to_string_lossy().into_owned();
+        let root_label = ext_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "External".to_string());
+        roots.push((ext_dir, Some(dir_str), root_label));
+    }
 
     let mut tracks: Vec<Track> = Vec::new();
     let mut seen_ids: HashMap<String, usize> = HashMap::new();
 
-    for entry in WalkDir::new(&songs_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let abs_path = entry.path();
-        if !is_supported_audio(abs_path) {
-            continue;
-        }
-
-        let Ok(rel_raw) = abs_path.strip_prefix(&songs_dir) else {
-            continue;
-        };
-        let Ok(rel_path) = normalize_rel_path(&rel_raw.to_string_lossy()) else {
-            continue;
-        };
-
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let file_size = meta.len();
-        let modified_secs = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        let mut track = if let Some(cached) = cached_by_path.get(&rel_path) {
-            if cached.file_size == file_size && cached.modified_secs == modified_secs {
-                cached.clone()
-            } else {
-                scan_single_file(abs_path, &rel_path, file_size, modified_secs)?
+    for (root_path, source_dir, root_label) in roots {
+        for entry in WalkDir::new(&root_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
             }
-        } else {
-            scan_single_file(abs_path, &rel_path, file_size, modified_secs)?
-        };
+            let abs_path = entry.path();
+            if !is_supported_audio(abs_path) {
+                continue;
+            }
 
-        // Ensure unique Track::id even if the user places byte-identical copies in two folders.
-        let base_id = track.id.clone();
-        let count = seen_ids.entry(base_id.clone()).or_insert(0);
-        *count += 1;
-        if *count > 1 {
-            track.id = format!("{}-{}", base_id, *count);
+            let Ok(rel_raw) = abs_path.strip_prefix(&root_path) else {
+                continue;
+            };
+            let Ok(rel_path) = normalize_rel_path(&rel_raw.to_string_lossy()) else {
+                continue;
+            };
+
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let file_size = meta.len();
+            let modified_secs = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            let key = (source_dir.clone(), rel_path.clone());
+            let mut track = if let Some(cached) = cached_by_key.get(&key) {
+                if cached.file_size == file_size && cached.modified_secs == modified_secs {
+                    cached.clone()
+                } else {
+                    scan_single_file(
+                        abs_path,
+                        &rel_path,
+                        source_dir.clone(),
+                        &root_label,
+                        file_size,
+                        modified_secs,
+                    )?
+                }
+            } else {
+                scan_single_file(
+                    abs_path,
+                    &rel_path,
+                    source_dir.clone(),
+                    &root_label,
+                    file_size,
+                    modified_secs,
+                )?
+            };
+
+            // Ensure unique Track::id even if the user places byte-identical copies in two folders.
+            let base_id = track.id.clone();
+            let count = seen_ids.entry(base_id.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                track.id = format!("{}-{}", base_id, *count);
+            }
+
+            tracks.push(track);
         }
-
-        tracks.push(track);
     }
 
     tracks.sort_by(|a, b| {
@@ -131,6 +164,8 @@ pub fn scan_songs(paths: &ZunoPaths) -> Result<Vec<Track>> {
 fn scan_single_file(
     abs_path: &Path,
     rel_path: &str,
+    source_dir: Option<String>,
+    root_label: &str,
     file_size: u64,
     modified_secs: u64,
 ) -> Result<Track> {
@@ -141,10 +176,18 @@ fn scan_single_file(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| rel_path.to_string());
 
-    let folder = Path::new(rel_path)
+    let sub_folder = Path::new(rel_path)
         .parent()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default();
+
+    let folder = if root_label.is_empty() {
+        sub_folder
+    } else if sub_folder.is_empty() {
+        root_label.to_string()
+    } else {
+        format!("{root_label}/{sub_folder}")
+    };
 
     let mut title = fallback_title;
     let mut artist = String::from("Unknown Artist");
@@ -202,6 +245,7 @@ fn scan_single_file(
         file_size,
         modified_secs,
         folder,
+        source_dir,
         has_cover,
     })
 }
@@ -274,5 +318,37 @@ mod tests {
         // Second scan hits cache and preserves exact IDs.
         let second = scan_songs(&paths).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn scans_external_music_directories_zero_copy() {
+        let root = tempdir().unwrap();
+        let ext = tempdir().unwrap();
+        let paths = ZunoPaths::new(root.path());
+        paths.ensure_dirs().unwrap();
+
+        fs::write(paths.songs_dir().join("local.mp3"), b"local-audio-bytes").unwrap();
+        fs::create_dir_all(ext.path().join("favs")).unwrap();
+        fs::write(ext.path().join("favs/external.flac"), b"external-flac-bytes").unwrap();
+
+        paths.add_extra_dir(&ext.path().to_string_lossy()).unwrap();
+        let tracks = scan_songs(&paths).unwrap();
+        assert_eq!(tracks.len(), 2);
+
+        let ext_track = tracks
+            .iter()
+            .find(|t| t.rel_path == "favs/external.flac")
+            .expect("external track indexed");
+        assert!(ext_track.source_dir.is_some());
+        let resolved = paths
+            .resolve_track_path(&ext_track.rel_path, ext_track.source_dir.as_deref())
+            .unwrap();
+        assert!(resolved.exists());
+
+        // Removing the linked directory must NOT delete files on disk!
+        paths.remove_extra_dir(&ext.path().to_string_lossy()).unwrap();
+        assert!(ext.path().join("favs/external.flac").exists());
+        let after = scan_songs(&paths).unwrap();
+        assert_eq!(after.len(), 1);
     }
 }

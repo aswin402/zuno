@@ -15,6 +15,7 @@ pub use config::ZunoPaths;
 pub use error::{Result, ZunoError};
 pub use library::Library;
 pub use models::{
-    CoverArt, FolderSummary, PersistedState, PlayState, PlaybackStatus, Playlist, RepeatMode, Track,
+    CoverArt, FolderSummary, MusicSource, PersistedState, PlayState, PlaybackStatus, Playlist,
+    RepeatMode, Track,
 };
 pub use queue::QueueManager;

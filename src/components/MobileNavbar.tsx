@@ -5,7 +5,13 @@ import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
 import { ZunoLogo } from '@/components/ZunoLogo'
 import { cn } from '@/lib/utils'
-import type { IconPackId, ThemeMode, ThemeTransitionId } from '@/lib/appearance'
+import type {
+  IconPackId,
+  ThemeMode,
+  ThemeToggleStyleId,
+  ThemeTransitionId,
+  ThemeTransitionStartId,
+} from '@/lib/appearance'
 import type { Playlist } from '@/lib/zunoApi'
 import type { AppPage } from '@/components/DesktopSidebar'
 
@@ -13,16 +19,20 @@ interface MobileNavbarProps {
   page: AppPage
   activePlaylistSlug: string | null
   playlists: Playlist[]
+  sourceCount: number
   eqEnabled: boolean
   eqLabel: string
   mode: ThemeMode
   themeTransition: ThemeTransitionId
+  themeTransitionStart: ThemeTransitionStartId
+  themeToggleStyle: ThemeToggleStyleId
   iconPack: IconPackId
   onToggleMode: () => void
   onGoHome: () => void
   onOpenSearch: () => void
   onGoEqualizer: () => void
   onGoCustomize: () => void
+  onOpenFolders: () => void
   onOpenPlaylist: (slug: string) => void
   onCreatePlaylist: () => void
   onRescan: () => void
@@ -38,16 +48,20 @@ export function MobileNavbar({
   page,
   activePlaylistSlug,
   playlists,
+  sourceCount,
   eqEnabled,
   eqLabel,
   mode,
   themeTransition,
+  themeTransitionStart,
+  themeToggleStyle,
   iconPack,
   onToggleMode,
   onGoHome,
   onOpenSearch,
   onGoEqualizer,
   onGoCustomize,
+  onOpenFolders,
   onOpenPlaylist,
   onCreatePlaylist,
   onRescan,
@@ -85,6 +99,8 @@ export function MobileNavbar({
           <EaseThemeToggle
             mode={mode}
             transition={themeTransition}
+            transitionStart={themeTransitionStart}
+            toggleStyle={themeToggleStyle}
             onToggle={onToggleMode}
             size="md"
           />
@@ -99,7 +115,22 @@ export function MobileNavbar({
               (page === 'customize' || page === 'equalizer') && 'border-primary/60',
             )}
           >
-            <Menu className="h-4 w-4" />
+            {iconPack === 'skiper99' ? (
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                className="zuno-icon zuno-pack-skiper99 h-4 w-4"
+                aria-hidden="true"
+              >
+                <path className="zuno-skiper99-bar zuno-skiper99-bar-1" d="M4 7h16" />
+                <path className="zuno-skiper99-bar zuno-skiper99-bar-2" d="M4 12h13" />
+                <path className="zuno-skiper99-bar zuno-skiper99-bar-3" d="M4 17h10" />
+              </svg>
+            ) : (
+              <Menu className="h-4 w-4" />
+            )}
             {eqEnabled && (
               <span
                 className="pointer-events-none absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-primary"
@@ -172,6 +203,14 @@ export function MobileNavbar({
                   pack={iconPack}
                   label="Search songs"
                   onClick={() => closeAnd(onOpenSearch)}
+                />
+
+                <DrawerItem
+                  icon="folder"
+                  pack={iconPack}
+                  label="Music folders"
+                  badge={String(sourceCount)}
+                  onClick={() => closeAnd(onOpenFolders)}
                 />
 
                 <DrawerItem

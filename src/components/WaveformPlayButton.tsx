@@ -31,10 +31,10 @@ export function WaveformPlayButton({
       onClick={onClick}
       aria-label={isPlaying ? 'Pause' : 'Play'}
       className={cn(
-        'relative flex items-center justify-center rounded-full transition-colors cursor-pointer',
+        'relative flex items-center justify-center rounded-full transition-all active:scale-95 cursor-pointer',
         btnSizeCls,
         inverted
-          ? 'bg-primary text-primary-foreground shadow-md active:scale-95'
+          ? 'bg-primary text-primary-foreground shadow-md'
           : 'bg-secondary/80 text-foreground hover:bg-secondary',
         className,
       )}
@@ -56,6 +56,102 @@ export function WaveformPlayButton({
           />
         ))}
       </span>
+    </button>
+  )
+}
+
+/**
+ * Spinning Vinyl Record Play/Pause toggle button inspired by @skiper-ui/skiper25:
+ * Spins smoothly while playing and pauses gracefully with a crisp center spindle/play mark.
+ */
+export function VinylPlayButton({
+  isPlaying,
+  onClick,
+  size = 'md',
+  inverted = false,
+  className,
+}: WaveformPlayButtonProps) {
+  const btnSizeCls =
+    size === 'lg' ? 'h-12 w-12' : size === 'sm' ? 'h-9 w-9' : 'h-9 w-9'
+  const svgSizeCls =
+    size === 'lg' ? 'h-11 w-11' : size === 'sm' ? 'h-8 w-8' : 'h-8 w-8'
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isPlaying ? 'Pause' : 'Play'}
+      className={cn(
+        'relative flex items-center justify-center rounded-full transition-transform active:scale-95 cursor-pointer',
+        btnSizeCls,
+        inverted ? 'text-primary-foreground' : 'text-foreground',
+        className,
+      )}
+    >
+      <svg
+        viewBox="0 0 36 36"
+        fill="none"
+        className={cn(
+          svgSizeCls,
+          isPlaying ? 'animate-vinyl-spin' : 'animate-vinyl-paused',
+        )}
+        aria-hidden="true"
+      >
+        <circle
+          cx="18"
+          cy="18"
+          r="16.5"
+          fill={inverted ? 'currentColor' : 'var(--secondary)'}
+          fillOpacity={inverted ? 0.16 : 1}
+          stroke="currentColor"
+          strokeOpacity="0.45"
+          strokeWidth="1.2"
+        />
+        <circle
+          cx="18"
+          cy="18"
+          r="12.5"
+          stroke="currentColor"
+          strokeOpacity="0.22"
+          strokeWidth="1"
+          strokeDasharray="16 8"
+        />
+        <circle
+          cx="18"
+          cy="18"
+          r="9"
+          stroke="currentColor"
+          strokeOpacity="0.26"
+          strokeWidth="1"
+          strokeDasharray="10 6"
+        />
+        <circle
+          cx="18"
+          cy="18"
+          r="5"
+          fill={inverted ? 'currentColor' : 'var(--primary)'}
+          fillOpacity={inverted ? 0.92 : 1}
+        />
+        <circle
+          cx="18"
+          cy="18"
+          r="1.6"
+          fill={inverted ? 'var(--primary)' : 'var(--primary-foreground)'}
+        />
+      </svg>
+
+      {!isPlaying && (
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <svg
+            viewBox="0 0 16 16"
+            className="h-3 w-3 translate-x-[0.5px] drop-shadow-xs"
+            fill={inverted ? 'var(--primary)' : 'var(--primary-foreground)'}
+            aria-hidden="true"
+          >
+            <path d="M5 3.6l7.5 4.4L5 12.4V3.6z" />
+          </svg>
+        </span>
+      )}
     </button>
   )
 }

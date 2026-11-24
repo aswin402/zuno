@@ -1,15 +1,22 @@
 use crate::error::{Result, ZunoError};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SourcesConfig {
+    #[serde(default)]
+    extra_dirs: Vec<String>,
+}
 
 /// Manages the portable `zuno/` directory layout across Linux and Android.
 ///
 /// Layout:
 /// ```text
 /// <root>/
-/// ├── songs/          # User drops audio files or subfolders here
+/// ├── songs/          # Default music folder (user can also link external dirs zero-copy)
 /// ├── playlists/      # Relative UTF-8 .m3u8 pointer playlists
-/// └── .zuno/          # Local cache (index + playback state, safe to delete)
+/// └── .zuno/          # Local cache (index, sources, playback state)
 /// ```
 #[derive(Debug, Clone)]
 pub struct ZunoPaths {
@@ -57,6 +64,10 @@ impl ZunoPaths {
         self.cache_dir().join("state.json")
     }
 
+    pub fn sources_path(&self) -> PathBuf {
+        self.cache_dir().join("sources.json")
+    }
+
     /// Local Unix socket path used on Linux for live GUI <-> MCP IPC.
     pub fn socket_path(&self) -> PathBuf {
         if let Ok(custom) = std::env::var("ZUNO_SOCKET") {
@@ -86,6 +97,163 @@ impl ZunoPaths {
         let clean = normalize_rel_path(rel_path)?;
         Ok(self.songs_dir().join(&clean))
     }
+
+    /// Load user-linked external music directories from `.zuno/sources.json`.
+    pub fn load_extra_dirs(&self) -> Vec<PathBuf> {
+        let Ok(raw) = fs::read_to_string(self.sources_path()) else {
+            return Vec::new();
+        };
+        let Ok(cfg) = serde_json::from_str::<SourcesConfig>(&raw) else {
+            return Vec::new();
+        };
+        let default_canon = fs::canonicalize(self.songs_dir()).unwrap_or_else(|_| self.songs_dir());
+        let mut out: Vec<PathBuf> = Vec::new();
+        for item in cfg.extra_dirs {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let p = expand_user_dir(trimmed);
+            let canon = fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+            if canon == default_canon {
+                continue;
+            }
+            if !out
+                .iter()
+                .any(|existing| fs::canonicalize(existing).unwrap_or_else(|_| existing.clone()) == canon)
+            {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// Persist linked external music directories atomically.
+    pub fn save_extra_dirs(&self, dirs: &[PathBuf]) -> Result<()> {
+        self.ensure_dirs()?;
+        let cfg = SourcesConfig {
+            extra_dirs: dirs
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        };
+        let tmp = self.cache_dir().join("sources.json.tmp");
+        fs::write(&tmp, serde_json::to_vec_pretty(&cfg)?)?;
+        fs::rename(&tmp, self.sources_path())?;
+        Ok(())
+    }
+
+    /// Link an external music directory (zero-copy — Zuno scans & plays files in place).
+    pub fn add_extra_dir(&self, raw: &str) -> Result<PathBuf> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(ZunoError::InvalidPath("folder path cannot be empty".into()));
+        }
+        let expanded = expand_user_dir(trimmed);
+        if !expanded.exists() || !expanded.is_dir() {
+            return Err(ZunoError::InvalidPath(format!(
+                "folder not found: {}",
+                expanded.display()
+            )));
+        }
+        let canon = fs::canonicalize(&expanded).unwrap_or(expanded);
+        let default_canon = fs::canonicalize(self.songs_dir()).unwrap_or_else(|_| self.songs_dir());
+        if canon == default_canon {
+            return Ok(self.songs_dir());
+        }
+
+        let mut dirs = self.load_extra_dirs();
+        let already = dirs
+            .iter()
+            .any(|d| fs::canonicalize(d).unwrap_or_else(|_| d.clone()) == canon);
+        if !already {
+            dirs.push(canon.clone());
+            self.save_extra_dirs(&dirs)?;
+        }
+        Ok(canon)
+    }
+
+    /// Unlink an external music directory without touching any audio files on disk.
+    pub fn remove_extra_dir(&self, raw: &str) -> Result<bool> {
+        let trimmed = raw.trim();
+        let expanded = expand_user_dir(trimmed);
+        let target_canon = fs::canonicalize(&expanded).unwrap_or(expanded.clone());
+
+        let mut dirs = self.load_extra_dirs();
+        let before = dirs.len();
+        dirs.retain(|d| {
+            let d_canon = fs::canonicalize(d).unwrap_or_else(|_| d.clone());
+            d != &expanded && d_canon != target_canon && d.to_string_lossy() != trimmed
+        });
+        let removed = dirs.len() != before;
+        if removed {
+            self.save_extra_dirs(&dirs)?;
+        }
+        Ok(removed)
+    }
+
+    /// Resolve a track's safe absolute path inside either `zuno/songs/` or a linked external directory.
+    pub fn resolve_track_path(&self, rel_path: &str, source_dir: Option<&str>) -> Result<PathBuf> {
+        let clean = normalize_rel_path(rel_path)?;
+        let Some(root_str) = source_dir else {
+            return Ok(self.songs_dir().join(&clean));
+        };
+        let root_path = PathBuf::from(root_str);
+        let root_canon = fs::canonicalize(&root_path).unwrap_or_else(|_| root_path.clone());
+        let allowed = self.load_extra_dirs().into_iter().any(|d| {
+            let d_canon = fs::canonicalize(&d).unwrap_or(d);
+            d_canon == root_canon
+        });
+        if !allowed {
+            return Err(ZunoError::InvalidPath(format!(
+                "source directory is not linked: {root_str}"
+            )));
+        }
+        Ok(root_path.join(&clean))
+    }
+
+    /// Suggest common OS music folders (e.g. `~/Music`) that exist on disk.
+    pub fn suggested_music_dirs(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(audio) = dirs::audio_dir() {
+            candidates.push(audio);
+        }
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join("Music"));
+            candidates.push(home.join("Downloads"));
+        }
+        let default_canon = fs::canonicalize(self.songs_dir()).unwrap_or_else(|_| self.songs_dir());
+        for cand in candidates {
+            if !cand.is_dir() {
+                continue;
+            }
+            let canon = fs::canonicalize(&cand).unwrap_or(cand);
+            if canon == default_canon {
+                continue;
+            }
+            let s = canon.to_string_lossy().into_owned();
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        out
+    }
+}
+
+/// Expand leading `~` or `~/` to the user's home directory.
+pub fn expand_user_dir(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    } else if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(trimmed)
 }
 
 /// Normalize a relative path using `/` separators and reject path traversal (`..` or root).

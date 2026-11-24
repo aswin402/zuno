@@ -24,6 +24,7 @@ enum AudioCmd {
     },
     SetVolume(f32),
     SetEq(EqConfig),
+    SetTransition(f32),
     GetPosition(mpsc::Sender<f64>),
     Shutdown,
 }
@@ -86,13 +87,18 @@ impl ZunoService {
         let thread_inner = Arc::clone(&inner);
 
         // Single dedicated audio thread: owns OutputStream/Sink safely.
-        // Blocks with zero CPU wakeups while idle/paused, and polls only while actively playing.
+        // Blocks with zero CPU wakeups while idle/paused, ticks at 25ms during active crossfades,
+        // and polls at 250ms while playing to trigger early crossfades & auto-advance.
         std::thread::Builder::new()
             .name("zuno-audio".into())
             .spawn(move || {
                 let mut active = false;
+                let mut crossfade_secs: f32 = 0.0;
+                let mut fading = false;
                 loop {
-                    let msg = if active {
+                    let msg = if fading {
+                        rx.recv_timeout(Duration::from_millis(25))
+                    } else if active {
                         rx.recv_timeout(Duration::from_millis(250))
                     } else {
                         rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
@@ -105,11 +111,13 @@ impl ZunoService {
                         }) => {
                             let res = engine.load_and_play(&path, volume);
                             active = res.is_ok();
+                            fading = engine.tick_transition();
                             let _ = reply.send(res);
                         }
                         Ok(AudioCmd::Pause) => {
                             engine.pause();
                             active = false;
+                            fading = false;
                         }
                         Ok(AudioCmd::Resume) => {
                             engine.resume();
@@ -118,12 +126,17 @@ impl ZunoService {
                         Ok(AudioCmd::Stop) => {
                             engine.stop();
                             active = false;
+                            fading = false;
                         }
                         Ok(AudioCmd::Seek { pos, reply }) => {
                             let _ = reply.send(engine.seek(pos));
                         }
                         Ok(AudioCmd::SetVolume(v)) => engine.set_volume(v),
                         Ok(AudioCmd::SetEq(eq)) => engine.set_eq(eq),
+                        Ok(AudioCmd::SetTransition(secs)) => {
+                            crossfade_secs = secs.clamp(0.0, 10.0);
+                            engine.set_crossfade(crossfade_secs);
+                        }
                         Ok(AudioCmd::GetPosition(reply)) => {
                             let _ = reply.send(engine.position_secs());
                         }
@@ -132,8 +145,30 @@ impl ZunoService {
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            // Auto-advance when current track finishes playing.
-                            if engine.is_finished() {
+                            fading = engine.tick_transition();
+
+                            // Check if current track is approaching end for early overlapping crossfade,
+                            // or has finished playing normally.
+                            let early_crossfade = if crossfade_secs > 0.05 && !fading && active {
+                                let cur_dur = thread_inner
+                                    .lock()
+                                    .ok()
+                                    .and_then(|s| {
+                                        if s.play_state != PlayState::Playing {
+                                            return None;
+                                        }
+                                        let tid = s.queue.current_track_id()?;
+                                        Some(s.library.track_by_id(tid)?.duration_secs as f64)
+                                    })
+                                    .unwrap_or(0.0);
+                                let pos = engine.position_secs();
+                                cur_dur > (crossfade_secs as f64) + 1.5
+                                    && pos >= cur_dur - (crossfade_secs as f64)
+                            } else {
+                                false
+                            };
+
+                            if early_crossfade || engine.is_finished() {
                                 let should_advance = thread_inner
                                     .lock()
                                     .map(|s| s.play_state == PlayState::Playing)
@@ -145,22 +180,31 @@ impl ZunoService {
                                             Some((path, vol)) => {
                                                 if engine.load_and_play(&path, vol).is_err() {
                                                     active = false;
+                                                    fading = false;
                                                     if let Ok(mut st) = thread_inner.lock() {
                                                         st.play_state = PlayState::Stopped;
                                                     }
+                                                } else {
+                                                    fading = engine.tick_transition();
                                                 }
                                             }
                                             None => {
-                                                engine.stop();
-                                                active = false;
-                                                if let Ok(mut st) = thread_inner.lock() {
-                                                    st.play_state = PlayState::Stopped;
+                                                // If early crossfade fired on the last track with repeat off,
+                                                // let the final track finish cleanly instead of cutting it off early!
+                                                if engine.is_finished() {
+                                                    engine.stop();
+                                                    active = false;
+                                                    fading = false;
+                                                    if let Ok(mut st) = thread_inner.lock() {
+                                                        st.play_state = PlayState::Stopped;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 } else {
                                     active = false;
+                                    fading = false;
                                 }
                             }
                         }
@@ -183,7 +227,7 @@ impl ZunoService {
     pub fn resolve_track_file(&self, track_id: &str) -> Option<(PathBuf, String)> {
         let st = self.inner.lock().unwrap();
         let track = st.library.track_by_id(track_id)?;
-        let abs = st.library.paths().resolve_song_path(&track.rel_path).ok()?;
+        let abs = st.library.resolve_track_path(track).ok()?;
         Some((abs, track.rel_path.clone()))
     }
 
@@ -273,6 +317,35 @@ impl ZunoService {
             IpcRequest::ListFolders => {
                 let st = self.inner.lock().unwrap();
                 Ok(IpcData::Folders(st.library.folders()))
+            }
+
+            IpcRequest::ListSources => {
+                let st = self.inner.lock().unwrap();
+                Ok(IpcData::Sources(st.library.sources()))
+            }
+
+            IpcRequest::AddSource { path } => {
+                let mut st = self.inner.lock().unwrap();
+                let sources = st.library.add_source(&path)?;
+                Ok(IpcData::Sources(sources))
+            }
+
+            IpcRequest::RemoveSource { path } => {
+                let mut st = self.inner.lock().unwrap();
+                let sources = st.library.remove_source(&path)?;
+                let existing_ids: std::collections::HashSet<String> =
+                    st.library.tracks().iter().map(|t| t.id.clone()).collect();
+                let current_gone = st
+                    .queue
+                    .current_track_id()
+                    .map(|id| !existing_ids.contains(id))
+                    .unwrap_or(false);
+                st.queue.retain_existing(|id| existing_ids.contains(id));
+                if current_gone {
+                    st.play_state = PlayState::Stopped;
+                    let _ = self.audio_tx.send(AudioCmd::Stop);
+                }
+                Ok(IpcData::Sources(sources))
             }
 
             IpcRequest::ListPlaylists => {
@@ -426,8 +499,8 @@ impl ZunoService {
                     let mut st = self.inner.lock().unwrap();
                     let id = st.queue.previous();
                     id.and_then(|tid| {
-                        let rel = st.library.track_by_id(&tid)?.rel_path.clone();
-                        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+                        let track = st.library.track_by_id(&tid)?;
+                        let abs = st.library.resolve_track_path(track).ok()?;
                         Some((abs, st.volume))
                     })
                 };
@@ -484,6 +557,16 @@ impl ZunoService {
                 Ok(IpcData::Message("EQ updated".into()))
             }
 
+            IpcRequest::SetTransition { crossfade_secs } => {
+                let clamped = crossfade_secs.clamp(0.0, 10.0);
+                let _ = self.audio_tx.send(AudioCmd::SetTransition(clamped));
+                Ok(IpcData::Message(if clamped > 0.05 {
+                    format!("Audio crossfade set to {:.1}s", clamped)
+                } else {
+                    "Audio crossfade off".into()
+                }))
+            }
+
             IpcRequest::SetQueue {
                 track_ids,
                 start_id,
@@ -501,8 +584,8 @@ impl ZunoService {
                         .collect();
                     let chosen = st.queue.set_queue(valid, start_id.as_deref(), label);
                     chosen.and_then(|id| {
-                        let rel = st.library.track_by_id(&id)?.rel_path.clone();
-                        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+                        let track = st.library.track_by_id(&id)?;
+                        let abs = st.library.resolve_track_path(track).ok()?;
                         Some((abs, st.volume))
                     })
                 };
@@ -519,8 +602,8 @@ impl ZunoService {
                 let target = {
                     let mut st = self.inner.lock().unwrap();
                     st.queue.jump_to(index).and_then(|id| {
-                        let rel = st.library.track_by_id(&id)?.rel_path.clone();
-                        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+                        let track = st.library.track_by_id(&id)?;
+                        let abs = st.library.resolve_track_path(track).ok()?;
                         Some((abs, st.volume))
                     })
                 };
@@ -691,13 +774,11 @@ impl ZunoService {
 
         let tid = target_id
             .ok_or_else(|| ZunoError::TrackNotFound("library is empty (put songs in zuno/songs/)".into()))?;
-        let rel = st
+        let track = st
             .library
             .track_by_id(&tid)
-            .ok_or_else(|| ZunoError::TrackNotFound(tid))?
-            .rel_path
-            .clone();
-        let abs = st.library.paths().resolve_song_path(&rel)?;
+            .ok_or_else(|| ZunoError::TrackNotFound(tid))?;
+        let abs = st.library.resolve_track_path(track)?;
         Ok((abs, st.volume))
     }
 
@@ -708,8 +789,8 @@ impl ZunoService {
     fn advance_internal(&self, auto_advance: bool) -> Option<(PathBuf, f32)> {
         let mut st = self.inner.lock().unwrap();
         let tid = st.queue.next(auto_advance)?;
-        let rel = st.library.track_by_id(&tid)?.rel_path.clone();
-        let abs = st.library.paths().resolve_song_path(&rel).ok()?;
+        let track = st.library.track_by_id(&tid)?;
+        let abs = st.library.resolve_track_path(track).ok()?;
         Some((abs, st.volume))
     }
 

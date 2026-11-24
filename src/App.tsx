@@ -13,6 +13,8 @@ import { CustomizePage } from '@/pages/CustomizePage'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { AutoNextBanner } from '@/components/AutoNextBanner'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
+import { MusicFoldersModal } from '@/components/MusicFoldersModal'
+import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { Dialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -40,6 +42,8 @@ import type { SortDir, SortField } from '@/lib/sortTracks'
 import {
   isTauriRuntime,
   zunoApi,
+  zunoWindow,
+  type MusicSource,
   type PlaybackStatus,
   type Playlist,
   type RepeatMode,
@@ -116,9 +120,14 @@ export default function App() {
   const [appearance, setAppearance] = useState<AppearanceSettings>(loadAppearance)
   const [eqSettings, setEqSettings] = useState<EqSettings>(loadEqSettings)
   const lastNonEqPageRef = useRef<AppPage>('home')
+  const lastNonCustomizePageRef = useRef<AppPage>('home')
 
   const [tracks, setTracks] = useState<Track[]>([])
   const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const [sources, setSources] = useState<MusicSource[]>([])
+  const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
+  const [foldersOpen, setFoldersOpen] = useState(false)
+  const [foldersBusy, setFoldersBusy] = useState(false)
   const [lastPlayedIds, setLastPlayedIds] = useState<string[]>(loadLastPlayed)
   const [sortPref, setSortPref] = useState<{ field: SortField; dir: SortDir }>(
     loadSortPref,
@@ -228,7 +237,16 @@ export default function App() {
     if (page !== 'equalizer') {
       lastNonEqPageRef.current = page
     }
+    if (page !== 'customize') {
+      lastNonCustomizePageRef.current = page
+    }
   }, [page])
+
+  // Sync audio crossfade / fade-in duration into the pure-Rust Rodio engine
+  useEffect(() => {
+    if (!nativeAudio) return
+    zunoApi.setTransition(appearance.crossfadeSecs ?? 0).catch(() => {})
+  }, [nativeAudio, appearance.crossfadeSecs])
 
   const updateEqSettings = useCallback((patch: Partial<EqSettings>) => {
     setEqSettings((prev) => ({ ...prev, ...patch }))
@@ -313,12 +331,16 @@ export default function App() {
 
   const refreshLibrary = useCallback(async () => {
     try {
-      const [songRes, plRes] = await Promise.all([
+      const [songRes, plRes, srcRes, infoRes] = await Promise.all([
         zunoApi.listSongs(),
         zunoApi.listPlaylists(),
+        zunoApi.listSources().catch(() => [] as MusicSource[]),
+        zunoApi.getInfo().catch(() => null),
       ])
       setTracks(songRes.tracks)
       setPlaylists(plRes)
+      if (srcRes.length > 0) setSources(srcRes)
+      if (infoRes?.suggested_dirs) setSuggestedDirs(infoRes.suggested_dirs)
     } catch {
       /* backend offline */
     }
@@ -354,6 +376,9 @@ export default function App() {
   }, [volume, nativeAudio])
 
   const lastNativeTrackIdRef = useRef<string | null>(null)
+  const queueIdsRef = useRef<string[]>([])
+  queueIdsRef.current = queueIds
+
   const applyNativeStatus = useCallback((st: PlaybackStatus) => {
     setIsPlaying(st.state === 'playing')
     setPosition(st.position_secs)
@@ -363,6 +388,23 @@ export default function App() {
     if (st.queue_index !== null) setQueueIndex(st.queue_index)
     if (st.active_playlist) setActivePlaylistLabel(st.active_playlist)
     const tid = st.current_track?.id ?? null
+    // If playback changed externally (MPRIS media keys, GNOME banner, tray, CLI), sync queue!
+    if (
+      tid &&
+      (st.queue_len !== queueIdsRef.current.length ||
+        (st.queue_index !== null && queueIdsRef.current[st.queue_index] !== tid))
+    ) {
+      zunoApi
+        .queueGet()
+        .then((q) => {
+          const ids = q.tracks.map((t) => t.id)
+          if (ids.length > 0) {
+            setQueueIds(ids)
+            setBaseQueueIds(ids)
+          }
+        })
+        .catch(() => {})
+    }
     if (tid && tid !== lastNativeTrackIdRef.current) {
       lastNativeTrackIdRef.current = tid
       setLastPlayedIds((prev) => {
@@ -459,6 +501,8 @@ export default function App() {
     return favoritesPlaylist.track_ids.includes(currentTrack.id)
   }, [currentTrack, favoritesPlaylist])
 
+  const browserFadeRafRef = useRef<number>(0)
+
   const playTrackById = useCallback(
     (id: string) => {
       const el = audioRef.current
@@ -473,11 +517,37 @@ export default function App() {
         applyEqualizerToAudio(el, eqSettings, true)
       }
       resumeEqualizerContext(el)
+
+      const fadeSecs = appearance.crossfadeSecs ?? 0
+      if (browserFadeRafRef.current) {
+        cancelAnimationFrame(browserFadeRafRef.current)
+        browserFadeRafRef.current = 0
+      }
+      if (fadeSecs > 0.05) {
+        const targetVol = volume
+        const fadeMs = Math.min(fadeSecs, 4) * 1000
+        el.volume = 0
+        const started = performance.now()
+        const ramp = (now: number) => {
+          const t = Math.min(1, (now - started) / fadeMs)
+          el.volume = targetVol * Math.sin(t * (Math.PI / 2))
+          if (t < 1 && !el.paused) {
+            browserFadeRafRef.current = requestAnimationFrame(ramp)
+          } else {
+            el.volume = targetVol
+            browserFadeRafRef.current = 0
+          }
+        }
+        browserFadeRafRef.current = requestAnimationFrame(ramp)
+      } else {
+        el.volume = volume
+      }
+
       el.play()
         .then(() => setIsPlaying(true))
         .catch(() => setIsPlaying(false))
     },
-    [recordPlayed, eqSettings],
+    [recordPlayed, eqSettings, appearance.crossfadeSecs, volume],
   )
 
   const startQueue = useCallback(
@@ -765,23 +835,196 @@ export default function App() {
     }
   }, [nativeAudio, applyNativeStatus, repeat])
 
+  // Browser Media Session API (for web/mobile mode — native Tauri uses Rust MPRIS2 directly)
+  useEffect(() => {
+    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return
+    }
+    const ms = navigator.mediaSession
+    if (currentTrack) {
+      const artist =
+        currentTrack.artist === 'Unknown Artist' && currentTrack.folder
+          ? currentTrack.folder
+          : currentTrack.artist
+      const artwork = currentTrack.has_cover
+        ? [{ src: zunoApi.coverUrl(currentTrack.id) }]
+        : [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
+      ms.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist,
+        album: currentTrack.album || currentTrack.folder || 'Zuno',
+        artwork,
+      })
+    } else {
+      ms.metadata = null
+    }
+    ms.playbackState = currentTrack ? (isPlaying ? 'playing' : 'paused') : 'none'
+  }, [nativeAudio, currentTrack, isPlaying])
+
+  useEffect(() => {
+    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return
+    }
+    const ms = navigator.mediaSession
+    const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler)
+      } catch {
+        /* unsupported action */
+      }
+    }
+    safeSet('play', () => {
+      if (!isPlaying) handleTogglePlay()
+    })
+    safeSet('pause', () => {
+      if (isPlaying) handleTogglePlay()
+    })
+    safeSet('previoustrack', () => handlePrev())
+    safeSet('nexttrack', () => handleNext(false))
+    safeSet('seekto', (details) => {
+      if (typeof details.seekTime === 'number') {
+        setPosition(details.seekTime)
+        handleSeekCommit(details.seekTime)
+      }
+    })
+    return () => {
+      safeSet('play', null)
+      safeSet('pause', null)
+      safeSet('previoustrack', null)
+      safeSet('nexttrack', null)
+      safeSet('seekto', null)
+    }
+  }, [nativeAudio, isPlaying, handleTogglePlay, handlePrev, handleNext, handleSeekCommit])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setSearchOpen((v) => !v)
-        return
-      }
-      if (!inInput && e.code === 'Space') {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const inInput =
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        Boolean(target?.isContentEditable)
+      const hasModifier = e.ctrlKey || e.altKey || e.metaKey
+
+      // Hardware / OS Media Keys forwarded to focused window
+      if (e.key === 'MediaPlayPause' || e.code === 'MediaPlayPause') {
         e.preventDefault()
         handleTogglePlay()
+        return
+      }
+      if (e.key === 'MediaTrackNext' || e.code === 'MediaTrackNext') {
+        e.preventDefault()
+        handleNext(false)
+        return
+      }
+      if (e.key === 'MediaTrackPrevious' || e.code === 'MediaTrackPrevious') {
+        e.preventDefault()
+        handlePrev()
+        return
+      }
+      if (e.key === 'MediaStop' || e.code === 'MediaStop') {
+        e.preventDefault()
+        if (nativeAudio) {
+          zunoApi.stop().then(applyNativeStatus).catch(() => {})
+        } else if (audioRef.current) {
+          audioRef.current.pause()
+          audioRef.current.currentTime = 0
+          setIsPlaying(false)
+          setPosition(0)
+        }
+        return
+      }
+
+      // App shortcuts with Ctrl / Meta
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        const lower = e.key.toLowerCase()
+        if (lower === 'k') {
+          e.preventDefault()
+          setSearchOpen((v) => !v)
+          return
+        }
+        if (lower === 'q' && nativeAudio) {
+          e.preventDefault()
+          zunoWindow.quit()
+          return
+        }
+        // Never intercept other system Ctrl/Super combos (Ctrl+C, Super+Space, Ctrl+Alt+T, etc.)
+        return
+      }
+
+      // Never intercept Alt / Super system window manager shortcuts (Alt+Space, Alt+Tab, Alt+F4, etc.)
+      if (hasModifier) return
+
+      if (e.key === 'F11' && nativeAudio) {
+        e.preventDefault()
+        zunoWindow.toggleFullscreen()
+        return
+      }
+
+      if (inInput) return
+
+      // Plain Space (without Alt/Ctrl/Meta/Shift) toggles play/pause
+      if (e.code === 'Space' && !e.shiftKey) {
+        e.preventDefault()
+        handleTogglePlay()
+        return
+      }
+
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          handleNext(false)
+        } else {
+          const maxDur = duration > 0 ? duration : (currentTrack?.duration_secs ?? 0)
+          const targetPos = Math.min(maxDur > 0 ? maxDur : position + 5, position + 5)
+          setPosition(targetPos)
+          handleSeekCommit(targetPos)
+        }
+        return
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          handlePrev()
+        } else {
+          const targetPos = Math.max(0, position - 5)
+          setPosition(targetPos)
+          handleSeekCommit(targetPos)
+        }
+        return
+      }
+
+      if (!e.shiftKey) {
+        const lower = e.key.toLowerCase()
+        if (lower === 'm') {
+          e.preventDefault()
+          setVolume((v) => (v > 0.001 ? 0 : 0.8))
+        } else if (lower === 's') {
+          e.preventDefault()
+          handleToggleShuffle()
+        } else if (lower === 'r') {
+          e.preventDefault()
+          handleCycleRepeat()
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleTogglePlay])
+  }, [
+    nativeAudio,
+    applyNativeStatus,
+    currentTrack,
+    duration,
+    position,
+    handleTogglePlay,
+    handleNext,
+    handlePrev,
+    handleSeekCommit,
+    handleToggleShuffle,
+    handleCycleRepeat,
+  ])
 
   async function handleConfirmDeleteSong() {
     if (!deleteTarget) return
@@ -824,6 +1067,38 @@ export default function App() {
       notify(msg)
     } catch (err) {
       notify(String(err))
+    }
+  }
+
+  async function handleAddMusicFolder(path: string) {
+    setFoldersBusy(true)
+    try {
+      const updated = await zunoApi.addSource(path)
+      setSources(updated)
+      await refreshLibrary()
+      notify('Linked music folder')
+    } finally {
+      setFoldersBusy(false)
+    }
+  }
+
+  async function handlePickNativeFolder() {
+    const picked = await zunoApi.pickMusicFolder()
+    if (!picked) return
+    await handleAddMusicFolder(picked)
+  }
+
+  async function handleRemoveMusicFolder(path: string) {
+    setFoldersBusy(true)
+    try {
+      const updated = await zunoApi.removeSource(path)
+      setSources(updated)
+      await refreshLibrary()
+      notify('Unlinked folder (files untouched)')
+    } catch (err) {
+      notify(String(err))
+    } finally {
+      setFoldersBusy(false)
     }
   }
 
@@ -1061,13 +1336,38 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full overflow-hidden bg-background text-foreground">
+    <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-background text-foreground">
+      {/* Custom Themed Native Desktop Window Titlebar (Tauri frameless chrome) */}
+      <WindowTitlebar
+        styleVariant={appearance.titlebarStyle}
+        align={appearance.titlebarAlign}
+        showTrack={appearance.titlebarShowTrack}
+        compact={appearance.titlebarCompact}
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+      />
+
+      <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
       {!nativeAudio && (
         <audio
           ref={audioRef}
           preload="auto"
           onTimeUpdate={(e) => {
-            const t = e.currentTarget.currentTime
+            const el = e.currentTarget
+            const t = el.currentTime
+            const fadeSecs = appearance.crossfadeSecs ?? 0
+            if (
+              fadeSecs > 0.05 &&
+              Number.isFinite(el.duration) &&
+              el.duration > fadeSecs + 1.5 &&
+              !browserFadeRafRef.current
+            ) {
+              const remaining = el.duration - t
+              if (remaining <= fadeSecs && remaining > 0) {
+                const ratio = Math.max(0, Math.min(1, remaining / fadeSecs))
+                el.volume = volume * Math.sin(ratio * (Math.PI / 2))
+              }
+            }
             if (Math.abs(t - lastReportedPosRef.current) >= 0.25 || t < 0.05) {
               lastReportedPosRef.current = t
               setPosition(t)
@@ -1092,9 +1392,12 @@ export default function App() {
         playlists={playlists}
         songCount={tracks.length}
         recentCount={lastPlayedTracks.length}
+        sourceCount={Math.max(1, sources.length)}
         eqEnabled={eqSettings.enabled}
         mode={appearance.mode}
         themeTransition={appearance.themeTransition}
+        themeTransitionStart={appearance.themeTransitionStart}
+        themeToggleStyle={appearance.themeToggleStyle}
         iconPack={appearance.iconPack}
         onToggleMode={toggleThemeMode}
         onGoHome={() => {
@@ -1124,6 +1427,7 @@ export default function App() {
           setSearchOpen(false)
           setPage('customize')
         }}
+        onOpenFolders={() => setFoldersOpen(true)}
         onCreatePlaylist={() => {
           setCreateName('')
           setCreateInitialTrackId(undefined)
@@ -1138,10 +1442,13 @@ export default function App() {
           page={page}
           activePlaylistSlug={listCtx.kind === 'playlist' ? listCtx.slug : null}
           playlists={playlists}
+          sourceCount={Math.max(1, sources.length)}
           eqEnabled={eqSettings.enabled}
           eqLabel={eqLabel}
           mode={appearance.mode}
           themeTransition={appearance.themeTransition}
+          themeTransitionStart={appearance.themeTransitionStart}
+          themeToggleStyle={appearance.themeToggleStyle}
           iconPack={appearance.iconPack}
           onToggleMode={toggleThemeMode}
           onGoHome={() => {
@@ -1157,6 +1464,7 @@ export default function App() {
             setSearchOpen(false)
             setPage('customize')
           }}
+          onOpenFolders={() => setFoldersOpen(true)}
           onOpenPlaylist={(slug) => {
             setSearchOpen(false)
             setListCtx({ kind: 'playlist', slug })
@@ -1171,15 +1479,6 @@ export default function App() {
           onRescan={handleRescan}
         />
 
-        {page === 'customize' ? (
-          <main className="min-h-0 flex-1 overflow-hidden">
-            <CustomizePage
-              settings={appearance}
-              onChange={updateAppearance}
-              onReset={resetAppearance}
-            />
-          </main>
-        ) : (
         <CompactScrollArea
           className="min-h-0 flex-1"
           viewportClassName={cn(
@@ -1191,6 +1490,7 @@ export default function App() {
             <HomePage
               tracks={tracks}
               playlists={playlists}
+              sourceCount={Math.max(1, sources.length)}
               currentTrackId={currentTrack?.id ?? null}
               isPlaying={isPlaying}
               sortField={sortPref.field}
@@ -1198,6 +1498,7 @@ export default function App() {
               appearance={appearance}
               onSortChange={handleMainSortChange}
               onPlayAll={handlePlayAllHome}
+              onOpenFolders={() => setFoldersOpen(true)}
               onPlayTrack={selectOrToggleTrack}
               onDeleteTrack={handleRequestDeleteTrack}
               onCreatePlaylist={handleOpenCreatePlaylist}
@@ -1347,7 +1648,6 @@ export default function App() {
           )}
         </main>
         </CompactScrollArea>
-        )}
 
         {/* Desktop Floating Sticky Bottom Player Bar (>= 1024px) */}
         <DesktopPlayerBar
@@ -1417,9 +1717,21 @@ export default function App() {
         onClose={() => setSearchOpen(false)}
       />
 
-      {/* Full-Screen Now Playing Player (Mobile + Desktop) */}
+      {/* Full-Screen Appearance & Audio Customize Studio (Desktop + Mobile, below custom titlebar) */}
+      {page === 'customize' && (
+        <div className="absolute inset-0 z-30 h-full w-full bg-background animate-sheet-up">
+          <CustomizePage
+            settings={appearance}
+            onChange={updateAppearance}
+            onReset={resetAppearance}
+            onBack={() => setPage(lastNonCustomizePageRef.current)}
+          />
+        </div>
+      )}
+
+      {/* Full-Screen Now Playing Player (Mobile + Desktop, below custom titlebar) */}
       {mobilePlayerOpen && (
-        <div className="fixed inset-0 z-40 h-[100dvh] w-full">
+        <div className="absolute inset-0 z-40 h-full w-full">
           <NowPlayingPanel
             {...nowPlayingProps}
             eqEnabled={eqSettings.enabled}
@@ -1477,6 +1789,19 @@ export default function App() {
         </form>
       </Dialog>
 
+      {/* Music Folders Manager (Zero-copy Multi-Directory Import) */}
+      <MusicFoldersModal
+        open={foldersOpen}
+        sources={sources}
+        suggestedDirs={suggestedDirs}
+        busy={foldersBusy}
+        onClose={() => setFoldersOpen(false)}
+        onPickNativeFolder={handlePickNativeFolder}
+        onAddFolder={handleAddMusicFolder}
+        onRemoveFolder={handleRemoveMusicFolder}
+        onRescan={handleRescan}
+      />
+
       {/* Delete Song Confirmation Dialog */}
       <Dialog
         open={Boolean(deleteTarget)}
@@ -1484,7 +1809,9 @@ export default function App() {
         title="Delete Song"
         subtitle={
           deleteTarget
-            ? `Permanently remove "${deleteTarget.title}" from your Zuno folder?`
+            ? deleteTarget.source_dir
+              ? `Permanently delete "${deleteTarget.title}" from ${deleteTarget.source_dir}? (To keep files, unlink the folder in Music Folders instead.)`
+              : `Permanently remove "${deleteTarget.title}" from your Zuno folder?`
             : undefined
         }
       >
@@ -1519,10 +1846,11 @@ export default function App() {
 
       {/* Floating Top-Center Hint Toast (never collides inline with dock or rows) */}
       {toast && !autoNextBanner && (
-        <div className="pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-popover/95 px-4 py-2 text-xs font-medium text-popover-foreground shadow-2xl backdrop-blur-md animate-dock-pop whitespace-nowrap">
+        <div className="pointer-events-none absolute top-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-popover/95 px-4 py-2 text-xs font-medium text-popover-foreground shadow-2xl backdrop-blur-md animate-dock-pop whitespace-nowrap">
           {toast}
         </div>
       )}
+      </div>
     </div>
   )
 }

@@ -141,6 +141,7 @@ fn handle_http_connection(
             "root_dir": paths.root().display().to_string(),
             "songs_dir": paths.songs_dir().display().to_string(),
             "playlists_dir": paths.playlists_dir().display().to_string(),
+            "suggested_dirs": paths.suggested_music_dirs(),
             "mcp_http_url": format!("http://{listen_addr}/mcp"),
             "version": env!("CARGO_PKG_VERSION"),
         });

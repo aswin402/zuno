@@ -24,9 +24,30 @@ export type SurfaceStyleId =
   | 'glass'
   | 'elevated'
 export type BgPatternId = 'clean' | 'dot_grid' | 'fine_grid' | 'top_glow' | 'vignette'
-export type ThemeTransitionId = 'circle-blur' | 'circle' | 'rectangle' | 'blinds'
+export type ThemeTransitionId =
+  | 'circle-blur'
+  | 'circle'
+  | 'polygon'
+  | 'bottom-up'
+  | 'rectangle'
+  | 'blinds'
+export type ThemeTransitionStartId =
+  | 'trigger'
+  | 'center'
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right'
+export type ThemeToggleStyleId =
+  | 'eclipse'
+  | 'skiper-1'
+  | 'skiper-2'
+  | 'skiper-3'
+  | 'skiper-4'
+  | 'skiper-5'
 export type IconPackId =
   | 'lucide'
+  | 'skiper99'
   | 'tabler'
   | 'iconsax'
   | 'hugeicons'
@@ -37,8 +58,10 @@ export type IconPackId =
 export type IconStrokeId = 'thin' | 'regular' | 'bold'
 export type TrackIconStyleId = 'ring' | 'filled' | 'minimal' | 'number'
 export type PlayingStyleId = 'pulse' | 'equalizer' | 'pulse-bars' | 'minimal'
-export type PlayButtonStyleId = 'classic' | 'waveform'
+export type PlayButtonStyleId = 'classic' | 'waveform' | 'vinyl'
 export type PlayerBarStyleId = 'docked' | 'floating'
+export type TitlebarStyleId = 'minimal' | 'macos' | 'dots' | 'pill' | 'geometric'
+export type TitlebarAlignId = 'right' | 'left'
 export type ScrubberKnobStyleId =
   | 'ring'
   | 'solid'
@@ -74,6 +97,8 @@ export interface AppearanceSettings {
   surfaceStyle: SurfaceStyleId
   bgPattern: BgPatternId
   themeTransition: ThemeTransitionId
+  themeTransitionStart: ThemeTransitionStartId
+  themeToggleStyle: ThemeToggleStyleId
   iconPack: IconPackId
   iconStroke: IconStrokeId
   trackIconStyle: TrackIconStyleId
@@ -81,10 +106,16 @@ export interface AppearanceSettings {
   playButtonStyle: PlayButtonStyleId
   playerBarStyle: PlayerBarStyleId
   scrubberKnob: ScrubberKnobStyleId
+  titlebarStyle: TitlebarStyleId
+  titlebarAlign: TitlebarAlignId
+  titlebarShowTrack: boolean
+  titlebarCompact: boolean
   showLastPlayed: boolean
   showPlayPulse: boolean
   showTrackOverline: boolean
   showTrackDuration: boolean
+  /** Audio transition / crossfade & fade-in duration in seconds (0 = off, up to 10s). */
+  crossfadeSecs: number
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -103,6 +134,8 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   surfaceStyle: 'bordered',
   bgPattern: 'clean',
   themeTransition: 'circle-blur',
+  themeTransitionStart: 'trigger',
+  themeToggleStyle: 'eclipse',
   iconPack: 'lucide',
   iconStroke: 'regular',
   trackIconStyle: 'ring',
@@ -110,10 +143,15 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   playButtonStyle: 'classic',
   playerBarStyle: 'floating',
   scrubberKnob: 'ring',
+  titlebarStyle: 'minimal',
+  titlebarAlign: 'right',
+  titlebarShowTrack: true,
+  titlebarCompact: false,
   showLastPlayed: true,
   showPlayPulse: true,
   showTrackOverline: true,
   showTrackDuration: true,
+  crossfadeSecs: 0,
 }
 
 const STORAGE_KEY = 'zuno:appearance'
@@ -459,6 +497,12 @@ export const ICON_PACK_OPTIONS: {
   animated?: boolean
 }[] = [
   { id: 'lucide', label: 'Lucide', desc: 'Clean balanced strokes' },
+  {
+    id: 'skiper99',
+    label: 'Skiper 99 Animated',
+    desc: 'Kinetic wave, arrow & morph motion',
+    animated: true,
+  },
   { id: 'tabler', label: 'Tabler', desc: 'Crisp precision 24px geometry' },
   { id: 'iconsax', label: 'Iconsax', desc: 'Soft curved duotone lines' },
   { id: 'hugeicons', label: 'Hugeicons Animated', desc: 'Rounded float micro-motion', animated: true },

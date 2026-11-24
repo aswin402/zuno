@@ -9,6 +9,7 @@ import type { Playlist, Track } from '@/lib/zunoApi'
 interface HomePageProps {
   tracks: Track[]
   playlists: Playlist[]
+  sourceCount: number
   currentTrackId: string | null
   isPlaying: boolean
   sortField: SortField
@@ -16,6 +17,7 @@ interface HomePageProps {
   appearance: AppearanceSettings
   onSortChange: (field: SortField, dir: SortDir) => void
   onPlayAll: (subset?: Track[]) => void
+  onOpenFolders: () => void
   onPlayTrack: (track: Track, subset: Track[], label: string, sourceKey: string) => void
   onDeleteTrack: (track: Track) => void
   onCreatePlaylist: (initialTrackId?: string) => void
@@ -25,6 +27,7 @@ interface HomePageProps {
 export const HomePage = memo(function HomePage({
   tracks,
   playlists,
+  sourceCount,
   currentTrackId,
   isPlaying,
   sortField,
@@ -32,6 +35,7 @@ export const HomePage = memo(function HomePage({
   appearance,
   onSortChange,
   onPlayAll,
+  onOpenFolders,
   onPlayTrack,
   onDeleteTrack,
   onCreatePlaylist,
@@ -56,15 +60,31 @@ export const HomePage = memo(function HomePage({
           </h1>
         </div>
 
-        {sortedTracks.length > 0 && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => onPlayAll(sortedTracks)}
-            className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+            type="button"
+            onClick={onOpenFolders}
+            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
           >
-            <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
-            Play all
+            <ZunoIcon name="folder" pack={iconPack} className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>Folders</span>
+            {sourceCount > 1 && (
+              <span className="rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+                {sourceCount}
+              </span>
+            )}
           </button>
-        )}
+
+          {sortedTracks.length > 0 && (
+            <button
+              onClick={() => onPlayAll(sortedTracks)}
+              className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+            >
+              <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
+              Play all
+            </button>
+          )}
+        </div>
       </div>
 
       {/* AVAILABLE SONGS + Sort By */}
@@ -89,9 +109,19 @@ export const HomePage = memo(function HomePage({
         </div>
 
         {sortedTracks.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-border py-14 text-center text-xs text-muted-foreground">
-            Add audio files to{' '}
-            <span className="font-mono text-foreground">zuno/songs/</span> and rescan.
+          <div className="space-y-3 rounded-2xl border border-dashed border-border py-14 text-center text-xs text-muted-foreground">
+            <p>
+              Drop audio files in{' '}
+              <span className="font-mono text-foreground">zuno/songs/</span> or link an existing music folder.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenFolders}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+            >
+              <ZunoIcon name="folder" pack={iconPack} className="h-3.5 w-3.5" />
+              Link Music Folder
+            </button>
           </div>
         ) : (
           <div className="space-y-1">

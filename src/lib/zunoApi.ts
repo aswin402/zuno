@@ -9,6 +9,7 @@ export interface Track {
   file_size: number
   modified_secs: number
   folder: string
+  source_dir?: string | null
   has_cover: boolean
 }
 
@@ -16,6 +17,14 @@ export interface FolderSummary {
   name: string
   track_count: number
   total_duration_secs: number
+}
+
+export interface MusicSource {
+  path: string
+  label: string
+  is_default: boolean
+  exists: boolean
+  track_count: number
 }
 
 export interface Playlist {
@@ -47,6 +56,7 @@ export interface ServerInfo {
   root_dir: string
   songs_dir: string
   playlists_dir: string
+  suggested_dirs?: string[]
   mcp_http_url: string
   version: string
 }
@@ -58,6 +68,9 @@ type IpcRequest =
   | { op: 'list_songs'; folder?: string | null; limit?: number; offset?: number }
   | { op: 'search_songs'; query: string; limit?: number }
   | { op: 'list_folders' }
+  | { op: 'list_sources' }
+  | { op: 'add_source'; path: string }
+  | { op: 'remove_source'; path: string }
   | { op: 'list_playlists' }
   | { op: 'get_playlist'; name: string }
   | { op: 'create_playlist'; name: string; track_ids: string[] }
@@ -87,6 +100,7 @@ type IpcRequest =
       limiter: boolean
       bands: number[]
     }
+  | { op: 'set_transition'; crossfade_secs: number }
   | {
       op: 'set_queue'
       track_ids: string[]
@@ -174,6 +188,18 @@ export const zunoApi = {
     }),
 
   listFolders: () => callApi<FolderSummary[]>({ op: 'list_folders' }),
+  listSources: () => callApi<MusicSource[]>({ op: 'list_sources' }),
+  addSource: (path: string) => callApi<MusicSource[]>({ op: 'add_source', path }),
+  removeSource: (path: string) => callApi<MusicSource[]>({ op: 'remove_source', path }),
+  async pickMusicFolder(): Promise<string | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    try {
+      return await tauri.invoke<string | null>('pick_music_folder')
+    } catch {
+      return null
+    }
+  },
   listPlaylists: () => callApi<Playlist[]>({ op: 'list_playlists' }),
 
   getPlaylist: (name: string) =>
@@ -237,6 +263,8 @@ export const zunoApi = {
     limiter: boolean
     bands: number[]
   }) => callApi<string>({ op: 'set_eq', ...opts }),
+  setTransition: (crossfade_secs: number) =>
+    callApi<string>({ op: 'set_transition', crossfade_secs }),
   setQueue: (opts: {
     track_ids: string[]
     start_id?: string | null
@@ -288,5 +316,74 @@ export const zunoApi = {
       }),
     })
     return await res.json()
+  },
+}
+
+export type WindowResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
+/** Native Tauri v2 window chrome controls (zero extra npm dependencies). */
+export const zunoWindow = {
+  minimize: async () => {
+    const tauri = getTauriInternals()
+    if (tauri) await tauri.invoke('window_minimize').catch(() => {})
+  },
+  toggleMaximize: async (): Promise<boolean> => {
+    const tauri = getTauriInternals()
+    if (!tauri) return false
+    try {
+      return await tauri.invoke<boolean>('window_toggle_maximize')
+    } catch {
+      return false
+    }
+  },
+  isMaximized: async (): Promise<boolean> => {
+    const tauri = getTauriInternals()
+    if (!tauri) return false
+    try {
+      return await tauri.invoke<boolean>('window_is_maximized')
+    } catch {
+      return false
+    }
+  },
+  close: async () => {
+    const tauri = getTauriInternals()
+    if (tauri) await tauri.invoke('window_close').catch(() => {})
+  },
+  toggleFullscreen: async (): Promise<boolean> => {
+    const tauri = getTauriInternals()
+    if (!tauri) return false
+    try {
+      return await tauri.invoke<boolean>('window_toggle_fullscreen')
+    } catch {
+      return false
+    }
+  },
+  quit: async () => {
+    const tauri = getTauriInternals()
+    if (tauri) await tauri.invoke('app_quit').catch(() => {})
+  },
+  startDragging: async () => {
+    const tauri = getTauriInternals()
+    if (tauri) await tauri.invoke('window_start_dragging').catch(() => {})
+  },
+  startResizeDragging: async (direction: WindowResizeDir) => {
+    const tauri = getTauriInternals()
+    if (!tauri) return
+    const map: Record<WindowResizeDir, string> = {
+      n: 'North',
+      s: 'South',
+      e: 'East',
+      w: 'West',
+      ne: 'NorthEast',
+      nw: 'NorthWest',
+      se: 'SouthEast',
+      sw: 'SouthWest',
+    }
+    await tauri
+      .invoke('plugin:window|start_resize_dragging', {
+        label: 'main',
+        value: map[direction],
+      })
+      .catch(() => {})
   },
 }

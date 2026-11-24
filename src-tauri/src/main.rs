@@ -1,11 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "linux")]
+mod mpris;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 use zuno_audio::{ZunoService, ipc_unix};
 use zuno_core::ZunoPaths;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
@@ -27,10 +32,111 @@ fn zuno_info(state: tauri::State<'_, AppState>) -> serde_json::Value {
         "root_dir": paths.root().display().to_string(),
         "songs_dir": paths.songs_dir().display().to_string(),
         "playlists_dir": paths.playlists_dir().display().to_string(),
+        "suggested_dirs": paths.suggested_music_dirs(),
         "mcp_http_url": "",
         "version": env!("CARGO_PKG_VERSION"),
         "native_audio": true,
     })
+}
+
+#[tauri::command]
+fn window_minimize(window: WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn window_toggle_maximize(window: WebviewWindow) -> bool {
+    let is_max = window.is_maximized().unwrap_or(false);
+    if is_max {
+        let _ = window.unmaximize();
+        false
+    } else {
+        let _ = window.maximize();
+        true
+    }
+}
+
+#[tauri::command]
+fn window_is_maximized(window: WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
+#[tauri::command]
+fn window_close(window: WebviewWindow) {
+    let _ = window.close();
+}
+
+#[tauri::command]
+fn window_toggle_fullscreen(window: WebviewWindow) -> bool {
+    let is_fs = window.is_fullscreen().unwrap_or(false);
+    let _ = window.set_fullscreen(!is_fs);
+    !is_fs
+}
+
+#[tauri::command]
+fn app_quit(app: AppHandle, state: tauri::State<'_, AppState>) {
+    state.quitting.store(true, Ordering::SeqCst);
+    let _ = state.service.handle_request(IpcRequest::Stop);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn window_start_dragging(window: WebviewWindow) {
+    let _ = window.start_dragging();
+}
+
+#[tauri::command]
+async fn pick_music_folder() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let default_dir = {
+            let m = std::path::PathBuf::from(&home).join("Music");
+            if m.is_dir() {
+                format!("{}/", m.display())
+            } else {
+                format!("{home}/")
+            }
+        };
+
+        if let Ok(out) = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--directory",
+                "--title=Select Music Folder for Zuno",
+                &format!("--filename={default_dir}"),
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+            return None;
+        }
+
+        if let Ok(out) = std::process::Command::new("kdialog")
+            .args([
+                "--getexistingdirectory",
+                &default_dir,
+                "--title",
+                "Select Music Folder for Zuno",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn show_or_create_main_window(app: &AppHandle) {
@@ -46,6 +152,7 @@ fn show_or_create_main_window(app: &AppHandle) {
         .inner_size(1120.0, 740.0)
         .min_inner_size(360.0, 540.0)
         .resizable(true)
+        .decorations(false)
         .build();
 }
 
@@ -96,8 +203,37 @@ fn main() {
                 .body(Vec::new())
                 .unwrap()
         })
-        .invoke_handler(tauri::generate_handler![zuno_ipc, zuno_info])
+        .invoke_handler(tauri::generate_handler![
+            zuno_ipc,
+            zuno_info,
+            window_minimize,
+            window_toggle_maximize,
+            window_is_maximized,
+            window_toggle_fullscreen,
+            window_close,
+            window_start_dragging,
+            app_quit,
+            pick_music_folder
+        ])
         .setup(|app| {
+            // Native Linux MPRIS2 D-Bus media integration (GNOME/KDE notification banner,
+            // lock screen controls, hardware media keys, Bluetooth buttons & playerctl).
+            #[cfg(target_os = "linux")]
+            {
+                let mpris_svc = Arc::clone(&app.state::<AppState>().service);
+                mpris::start_mpris(
+                    mpris_svc,
+                    app.handle().clone(),
+                    |handle| show_or_create_main_window(handle),
+                    |handle| {
+                        let st = handle.state::<AppState>();
+                        st.quitting.store(true, Ordering::SeqCst);
+                        let _ = st.service.handle_request(IpcRequest::Stop);
+                        handle.exit(0);
+                    },
+                );
+            }
+
             // Minimalist B&W Zuno system tray icon with Play/Pause/Next/Prev & Destroy-WebView support
             let show_i = MenuItem::with_id(app, "show", "Show Zuno", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Play / Pause", true, None::<&str>)?;

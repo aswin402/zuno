@@ -1,7 +1,7 @@
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
-import { WaveformPlayButton } from '@/components/WaveformPlayButton'
+import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
 import type { AppearanceSettings } from '@/lib/appearance'
@@ -148,6 +148,12 @@ export function MobileDock({
 
               {appearance.playButtonStyle === 'waveform' ? (
                 <WaveformPlayButton
+                  isPlaying={isPlaying}
+                  onClick={onTogglePlay}
+                  size="sm"
+                />
+              ) : appearance.playButtonStyle === 'vinyl' ? (
+                <VinylPlayButton
                   isPlaying={isPlaying}
                   onClick={onTogglePlay}
                   size="sm"

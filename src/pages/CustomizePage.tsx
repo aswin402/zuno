@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AppWindow,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -17,12 +18,17 @@ import {
 import { ColorPicker } from '@/components/ColorPicker'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { CustomFontStudio } from '@/components/CustomFontStudio'
-import { EaseThemeToggle, runThemeViewTransition } from '@/components/EaseThemeToggle'
+import {
+  EaseThemeToggle,
+  ThemeToggleGlyph,
+  runThemeViewTransition,
+} from '@/components/EaseThemeToggle'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { Scrubber } from '@/components/Scrubber'
 import { ThemeSelector } from '@/components/ThemeSelector'
 import { Tooltip } from '@/components/ui/tooltip'
-import { WaveformPlayButton } from '@/components/WaveformPlayButton'
+import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
+import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
 import {
@@ -46,12 +52,17 @@ import {
   type SurfaceStyleId,
   type ThemeId,
   type ThemeMode,
+  type ThemeToggleStyleId,
   type ThemeTransitionId,
+  type ThemeTransitionStartId,
+  type TitlebarAlignId,
+  type TitlebarStyleId,
   type TrackIconStyleId,
 } from '@/lib/appearance'
 
 type StudioPageId =
   | 'color_themes'
+  | 'window_chrome'
   | 'surfaces'
   | 'playing_track'
   | 'scrubber'
@@ -78,12 +89,21 @@ const STUDIO_PAGES: StudioNavItem[] = [
     icon: Palette,
   },
   {
+    id: 'window_chrome',
+    group: 'Global Theme',
+    label: 'Top Titlebar & Window',
+    description:
+      'Customize the themed desktop top bar, close/minimize/restore controls, alignment, and live track pill.',
+    keywords: 'titlebar top bar window chrome close minimize maximize restore macos traffic lights pill geometric',
+    icon: AppWindow,
+  },
+  {
     id: 'surfaces',
     group: 'Global Theme',
-    label: 'Surfaces, Canvas & Motion',
+    label: 'Surfaces, Toggle & Motion',
     description:
-      'Surface materials, subtle canvas patterns, radius, density, dividers, and Dark/Light reveal transitions.',
-    keywords: 'surface glass flat bordered pattern dot grid glow vignette transition blinds circle radius density text size',
+      'Surface materials, canvas patterns, Skiper 4 theme toggle buttons, Skiper 26 reveal transitions, and geometry.',
+    keywords: 'surface glass flat bordered pattern dot grid glow vignette transition blinds circle polygon skiper4 skiper26 toggle radius density text size',
     icon: Layers,
   },
   {
@@ -107,10 +127,10 @@ const STUDIO_PAGES: StudioNavItem[] = [
   {
     id: 'player_controls',
     group: 'Music Components',
-    label: 'Player & Controls',
+    label: 'Player & Transitions',
     description:
-      'Play button style, desktop bar layout, and optional visibility toggles.',
-    keywords: 'player bar floating docked waveform button last played duration overline',
+      'Audio fade-in / crossfade transitions, play button style, desktop bar layout, and visibility toggles.',
+    keywords: 'player bar floating docked waveform button fade crossfade transition audio last played duration overline',
     icon: LayoutGrid,
   },
   {
@@ -180,13 +200,19 @@ interface CustomizePageProps {
   settings: AppearanceSettings
   onChange: (patch: Partial<AppearanceSettings>) => void
   onReset: () => void
+  onBack: () => void
 }
 
 /**
- * Zenko-grade Hierarchical Appearance & Component Studio tailored for Zuno:
- * Left tree sidebar with instant `/` search + Right live preview stage & granular controls.
+ * Full-Screen Appearance & Audio Studio tailored for Zuno:
+ * Left tree sidebar with Back button & `/` search + Right live preview stage & granular controls.
  */
-export function CustomizePage({ settings, onChange, onReset }: CustomizePageProps) {
+export function CustomizePage({
+  settings,
+  onChange,
+  onReset,
+  onBack,
+}: CustomizePageProps) {
   const [activePage, setActivePage] = useState<StudioPageId>('color_themes')
   const [searchQuery, setSearchQuery] = useState('')
   const [previewScrub, setPreviewScrub] = useState(42)
@@ -204,6 +230,11 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName
+      if (e.key === 'Escape' && tag !== 'INPUT' && tag !== 'TEXTAREA') {
+        e.preventDefault()
+        onBack()
+        return
+      }
       if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && tag !== 'INPUT' && tag !== 'TEXTAREA') {
         e.preventDefault()
         searchRef.current?.focus()
@@ -211,7 +242,7 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [onBack])
 
   const filteredPages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -236,7 +267,10 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
         customColors: {},
       })
     if (nextMode !== settings.mode) {
-      runThemeViewTransition(apply, { variant: settings.themeTransition })
+      runThemeViewTransition(apply, {
+        variant: settings.themeTransition,
+        start: settings.themeTransitionStart,
+      })
     } else {
       apply()
     }
@@ -256,9 +290,24 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col lg:flex-row">
-      {/* Desktop Left Hierarchical Studio Sidebar (Zenko-style) */}
-      <aside className="hidden w-[248px] shrink-0 flex-col border-r border-border bg-background/60 lg:flex">
+    <div className="zuno-canvas flex h-full min-h-0 w-full flex-col bg-background lg:flex-row">
+      {/* Desktop Left Hierarchical Studio Sidebar (Full-Screen Studio) */}
+      <aside className="hidden w-[264px] shrink-0 flex-col border-r border-border bg-card/60 lg:flex">
+        {/* Top Back Button + Studio Title */}
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border/70 px-3">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>Back</span>
+          </button>
+          <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+            Customize
+          </span>
+        </div>
+
         <div className="border-b border-border/70 px-3 py-3">
           <div className="relative flex items-center">
             <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-muted-foreground" />
@@ -333,15 +382,24 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
         </CompactScrollArea>
       </aside>
 
-      {/* Right Full Studio Stage */}
-      <CompactScrollArea
-        className="min-h-0 min-w-0 flex-1"
-        viewportClassName={cn(
-          settings.playerBarStyle === 'floating' && 'lg:pb-24',
-        )}
-      >
-        <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-12 pt-6 sm:px-8">
-          {/* Mobile Horizontal Studio Nav Pills */}
+      {/* Right Full-Screen Studio Stage */}
+      <CompactScrollArea className="min-h-0 min-w-0 flex-1">
+        <div className="mx-auto w-full max-w-5xl space-y-6 px-5 pb-14 pt-5 sm:px-10 sm:pt-7">
+          {/* Mobile Top Back Bar + Horizontal Studio Nav Pills */}
+          <div className="flex items-center justify-between gap-3 lg:hidden">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back</span>
+            </button>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+              Appearance Studio
+            </span>
+          </div>
+
           <div className="flex gap-1.5 overflow-x-auto pb-1 zuno-scrollbar-hide lg:hidden">
             {STUDIO_PAGES.map((item) => {
               const Icon = item.icon
@@ -383,6 +441,8 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
               <EaseThemeToggle
                 mode={settings.mode}
                 transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
                 onToggle={handleToggleMode}
                 size="md"
               />
@@ -424,25 +484,7 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
           {/* ═══════════════════ 1. COLOR THEMES & FONTS ═══════════════════ */}
           {activePage === 'color_themes' && (
             <div className="space-y-7">
-              {/* Active Theme Status Strip */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-                <div className="flex items-center gap-2.5">
-                  <EaseThemeToggle
-                    mode={settings.mode}
-                    transition={settings.themeTransition}
-                    onToggle={handleToggleMode}
-                    showLabel
-                  />
-                  <span className="rounded-full border border-border bg-card px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground">
-                    {settings.themeTransition}
-                  </span>
-                </div>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {THEME_PRESETS.find((t) => t.id === settings.theme)?.label} · {settings.mode}
-                </span>
-              </div>
-
-              {/* 4:3 Dual-Mode ThemeSelector Grid */}
+              {/* 4:3 Dark & Light ThemeSelector Grids */}
               <ThemeSelector
                 themes={THEME_PRESETS}
                 value={settings.theme}
@@ -552,7 +594,142 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
             </div>
           )}
 
-          {/* ═══════════════════ 2. SURFACES, CANVAS & MOTION ═══════════════════ */}
+          {/* ═══════════════════ 1B. TOP TITLEBAR & WINDOW ═══════════════════ */}
+          {activePage === 'window_chrome' && (
+            <div className="space-y-6">
+              <LivePreviewStage
+                title="Live Custom Desktop Titlebar Preview"
+                mode={settings.mode}
+                transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
+                onToggleMode={handleToggleMode}
+              >
+                <div className="w-full max-w-xl overflow-hidden rounded-xl border border-border bg-background shadow-lg">
+                  <WindowTitlebar
+                    preview
+                    styleVariant={settings.titlebarStyle}
+                    align={settings.titlebarAlign}
+                    showTrack={settings.titlebarShowTrack}
+                    compact={settings.titlebarCompact}
+                    currentTrack={{
+                      id: 'preview',
+                      rel_path: 'preview.mp3',
+                      title: 'midnight_chords',
+                      artist: 'Ambient',
+                      album: '',
+                      genre: null,
+                      duration_secs: 212,
+                      file_size: 0,
+                      modified_secs: 0,
+                      folder: '',
+                      has_cover: false,
+                    }}
+                    isPlaying
+                  />
+                  <div className="flex h-20 items-center justify-center bg-background/80 px-4 text-xs text-muted-foreground">
+                    Theme-matched native desktop window chrome (drag bar to move · double-click to maximize)
+                  </div>
+                </div>
+              </LivePreviewStage>
+
+              <Group
+                title="Window Controls Style"
+                description="Style of the Close, Minimize, and Maximize / Restore buttons in the top bar."
+              >
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {(
+                    [
+                      {
+                        id: 'minimal',
+                        label: 'Minimal Mono',
+                        desc: 'Quiet circular buttons with soft hover highlights',
+                      },
+                      {
+                        id: 'macos',
+                        label: 'Traffic Lights',
+                        desc: 'Compact dots that glow red, amber & green on hover',
+                      },
+                      {
+                        id: 'dots',
+                        label: 'Monochrome Dots',
+                        desc: 'Strict monochrome dots matched to your active theme',
+                      },
+                      {
+                        id: 'pill',
+                        label: 'Floating Pill',
+                        desc: 'Window controls grouped inside a rounded pill capsule',
+                      },
+                      {
+                        id: 'geometric',
+                        label: 'Sharp Studio',
+                        desc: 'Bordered square hardware keys with hairline dividers',
+                      },
+                    ] as { id: TitlebarStyleId; label: string; desc: string }[]
+                  ).map((opt) => {
+                    const active = settings.titlebarStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ titlebarStyle: opt.id })}
+                        className={cn(
+                          'flex flex-col gap-1 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground">
+                            {opt.label}
+                          </span>
+                          {active && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{opt.desc}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <Group
+                title="Controls Alignment"
+                description="Choose which side of the top bar holds Minimize, Maximize, and Close."
+              >
+                <Segmented<TitlebarAlignId>
+                  value={settings.titlebarAlign}
+                  onChange={(titlebarAlign) => onChange({ titlebarAlign })}
+                  options={[
+                    { value: 'right', label: 'Right (Linux / Windows)' },
+                    { value: 'left', label: 'Left (macOS)' },
+                  ]}
+                />
+              </Group>
+
+              <Group
+                title="Titlebar Behavior"
+                description="Fine-tune top bar density and active song badge."
+              >
+                <div className="z-surface-card divide-y divide-border rounded-2xl border border-border bg-card">
+                  <ToggleRow
+                    label="Show playing track in titlebar"
+                    description="Display a centered pill with the current song title & live indicator."
+                    checked={settings.titlebarShowTrack}
+                    onChange={(titlebarShowTrack) => onChange({ titlebarShowTrack })}
+                  />
+                  <ToggleRow
+                    label="Ultra-slim compact titlebar"
+                    description="Shrink top bar height from 36px to 30px for maximum canvas space."
+                    checked={settings.titlebarCompact}
+                    onChange={(titlebarCompact) => onChange({ titlebarCompact })}
+                  />
+                </div>
+              </Group>
+            </div>
+          )}
+
+          {/* ═══════════════════ 2. SURFACES, TOGGLE & MOTION ═══════════════════ */}
           {activePage === 'surfaces' && (
             <div className="space-y-6">
               <Group
@@ -632,15 +809,70 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
               </Group>
 
               <Group
-                title="Dark / Light Reveal Transition"
-                description="Choose the View Transition animation used when toggling between Dark and Light mode."
+                title="Theme Toggle Button Style (Skiper 4)"
+                description="Choose the animated Dark / Light toggle button icon shown in the sidebar, navbar, and studio."
               >
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                   {(
                     [
-                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Soft blurred ripple' },
-                      { id: 'circle', label: 'Crisp Circle', desc: 'Sharp radial expand' },
-                      { id: 'rectangle', label: 'Top Sweep', desc: 'Clean vertical curtain' },
+                      { id: 'eclipse', label: 'Eclipse Mask', desc: 'Smooth crescent cutout & sun rays' },
+                      { id: 'skiper-1', label: 'Split Disc', desc: 'Skiper 4 · Rotating Yin-Yang half disc' },
+                      { id: 'skiper-2', label: 'Horizon Sun', desc: 'Skiper 4 · Rising sun over horizon' },
+                      { id: 'skiper-3', label: 'Expand Dot', desc: 'Skiper 4 · Dotted sun morphing orb' },
+                      { id: 'skiper-4', label: 'Orbital Ring', desc: 'Skiper 4 · Orbiting lunar satellite' },
+                      { id: 'skiper-5', label: 'Switch Pill', desc: 'Skiper 4 · Sliding capsule toggle' },
+                    ] as { id: ThemeToggleStyleId; label: string; desc: string }[]
+                  ).map((opt) => {
+                    const active = settings.themeToggleStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ themeToggleStyle: opt.id })}
+                        className={cn(
+                          'flex items-center justify-between gap-3 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-semibold text-foreground">
+                              {opt.label}
+                            </span>
+                            {active && <Check className="h-3 w-3 shrink-0 text-primary" />}
+                          </div>
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            {opt.desc}
+                          </span>
+                        </div>
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground">
+                          <ThemeToggleGlyph
+                            style={opt.id}
+                            isDark={settings.mode === 'dark'}
+                            maskId={`preview-${opt.id}`}
+                            className="h-4 w-4"
+                          />
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <Group
+                title="Dark / Light Reveal Transition (Skiper 26)"
+                description="View Transition reveal animation & starting origin when switching between Dark and Light mode."
+              >
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                  {(
+                    [
+                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Soft blurred radial ripple' },
+                      { id: 'circle', label: 'Crisp Circle', desc: 'Sharp geometric circle expand' },
+                      { id: 'polygon', label: 'Diagonal Polygon', desc: 'Skiper 26 · Angled polygon wipe' },
+                      { id: 'bottom-up', label: 'Bottom-Up Curtain', desc: 'Skiper 26 · Rising vertical reveal' },
+                      { id: 'rectangle', label: 'Top-Down Sweep', desc: 'Clean downward curtain' },
                       { id: 'blinds', label: 'Venetian Blinds', desc: 'Slatted architectural reveal' },
                     ] as { id: ThemeTransitionId; label: string; desc: string }[]
                   ).map((opt) => {
@@ -670,6 +902,40 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                       </button>
                     )
                   })}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <Segmented<ThemeTransitionStartId>
+                    value={settings.themeTransitionStart}
+                    onChange={(themeTransitionStart) => onChange({ themeTransitionStart })}
+                    options={[
+                      { value: 'trigger', label: 'From Button' },
+                      { value: 'center', label: 'Center' },
+                      { value: 'top-left', label: 'Top Left' },
+                      { value: 'top-right', label: 'Top Right' },
+                      { value: 'bottom-left', label: 'Bottom Left' },
+                      { value: 'bottom-right', label: 'Bottom Right' },
+                    ]}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      runThemeViewTransition(handleToggleMode, {
+                        variant: settings.themeTransition,
+                        start: settings.themeTransitionStart,
+                        origin: {
+                          x: Math.round(rect.left + rect.width / 2),
+                          y: Math.round(rect.top + rect.height / 2),
+                        },
+                      })
+                    }}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                  >
+                    <Wand2 className="h-3.5 w-3.5 text-primary" />
+                    <span>Preview Transition</span>
+                  </button>
                 </div>
               </Group>
 
@@ -732,6 +998,8 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                 title="Active Song Row Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
                 onToggleMode={handleToggleMode}
               >
                 <div
@@ -890,6 +1158,8 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                 title="Interactive Scrubber Preview (drag to test)"
                 mode={settings.mode}
                 transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
                 onToggleMode={handleToggleMode}
               >
                 <div className="flex w-full max-w-lg items-center gap-4 rounded-2xl border border-border bg-card px-5 py-4">
@@ -966,14 +1236,128 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
             </div>
           )}
 
-          {/* ═══════════════════ 5. PLAYER & CONTROLS ═══════════════════ */}
+          {/* ═══════════════════ 5. PLAYER & TRANSITIONS ═══════════════════ */}
           {activePage === 'player_controls' && (
             <div className="space-y-6">
+              {/* Audio Crossfade & Fade-In Transition Controls */}
               <Group
-                title="Play Button Style"
-                description="Switch between classic Play/Pause icon and animated waveform bars."
+                title="Audio Transitions (Crossfade & Fade-In)"
+                description="Smoothly fade out the ending of the current song while fading in the next song for seamless DJ-style transitions."
               >
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="z-surface-card space-y-4 rounded-2xl border border-border bg-card p-4 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Crossfade &amp; Fade-In Duration
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {settings.crossfadeSecs > 0
+                          ? `Outgoing track fades out over ${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s while the next track smoothly fades in.`
+                          : 'Off — tracks switch instantaneously without overlapping fades.'}
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-border bg-secondary px-3 py-1 font-mono text-xs font-semibold tabular-nums text-foreground">
+                      {settings.crossfadeSecs > 0
+                        ? `${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s`
+                        : 'Off'}
+                    </span>
+                  </div>
+
+                  {/* Visual Crossfade Curve Preview */}
+                  <div className="relative h-14 w-full overflow-hidden rounded-xl border border-border/70 bg-background/70 px-3 py-2">
+                    <svg
+                      viewBox="0 0 320 44"
+                      preserveAspectRatio="none"
+                      className="h-full w-full"
+                      aria-hidden="true"
+                    >
+                      {settings.crossfadeSecs > 0 ? (
+                        <>
+                          {/* Outgoing fade-out curve */}
+                          <path
+                            d={`M 0 8 L ${Math.max(70, 160 - settings.crossfadeSecs * 8)} 8 C ${Math.max(100, 160 - settings.crossfadeSecs * 2)} 8, ${Math.min(250, 160 + settings.crossfadeSecs * 4)} 38, ${Math.min(290, 160 + settings.crossfadeSecs * 10)} 38`}
+                            fill="none"
+                            stroke="var(--muted-foreground)"
+                            strokeOpacity="0.55"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                          {/* Incoming fade-in curve */}
+                          <path
+                            d={`M ${Math.max(30, 160 - settings.crossfadeSecs * 10)} 38 C ${Math.max(70, 160 - settings.crossfadeSecs * 4)} 38, ${Math.min(220, 160 + settings.crossfadeSecs * 2)} 8, ${Math.min(250, 160 + settings.crossfadeSecs * 8)} 8 L 320 8`}
+                            fill="none"
+                            stroke="var(--primary)"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <path
+                            d="M 0 10 L 158 10 L 158 38"
+                            fill="none"
+                            stroke="var(--muted-foreground)"
+                            strokeOpacity="0.45"
+                            strokeWidth="2"
+                          />
+                          <path
+                            d="M 162 38 L 162 10 L 320 10"
+                            fill="none"
+                            stroke="var(--primary)"
+                            strokeWidth="2"
+                          />
+                        </>
+                      )}
+                    </svg>
+                  </div>
+
+                  {/* Quick duration chips */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[0, 1, 2, 3, 5, 8].map((sec) => {
+                      const active = Math.abs(settings.crossfadeSecs - sec) < 0.05
+                      return (
+                        <button
+                          key={sec}
+                          type="button"
+                          onClick={() => onChange({ crossfadeSecs: sec })}
+                          className={cn(
+                            'h-8 rounded-full px-3.5 text-xs font-medium tabular-nums transition-colors cursor-pointer',
+                            active
+                              ? 'bg-primary text-primary-foreground'
+                              : 'border border-border bg-background text-muted-foreground hover:bg-secondary hover:text-foreground',
+                          )}
+                        >
+                          {sec === 0 ? 'Off' : `${sec}s`}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Fine-grained 0..10s slider */}
+                  <div className="flex items-center gap-3 pt-1">
+                    <span className="font-mono text-[10.5px] text-muted-foreground">0s</span>
+                    <input
+                      type="range"
+                      aria-label="Audio crossfade duration in seconds"
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      value={settings.crossfadeSecs}
+                      onChange={(e) =>
+                        onChange({ crossfadeSecs: Number(e.target.value) })
+                      }
+                      className="h-1.5 flex-1 cursor-pointer accent-primary"
+                    />
+                    <span className="font-mono text-[10.5px] text-muted-foreground">10s</span>
+                  </div>
+                </div>
+              </Group>
+
+              <Group
+                title="Play Button Style (Skiper 25)"
+                description="Choose between classic Play/Pause, animated waveform bars, or spinning vinyl disc."
+              >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   {(
                     [
                       {
@@ -984,7 +1368,12 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                       {
                         id: 'waveform',
                         label: 'Waveform Toggle',
-                        desc: 'Dynamic 5-bar spring audio waveform button',
+                        desc: 'Skiper 25 · 5-bar spring audio waveform',
+                      },
+                      {
+                        id: 'vinyl',
+                        label: 'Spinning Vinyl',
+                        desc: 'Skiper 25 · Grooved record disc toggle',
                       },
                     ] as { id: PlayButtonStyleId; label: string; desc: string }[]
                   ).map((opt) => {
@@ -1008,6 +1397,10 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                         {opt.id === 'waveform' ? (
                           <span className="pointer-events-none">
                             <WaveformPlayButton isPlaying onClick={() => {}} />
+                          </span>
+                        ) : opt.id === 'vinyl' ? (
+                          <span className="pointer-events-none">
+                            <VinylPlayButton isPlaying onClick={() => {}} />
                           </span>
                         ) : (
                           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -1074,6 +1467,8 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
                 title="Live Icon Pack Preview (hover icons to test animation)"
                 mode={settings.mode}
                 transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
                 onToggleMode={handleToggleMode}
               >
                 <div className="flex flex-wrap items-center justify-center gap-3">
@@ -1103,8 +1498,8 @@ export function CustomizePage({ settings, onChange, onReset }: CustomizePageProp
               </LivePreviewStage>
 
               <Group
-                title="Icon Pack"
-                description="Choose from 8 curated vector packs including animated hover sets."
+                title="Icon Pack (incl. Skiper 99)"
+                description="Choose from 9 curated vector packs including Skiper 99 kinetic animated icons."
               >
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {ICON_PACK_OPTIONS.map((pack) => {
@@ -1195,12 +1590,16 @@ function LivePreviewStage({
   title,
   mode,
   transition,
+  transitionStart,
+  toggleStyle,
   onToggleMode,
   children,
 }: {
   title: string
   mode: ThemeMode
   transition: ThemeTransitionId
+  transitionStart?: ThemeTransitionStartId
+  toggleStyle?: ThemeToggleStyleId
   onToggleMode: () => void
   children: React.ReactNode
 }) {
@@ -1208,7 +1607,14 @@ function LivePreviewStage({
     <div className="overflow-hidden rounded-2xl border border-border bg-background/70">
       <div className="flex items-center justify-between border-b border-border/70 px-4 py-2 font-mono text-[11px] text-muted-foreground">
         <span>{title}</span>
-        <EaseThemeToggle mode={mode} transition={transition} onToggle={onToggleMode} size="sm" />
+        <EaseThemeToggle
+          mode={mode}
+          transition={transition}
+          transitionStart={transitionStart}
+          toggleStyle={toggleStyle}
+          onToggle={onToggleMode}
+          size="sm"
+        />
       </div>
       <div className="flex min-h-[144px] items-center justify-center p-6">{children}</div>
     </div>

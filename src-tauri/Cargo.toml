@@ -22,3 +22,7 @@ serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 zuno-audio = { path = "../crates/zuno-audio" }
 zuno-core = { path = "../crates/zuno-core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18"
+glib = "0.18"

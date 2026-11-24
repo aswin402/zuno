@@ -24,12 +24,17 @@ pub fn load_all_playlists(paths: &ZunoPaths, tracks: &[Track]) -> Result<Vec<Pla
     paths.ensure_dirs()?;
     let dir = paths.playlists_dir();
 
-    let mut by_path: HashMap<&str, &Track> = HashMap::with_capacity(tracks.len());
+    let mut by_path: HashMap<String, &Track> = HashMap::with_capacity(tracks.len());
     let mut by_id: HashMap<&str, &Track> = HashMap::with_capacity(tracks.len());
     let mut by_base_id: HashMap<&str, Vec<&Track>> = HashMap::new();
 
     for t in tracks {
-        by_path.insert(t.rel_path.as_str(), t);
+        if let Some(ref root) = t.source_dir {
+            let full = format!("{}/{}", root.trim_end_matches('/'), t.rel_path);
+            by_path.insert(full, t);
+        } else {
+            by_path.insert(t.rel_path.clone(), t);
+        }
         by_id.insert(t.id.as_str(), t);
         let base = t.id.split('-').next().unwrap_or(t.id.as_str());
         by_base_id.entry(base).or_default().push(t);
@@ -61,7 +66,7 @@ pub fn load_all_playlists(paths: &ZunoPaths, tracks: &[Track]) -> Result<Vec<Pla
 fn load_single_playlist(
     file_path: &Path,
     all_tracks: &[Track],
-    by_path: &HashMap<&str, &Track>,
+    by_path: &HashMap<String, &Track>,
     by_id: &HashMap<&str, &Track>,
     by_base_id: &HashMap<&str, Vec<&Track>>,
 ) -> Result<Playlist> {
@@ -126,19 +131,21 @@ fn load_single_playlist(
     let mut needs_rewrite = false;
 
     for entry in &entries {
+        let unified_raw = entry.raw_path.trim().replace('\\', "/");
         let canonical_rel = strip_songs_prefix(&entry.raw_path);
 
-        // Tier 1: Direct relative path match inside zuno/songs/
-        if let Some(ref rel) = canonical_rel {
-            if let Some(track) = by_path.get(rel.as_str()) {
-                track_ids.push(track.id.clone());
-                resolved_tracks.push(*track);
-                // If an imported .m3u8 lacks `#EXTZUNO-ID`, backfill it on next rewrite if needed.
-                if entry.zuno_id.as_deref() != Some(track.id.as_str()) {
-                    needs_rewrite = true;
-                }
-                continue;
+        // Tier 1: Direct relative path match inside zuno/songs/ or exact external absolute path
+        let direct_match = by_path
+            .get(&unified_raw)
+            .or_else(|| canonical_rel.as_ref().and_then(|rel| by_path.get(rel.as_str())));
+        if let Some(track) = direct_match {
+            track_ids.push(track.id.clone());
+            resolved_tracks.push(*track);
+            // If an imported .m3u8 lacks `#EXTZUNO-ID`, backfill it on next rewrite if needed.
+            if entry.zuno_id.as_deref() != Some(track.id.as_str()) {
+                needs_rewrite = true;
             }
+            continue;
         }
 
         // Tier 2: Self-heal via `#EXTZUNO-ID` (exact content fingerprint match after rename/move)
@@ -296,7 +303,11 @@ fn write_m3u8_atomic(
         };
         out.push_str(&format!("{}{},{}\n", EXTINF_PREFIX, dur, track.extinf_display()));
         out.push_str(&format!("{}{}\n", ZUNO_ID_PREFIX, track.id));
-        out.push_str(&format!("../songs/{}\n", track.rel_path));
+        if let Some(ref root) = track.source_dir {
+            out.push_str(&format!("{}/{}\n", root.trim_end_matches('/'), track.rel_path));
+        } else {
+            out.push_str(&format!("../songs/{}\n", track.rel_path));
+        }
     }
 
     for missing in missing_entries {

@@ -155,6 +155,7 @@ mod tests {
             file_size: 1000,
             modified_secs: 0,
             folder: folder.into(),
+            source_dir: None,
             has_cover: false,
         }
     }

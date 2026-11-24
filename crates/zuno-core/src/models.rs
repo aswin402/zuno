@@ -16,8 +16,12 @@ pub struct Track {
     pub duration_secs: u64,
     pub file_size: u64,
     pub modified_secs: u64,
-    /// Subfolder relative to `zuno/songs/` (`""` if placed directly in `songs/`).
+    /// Subfolder display label (relative to `zuno/songs/`, or prefixed with linked folder name).
     pub folder: String,
+    /// Optional absolute root directory for tracks linked from an external folder (zero-copy).
+    /// `None` means the track lives inside the default `zuno/songs/` directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<String>,
     pub has_cover: bool,
 }
 
@@ -39,12 +43,22 @@ pub struct CoverArt {
     pub bytes: Vec<u8>,
 }
 
-/// Summary of a subfolder inside `zuno/songs/`.
+/// Summary of a subfolder inside `zuno/songs/` or a linked directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FolderSummary {
     pub name: String,
     pub track_count: usize,
     pub total_duration_secs: u64,
+}
+
+/// A configured music library directory (default `zuno/songs/` or a zero-copy linked external folder).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MusicSource {
+    pub path: String,
+    pub label: String,
+    pub is_default: bool,
+    pub exists: bool,
+    pub track_count: usize,
 }
 
 /// A parsed, resolved `.m3u8` playlist inside `zuno/playlists/`.

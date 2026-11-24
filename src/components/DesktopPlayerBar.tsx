@@ -8,7 +8,7 @@ import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
-import { WaveformPlayButton } from '@/components/WaveformPlayButton'
+import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn, formatTime } from '@/lib/utils'
 import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
@@ -121,6 +121,8 @@ export function DesktopPlayerBar({
           <Tooltip label={isPlaying ? 'Pause (Space)' : 'Play (Space)'} side="top">
             {appearance.playButtonStyle === 'waveform' ? (
               <WaveformPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
+            ) : appearance.playButtonStyle === 'vinyl' ? (
+              <VinylPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
             ) : (
               <button
                 onClick={onTogglePlay}

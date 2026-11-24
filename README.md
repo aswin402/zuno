@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.4-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.5-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -188,7 +188,8 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.2** — Live 10-band Web Audio Equalizer, Zenko-grade Appearance Studio, Bencho spring Search overlay, dedicated Last Played page, nested Mobile Dock.
 - [x] **v0.0.3** — Minimalist black & white logo & app icons, Mobile Navbar + Playlists Hub, unified Full-Screen Now Playing player (desktop & mobile), EaseUI Dropdown Menus, built-in static UI server & zero-sudo Linux installer.
 - [x] **v0.0.4** — Standalone native Linux Tauri v2 desktop binary (`~9.8 MB`), pure-Rust 10-band biquad EQ + soft limiter, Destroy-WebView tray background playback, compile-time embedded Web UI in `zuno-mcp`, and audio/RAM/CPU smoothness optimizations.
-- [ ] **v0.1.0** — Native OS media keys (Linux D-Bus MPRIS) & packaged `.deb` / AppImage releases.
+- [x] **v0.0.5** — Native Linux MPRIS2 D-Bus media banner & system media keys, custom themed frameless desktop titlebar, zero-copy multi-directory music library, pure-Rust equal-power crossfade transitions, full-screen Customize Studio, and Skiper UI component options.
+- [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.
 

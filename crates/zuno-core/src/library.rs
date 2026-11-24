@@ -1,11 +1,12 @@
 use crate::config::{ZunoPaths, slugify_playlist_name};
 use crate::error::{Result, ZunoError};
-use crate::models::{CoverArt, FolderSummary, PersistedState, Playlist, Track};
+use crate::models::{CoverArt, FolderSummary, MusicSource, PersistedState, Playlist, Track};
 use crate::playlist;
 use crate::scanner;
 use crate::search;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::path::PathBuf;
 
 /// High-level facade over `zuno/songs/` and `zuno/playlists/`.
 #[derive(Debug, Clone)]
@@ -95,9 +96,65 @@ impl Library {
         search::search_tracks(&self.tracks, query, limit)
     }
 
+    pub fn resolve_track_path(&self, track: &Track) -> Result<PathBuf> {
+        self.paths
+            .resolve_track_path(&track.rel_path, track.source_dir.as_deref())
+    }
+
+    pub fn sources(&self) -> Vec<MusicSource> {
+        let mut out = Vec::new();
+        let default_dir = self.paths.songs_dir();
+        let default_count = self
+            .tracks
+            .iter()
+            .filter(|t| t.source_dir.is_none())
+            .count();
+        out.push(MusicSource {
+            path: default_dir.to_string_lossy().into_owned(),
+            label: "Zuno Songs (Default)".to_string(),
+            is_default: true,
+            exists: default_dir.is_dir(),
+            track_count: default_count,
+        });
+
+        for ext in self.paths.load_extra_dirs() {
+            let path_str = ext.to_string_lossy().into_owned();
+            let label = ext
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| path_str.clone());
+            let count = self
+                .tracks
+                .iter()
+                .filter(|t| t.source_dir.as_deref() == Some(path_str.as_str()))
+                .count();
+            out.push(MusicSource {
+                path: path_str,
+                label,
+                is_default: false,
+                exists: ext.is_dir(),
+                track_count: count,
+            });
+        }
+        out
+    }
+
+    pub fn add_source(&mut self, dir: &str) -> Result<Vec<MusicSource>> {
+        self.paths.add_extra_dir(dir)?;
+        self.rescan()?;
+        Ok(self.sources())
+    }
+
+    pub fn remove_source(&mut self, dir: &str) -> Result<Vec<MusicSource>> {
+        self.paths.remove_extra_dir(dir)?;
+        self.rescan()?;
+        Ok(self.sources())
+    }
+
     pub fn extract_cover(&self, track_id: &str) -> Option<CoverArt> {
         let track = self.track_by_id(track_id)?;
-        let abs = self.paths.resolve_song_path(&track.rel_path).ok()?;
+        let abs = self.resolve_track_path(track).ok()?;
         scanner::extract_cover_art(&abs)
     }
 
@@ -193,7 +250,7 @@ impl Library {
             .track_by_id(track_id)
             .cloned()
             .ok_or_else(|| ZunoError::TrackNotFound(track_id.to_string()))?;
-        let abs = self.paths.resolve_song_path(&track.rel_path)?;
+        let abs = self.resolve_track_path(&track)?;
         if abs.exists() {
             fs::remove_file(&abs)?;
         }

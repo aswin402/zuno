@@ -92,13 +92,31 @@ export function ZunoIcon({
   filled = false,
 }: ZunoIconProps) {
   const animClass =
-    pack === 'hugeicons'
-      ? 'zuno-pack-hugeicons'
-      : pack === 'itshover'
-        ? 'zuno-pack-itshover'
-        : pack === 'pulsoicon'
-          ? 'zuno-pack-pulso'
-          : ''
+    pack === 'skiper99'
+      ? 'zuno-pack-skiper99'
+      : pack === 'hugeicons'
+        ? 'zuno-pack-hugeicons'
+        : pack === 'itshover'
+          ? 'zuno-pack-itshover'
+          : pack === 'pulsoicon'
+            ? 'zuno-pack-pulso'
+            : ''
+
+  if (pack === 'skiper99') {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={cn('zuno-icon', animClass, className)}
+        aria-hidden="true"
+      >
+        {renderSkiper99Path(name, filled)}
+      </svg>
+    )
+  }
 
   if (pack === 'lucide' || pack === 'itshover' || pack === 'pulsoicon') {
     const Icon = LUCIDE_MAP[name]
@@ -467,5 +485,84 @@ function renderCustomPath(
           />
         </>
       )
+  }
+}
+
+/**
+ * Kinetic animated icon set inspired by @skiper-ui/skiper99 (Animated Icons 002):
+ * Staggered audio waves, kinetic arrows, and morphing menu/playlist bars.
+ */
+function renderSkiper99Path(name: ZunoIconName, filled: boolean) {
+  switch (name) {
+    case 'volume':
+      return (
+        <>
+          <path
+            d="M4.5 9.5h3.5l4.8-4.2v13.4L8 14.5H4.5A1.5 1.5 0 013 13v-2a1.5 1.5 0 011.5-1.5z"
+            fill="currentColor"
+            fillOpacity="0.14"
+          />
+          <path className="zuno-skiper99-wave-1" d="M16 9.2a4.1 4.1 0 010 5.6" />
+          <path className="zuno-skiper99-wave-2" d="M18.8 6.4a7.9 7.9 0 010 11.2" />
+        </>
+      )
+    case 'mute':
+      return (
+        <>
+          <path d="M4.5 9.5h3.5l4.8-4.2v13.4L8 14.5H4.5A1.5 1.5 0 013 13v-2a1.5 1.5 0 011.5-1.5z" />
+          <path className="zuno-skiper99-arrow" d="M16.5 9.2l4.5 5.6M21 9.2l-4.5 5.6" />
+        </>
+      )
+    case 'playlist':
+      return (
+        <>
+          <path className="zuno-skiper99-bar zuno-skiper99-bar-1" d="M3.5 6.5h13" />
+          <path className="zuno-skiper99-bar zuno-skiper99-bar-2" d="M3.5 11.5h10.5" />
+          <path className="zuno-skiper99-bar zuno-skiper99-bar-3" d="M3.5 16.5h7.5" />
+          <circle cx="17.5" cy="16.5" r="2.4" fill="currentColor" fillOpacity="0.18" />
+          <path d="M19.9 16.5V9.5l-2.8.9" />
+        </>
+      )
+    case 'play':
+      return (
+        <path
+          className="zuno-skiper99-arrow"
+          d="M7 5.5c0-1 1.1-1.7 2-1.1l10.3 6.5c.8.5.8 1.7 0 2.2L9 19.6c-.9.6-2-.1-2-1.1v-13z"
+          fill={filled ? 'currentColor' : 'none'}
+        />
+      )
+    case 'next':
+      return (
+        <g className="zuno-skiper99-arrow">
+          <path d="M18.5 6v12" />
+          <path
+            d="M6 6.2L13.8 12 6 17.8V6.2z"
+            fill={filled ? 'currentColor' : 'none'}
+          />
+        </g>
+      )
+    case 'prev':
+      return (
+        <g className="zuno-skiper99-arrow">
+          <path d="M5.5 6v12" />
+          <path
+            d="M18 6.2L10.2 12l7.8 5.8V6.2z"
+            fill={filled ? 'currentColor' : 'none'}
+          />
+        </g>
+      )
+    case 'equalizer':
+      return (
+        <>
+          <path className="zuno-skiper99-wave-1" d="M6 5v14" />
+          <path className="zuno-skiper99-wave-2" d="M12 3.5v17" />
+          <path className="zuno-skiper99-wave-1" d="M18 6.5v11" />
+          <circle cx="6" cy="14" r="1.9" fill="currentColor" />
+          <circle cx="12" cy="9" r="1.9" fill="currentColor" />
+          <circle cx="18" cy="14.5" r="1.9" fill="currentColor" />
+        </>
+      )
+    default:
+      return renderCustomPath(name, 'tabler', true, filled)
   }
 }

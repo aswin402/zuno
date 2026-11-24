@@ -1,4 +1,4 @@
-use crate::models::{FolderSummary, PlaybackStatus, Playlist, RepeatMode, Track};
+use crate::models::{FolderSummary, MusicSource, PlaybackStatus, Playlist, RepeatMode, Track};
 use serde::{Deserialize, Serialize};
 
 /// Shared IPC request protocol between Tauri GUI, `zuno-mcp`, and CLI.
@@ -19,6 +19,13 @@ pub enum IpcRequest {
         limit: Option<usize>,
     },
     ListFolders,
+    ListSources,
+    AddSource {
+        path: String,
+    },
+    RemoveSource {
+        path: String,
+    },
     ListPlaylists,
     GetPlaylist {
         name: String,
@@ -65,6 +72,9 @@ pub enum IpcRequest {
         limiter: bool,
         bands: Vec<f32>,
     },
+    SetTransition {
+        crossfade_secs: f32,
+    },
     SetQueue {
         track_ids: Vec<String>,
         start_id: Option<String>,
@@ -105,6 +115,7 @@ pub enum IpcData {
         tracks: Vec<Track>,
     },
     Folders(Vec<FolderSummary>),
+    Sources(Vec<MusicSource>),
     Playlists(Vec<Playlist>),
     PlaylistDetail {
         playlist: Playlist,

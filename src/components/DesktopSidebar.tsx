@@ -4,7 +4,13 @@ import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
 import { ZunoLogo } from '@/components/ZunoLogo'
 import { cn } from '@/lib/utils'
-import type { IconPackId, ThemeMode, ThemeTransitionId } from '@/lib/appearance'
+import type {
+  IconPackId,
+  ThemeMode,
+  ThemeToggleStyleId,
+  ThemeTransitionId,
+  ThemeTransitionStartId,
+} from '@/lib/appearance'
 import type { Playlist } from '@/lib/zunoApi'
 
 export type AppPage =
@@ -23,9 +29,12 @@ interface DesktopSidebarProps {
   playlists: Playlist[]
   songCount: number
   recentCount: number
+  sourceCount: number
   eqEnabled: boolean
   mode: ThemeMode
   themeTransition: ThemeTransitionId
+  themeTransitionStart: ThemeTransitionStartId
+  themeToggleStyle: ThemeToggleStyleId
   iconPack: IconPackId
   onToggleMode: () => void
   onGoHome: () => void
@@ -35,6 +44,7 @@ interface DesktopSidebarProps {
   onOpenPlaylist: (slug: string) => void
   onGoEqualizer: () => void
   onGoCustomize: () => void
+  onOpenFolders: () => void
   onCreatePlaylist: () => void
   onRescan: () => void
 }
@@ -50,9 +60,12 @@ export function DesktopSidebar({
   playlists,
   songCount,
   recentCount,
+  sourceCount,
   eqEnabled,
   mode,
   themeTransition,
+  themeTransitionStart,
+  themeToggleStyle,
   iconPack,
   onToggleMode,
   onGoHome,
@@ -62,6 +75,7 @@ export function DesktopSidebar({
   onOpenPlaylist,
   onGoEqualizer,
   onGoCustomize,
+  onOpenFolders,
   onCreatePlaylist,
   onRescan,
 }: DesktopSidebarProps) {
@@ -91,9 +105,21 @@ export function DesktopSidebar({
               <EaseThemeToggle
                 mode={mode}
                 transition={themeTransition}
+                transitionStart={themeTransitionStart}
+                toggleStyle={themeToggleStyle}
                 onToggle={onToggleMode}
                 size="sm"
               />
+            </Tooltip>
+
+            <Tooltip label={`Music folders (${sourceCount})`} side="bottom">
+              <button
+                onClick={onOpenFolders}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                aria-label="Music folders"
+              >
+                <ZunoIcon name="folder" pack={iconPack} className="h-3.5 w-3.5" />
+              </button>
             </Tooltip>
 
             <Tooltip label="Rescan library" side="bottom">

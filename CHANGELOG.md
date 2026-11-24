@@ -5,6 +5,26 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] — 2026-11-24
+
+Native Linux MPRIS2 media banner & system shortcuts, custom theme-matched frameless desktop titlebar, zero-copy multi-directory music library, pure-Rust equal-power audio crossfade transitions, and Skiper UI component theme options.
+
+### Added
+- **Native Linux MPRIS2 D-Bus Media Integration (`src-tauri/src/mpris.rs`)**: Exports `org.mpris.MediaPlayer2.zuno` on the Session D-Bus using GTK/GLib's existing `gio` bindings (zero new C libraries), powering the Ubuntu/GNOME/KDE notification media banner, lock-screen controls, auto-refreshed album cover art, global OS media keys (`Play/Pause`, `Next`, `Previous`, `Stop`, `Seek`), Bluetooth headset buttons, and `playerctl`, plus browser `navigator.mediaSession` support for web mode.
+- **Custom Theme-Matched Frameless Desktop Titlebar (`src/components/WindowTitlebar.tsx`, `src-tauri/tauri.conf.json`, `src-tauri/src/main.rs`)**: Replaced the native OS window frame with a custom draggable/resizable top bar matching Zuno's active 60/30/10 theme, customizable under **Customize → Top Titlebar & Window** with 5 control styles (*Minimal Mono*, *Traffic Lights*, *Monochrome Dots*, *Floating Pill*, *Sharp Studio*), Left/Right alignment, centered live track pill, and compact `30px` mode.
+- **Zero-Copy Multi-Directory Music Library (`crates/zuno-core`, `crates/zuno-audio`, `src/components/MusicFoldersModal.tsx`)**: Link any existing system music directories (e.g., `~/Music` or external drives) via native Linux folder picker (`zenity` / `kdialog`), 1-click suggestions, or manual path input without duplicating audio files; includes live per-folder track counts, safe non-destructive **Unlink**, filesystem watching, and `.m3u8` self-healing support.
+- **Pure-Rust Equal-Power Audio Crossfade & Fade-In Transitions (`crates/zuno-audio/src/engine.rs`, `crates/zuno-audio/src/service.rs`, `CustomizePage.tsx`)**: Overlapping dual-sink cosine/sine equal-power crossfade (`0s–10s`) with smooth fade-in from silence in both native Rust Rodio and browser `<audio>` modes, configured with a live SVG crossfade curve preview under **Customize → Player & Transitions**.
+- **Skiper UI Component Theme Options (Zero-Bloat CSS/SVG)**:
+  - **Skiper 4** (*Theme Toggle Button Styles*): 6 animated Dark/Light toggle icons (*Eclipse Mask*, *Split Disc*, *Horizon Sun*, *Expand Dot*, *Orbital Ring*, *Switch Pill*) in `EaseThemeToggle.tsx`.
+  - **Skiper 26** (*View Transition Reveals & Origin*): Added *Diagonal Polygon* and *Bottom-Up Curtain* reveals alongside Circle Blur / Circle / Sweep / Blinds plus configurable reveal origin (`From Button`, `Center`, corners) and live preview.
+  - **Skiper 25** (*Spinning Vinyl & Waveform Play Buttons*): Added *Spinning Vinyl* disc toggle alongside *Waveform Toggle* and *Classic Icon* across desktop bar, mobile dock, and full-screen player.
+  - **Skiper 99** (*Animated Icons 002*): Added *Skiper 99 Animated* icon pack with kinetic hover sound waves, gliding arrows, and morphing playlist/menu bars.
+- **Full-Screen Appearance Studio & Queue Live Toggle (`CustomizePage.tsx`, `NowPlayingPanel.tsx`, `ThemeSelector.tsx`)**: Made Customize Studio full-screen with a dedicated `← Back` button (`Esc` to exit), simplified Themes into a unified 8-theme grid (each including both Dark & Light modes without per-card toggle clutter), and enabled live Play/Pause animations & in-place toggle inside the Now Playing Queue sheet.
+
+### Fixed
+- **System & Media Keyboard Shortcuts (`src/App.tsx`, `src-tauri/src/main.rs`)**: Fixed `Space` key handler hijacking `Alt+Space`, `Super+Space`, and `Ctrl+Space` system shortcuts; guarded all OS modifier shortcuts while adding native support for hardware media keys (`MediaPlayPause`, `MediaTrackNext`, `MediaTrackPrevious`, `MediaStop`), `←/→` seek (`±5s`), `Shift+←/→` skip, `M` mute, `S` shuffle, `R` repeat, `F11` fullscreen, and `Ctrl+Q` quit.
+- **External Playback Queue Sync (`src/App.tsx`)**: Automatically resyncs the React queue when tracks are started or skipped externally via MPRIS2 media keys, GNOME notification banner, system tray, or CLI.
+
 ## [0.0.4] — 2026-11-24
 
 Standalone native Linux desktop app (Tauri v2), pure-Rust 10-band Equalizer DSP, single-binary embedded UI, and major RAM/CPU/audio smoothness optimizations.

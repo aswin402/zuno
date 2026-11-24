@@ -307,6 +307,90 @@ button:hover .zuno-pack-itshover,
   animation: zuno-icon-wiggle 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* ── Skiper25 Vinyl Disc Spin ── */
+@keyframes zuno-vinyl-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-vinyl-spin {
+  animation: zuno-vinyl-spin 3.6s linear infinite;
+}
+.animate-vinyl-paused {
+  animation: zuno-vinyl-spin 3.6s linear infinite;
+  animation-play-state: paused;
+}
+
+/* ── Skiper99 Kinetic Animated Icons (002) ── */
+@keyframes zuno-skiper99-nudge {
+  0%,
+  100% {
+    transform: translateX(0) scale(1);
+  }
+  40% {
+    transform: translateX(2.5px) scale(1.06);
+  }
+  75% {
+    transform: translateX(-0.8px) scale(1.02);
+  }
+}
+@keyframes zuno-skiper99-wave {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+.zuno-pack-skiper99 {
+  transition: transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+button:hover .zuno-pack-skiper99,
+.group:hover .zuno-pack-skiper99 {
+  transform: scale(1.08);
+}
+button:hover .zuno-skiper99-arrow,
+.group:hover .zuno-skiper99-arrow {
+  animation: zuno-skiper99-nudge 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.zuno-skiper99-wave-1,
+.zuno-skiper99-wave-2 {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 220ms ease, opacity 220ms ease;
+}
+button:hover .zuno-skiper99-wave-1,
+.group:hover .zuno-skiper99-wave-1 {
+  animation: zuno-skiper99-wave 520ms ease-in-out infinite;
+}
+button:hover .zuno-skiper99-wave-2,
+.group:hover .zuno-skiper99-wave-2 {
+  animation: zuno-skiper99-wave 520ms ease-in-out infinite 120ms;
+}
+.zuno-skiper99-bar {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+button:hover .zuno-skiper99-bar-1,
+.group:hover .zuno-skiper99-bar-1 {
+  transform: scaleX(0.75);
+}
+button:hover .zuno-skiper99-bar-2,
+.group:hover .zuno-skiper99-bar-2 {
+  transform: scaleX(1.12);
+}
+button:hover .zuno-skiper99-bar-3,
+.group:hover .zuno-skiper99-bar-3 {
+  transform: scaleX(0.85);
+}
+
 /* ── PulsoIcon micro-pulse hover ── */
 @keyframes zuno-icon-pulso {
   0%,
@@ -393,7 +477,7 @@ button:hover .zuno-pack-pulso,
   display: none;
 }
 
-/* ── Zenko 4-Mode View Transitions (circle-blur, circle, rectangle, blinds) ── */
+/* ── Skiper26 + Zenko View Transitions (circle-blur, circle, polygon, bottom-up, rectangle, blinds) ── */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -404,6 +488,12 @@ html[data-zuno-vt="circle"]::view-transition-new(root) {
 }
 html[data-zuno-vt="circle-blur"]::view-transition-new(root) {
   animation: zuno-vt-circle-blur 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-zuno-vt="polygon"]::view-transition-new(root) {
+  animation: zuno-vt-polygon 580ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-zuno-vt="bottom-up"]::view-transition-new(root) {
+  animation: zuno-vt-bottom-up 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 html[data-zuno-vt="rectangle"]::view-transition-new(root) {
   animation: zuno-vt-rect 420ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -430,6 +520,15 @@ html[data-zuno-vt="blinds"]::view-transition-new(root) {
 @keyframes zuno-vt-circle-blur {
   from { clip-path: circle(0% at var(--zuno-vt-origin, 50% 0%)); filter: blur(10px); }
   to   { clip-path: circle(150% at var(--zuno-vt-origin, 50% 0%)); filter: blur(0px); }
+}
+@keyframes zuno-vt-polygon {
+  from { clip-path: polygon(0 0, 0 0, 0 100%, 0 100%); }
+  50%  { clip-path: polygon(0 0, 100% 0, 62% 100%, 0 100%); }
+  to   { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+}
+@keyframes zuno-vt-bottom-up {
+  from { clip-path: inset(100% 0 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
 }
 @keyframes zuno-vt-rect {
   from { clip-path: inset(0 0 100% 0); }
