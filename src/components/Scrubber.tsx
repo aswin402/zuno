@@ -9,6 +9,8 @@ interface ScrubberProps {
   seed?: string
   compact?: boolean
   interactive?: boolean
+  /** Contrast tone: 'default' on card surfaces, 'surface' on background trays, 'inverted' on light-mode dark trays. */
+  tone?: 'default' | 'surface' | 'inverted'
   onChange?: (secs: number) => void
   onCommit?: (secs: number) => void
   className?: string
@@ -43,6 +45,7 @@ export function Scrubber({
   seed = 'zuno',
   compact = false,
   interactive = true,
+  tone = 'default',
   onChange,
   onCommit,
   className,
@@ -50,6 +53,17 @@ export function Scrubber({
   const safeMax = max > 0 ? max : 1
   const clamped = Math.min(Math.max(value, 0), safeMax)
   const pct = (clamped / safeMax) * 100
+  const isInverted = tone === 'inverted'
+  const playedBg = isInverted ? 'bg-background' : 'bg-primary'
+  const trackBg = isInverted ? 'bg-background/25' : 'bg-accent'
+  const trackHoverBg = isInverted
+    ? 'group-hover:bg-background/45'
+    : 'group-hover:bg-muted-foreground/40'
+  const ringBg = isInverted
+    ? 'border-background bg-foreground'
+    : tone === 'surface'
+      ? 'border-primary bg-background'
+      : 'border-primary bg-card'
 
   const waveCount = compact ? 24 : 44
   const tickCount = compact ? 18 : 34
@@ -78,9 +92,7 @@ export function Scrubber({
                 style={{ height: `${hPct}%` }}
                 className={cn(
                   'w-[2px] flex-1 max-w-[3px] rounded-full transition-colors duration-100',
-                  played
-                    ? 'bg-primary'
-                    : 'bg-accent group-hover:bg-muted-foreground/40',
+                  played ? playedBg : cn(trackBg, trackHoverBg),
                 )}
               />
             )
@@ -101,13 +113,16 @@ export function Scrubber({
                 className={cn(
                   'w-[1.5px] rounded-full transition-colors duration-100',
                   isMajor ? (compact ? 'h-2.5' : 'h-3') : compact ? 'h-1.5' : 'h-2',
-                  played ? 'bg-primary' : 'bg-accent',
+                  played ? playedBg : trackBg,
                 )}
               />
             )
           })}
           <span
-            className="pointer-events-none absolute top-1/2 h-4 w-[2.5px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-sm transition-transform group-hover:scale-y-115"
+            className={cn(
+              'pointer-events-none absolute top-1/2 h-4 w-[2.5px] -translate-x-1/2 -translate-y-1/2 rounded-full shadow-sm transition-transform group-hover:scale-y-115',
+              playedBg,
+            )}
             style={{ left: `${pct}%` }}
           />
         </div>
@@ -117,12 +132,13 @@ export function Scrubber({
       {styleVariant === 'capsule' && (
         <div
           className={cn(
-            'relative w-full overflow-hidden rounded-full bg-accent transition-all duration-150',
+            'relative w-full overflow-hidden rounded-full transition-all duration-150',
+            trackBg,
             compact ? 'h-1.5' : 'h-1.5 group-hover:h-2',
           )}
         >
           <div
-            className="h-full rounded-full bg-primary transition-[width] duration-75"
+            className={cn('h-full rounded-full transition-[width] duration-75', playedBg)}
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -134,9 +150,9 @@ export function Scrubber({
         styleVariant === 'line' ||
         styleVariant === 'pill') && (
         <>
-          <div className="relative h-[2px] w-full overflow-hidden rounded-full bg-accent">
+          <div className={cn('relative h-[2px] w-full overflow-hidden rounded-full', trackBg)}>
             <div
-              className="h-full rounded-full bg-primary transition-[width] duration-75"
+              className={cn('h-full rounded-full transition-[width] duration-75', playedBg)}
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -144,13 +160,13 @@ export function Scrubber({
             className={cn(
               'pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 transition-all',
               styleVariant === 'ring' &&
-                'h-3.5 w-3.5 rounded-full border-2 border-primary bg-card shadow-sm group-hover:scale-115',
+                cn('h-3.5 w-3.5 rounded-full border-2 shadow-sm group-hover:scale-115', ringBg),
               styleVariant === 'solid' &&
-                'h-3.5 w-3.5 rounded-full bg-primary shadow-sm group-hover:scale-115',
+                cn('h-3.5 w-3.5 rounded-full shadow-sm group-hover:scale-115', playedBg),
               styleVariant === 'line' &&
-                'h-3 w-3 rounded-full bg-primary opacity-0 group-hover:opacity-100',
+                cn('h-3 w-3 rounded-full opacity-0 group-hover:opacity-100', playedBg),
               styleVariant === 'pill' &&
-                'h-4 w-1.5 rounded-full bg-primary shadow-sm group-hover:scale-y-115',
+                cn('h-4 w-1.5 rounded-full shadow-sm group-hover:scale-y-115', playedBg),
             )}
             style={{ left: `${pct}%` }}
           />

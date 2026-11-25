@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.17] — 2026-11-25
+
+Desktop Now Playing stage refresh with bottom-dock scrubber & split timestamp above transport controls, anchored lower track title, and large responsive desktop visualizers.
+
+### Improved
+- **Desktop Now Playing Bottom Dock (`src/components/NowPlayingPanel.tsx`, `src/components/Scrubber.tsx`)**: Moved the playback scrubber and centered split timestamp (`elapsed | total`) into the contrasting bottom dock directly above the Previous / Play-Pause / Next controls on desktop (`>= 768px`), with a new `tone` contrast mode (`surface` / `inverted`) keeping all 7 scrubber styles crisp across dark and light themes while preserving the mobile stage layout.
+- **Lowered Track Title & Large Responsive Visualizer (`src/components/NowPlayingPanel.tsx`, `src/components/NowPlayingVisualizer.tsx`)**: Anchored the song title and artist at the bottom of the upper curved stage on desktop so the visualizer expands responsively across the full main stage (`flex-1`, up to `1160×600` with resize-loop protection), and upgraded canvas detail for large viewports (up to 64 wave bars, 96-point Fourier orb shells, 160-step harmonic ribbons, 64 radial bass rays, and wider ambient halo clouds).
+
 ## [0.0.16] — 2026-11-25
 
 Fixed automatic next-track playback (both ordered and shuffled) and true random starting track selection in shuffle mode.

@@ -296,7 +296,7 @@ export function NowPlayingPanel({
           transform: pullUpY < 0 ? `translateY(${pullUpY * 0.32}px)` : undefined,
         }}
         className={cn(
-          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-5 pt-[max(1rem,env(safe-area-inset-top))] md:pb-4',
+          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-5 pt-[max(1rem,env(safe-area-inset-top))] md:pb-2',
           pullUpY === 0 && 'transition-transform duration-300 ease-out',
           isLight
             ? 'bg-background shadow-[0_18px_42px_rgba(0,0,0,0.22)]'
@@ -511,20 +511,20 @@ export function NowPlayingPanel({
           </div>
         </header>
 
-        {/* ── Hero Centerpiece: Fluid Responsive Audio-Reactive Visualizer + Title + Artist + Scrubber + Split Time ── */}
+        {/* ── Hero Centerpiece: Big Responsive Visualizer + Lowered Song Title (Desktop) / Compact Mobile Stage ── */}
         <div
           style={{
             transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
           }}
           className={cn(
-            'relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6',
+            'relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6 md:justify-end md:px-10 md:pb-1',
             swipeX === 0 && 'transition-transform duration-300 ease-out',
           )}
         >
           {/* Floating borderless Audio-Reactive Sound Orb / Wave Bars / Harmonic Waves / Bass Ring */}
           {appearance.visualizerStyle !== 'none' &&
             appearance.visualizerStyle !== 'aurora-pulse' && (
-              <div className="mb-[clamp(0.75rem,2.4dvh,1.75rem)] flex w-full max-w-[min(92vw,560px)] shrink items-center justify-center">
+              <div className="relative mb-[clamp(0.75rem,2.4dvh,1.75rem)] flex w-full max-w-[min(92vw,560px)] shrink items-center justify-center md:mb-3 md:min-h-0 md:flex-1 md:max-w-[min(92vw,1160px)]">
                 <NowPlayingVisualizer
                   styleVariant={appearance.visualizerStyle}
                   colorMode={appearance.visualizerColor}
@@ -533,7 +533,7 @@ export function NowPlayingPanel({
                   isPlaying={isPlaying}
                   audioEl={audioEl}
                   className={cn(
-                    'w-full',
+                    'w-full md:absolute md:inset-0 md:m-auto md:h-full md:max-h-[600px]',
                     appearance.visualizerStyle === 'orb' ||
                       appearance.visualizerStyle === 'radial-ring'
                       ? 'h-[clamp(116px,26dvh,240px)]'
@@ -543,24 +543,24 @@ export function NowPlayingPanel({
               </div>
             )}
 
-          {/* Centered Track Title & Artist (transitions.dev 04 · TextSwap on track change) */}
-          <div className="w-full max-w-[min(90vw,680px)] shrink-0 text-center">
+          {/* Centered Track Title & Artist (anchored low on Desktop below the big visualizer) */}
+          <div className="w-full max-w-[min(90vw,740px)] shrink-0 text-center">
             <TextSwap
               as="h2"
               text={track ? track.title : 'Not Playing'}
-              className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground"
+              className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground md:text-[clamp(22px,2.8vw,34px)]"
             />
             <TextSwap
               as="p"
               text={subtitle}
-              className="mt-1.5 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground"
+              className="mt-1 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground md:mt-1 md:text-[clamp(13px,1.2vw,15px)]"
             />
           </div>
 
-          {/* Clean Multi-Style Scrubber (matches user's chosen Customize scrubber style) */}
+          {/* Mobile-Only Scrubber + Split Timestamp (moved into Bottom Dock on Desktop) */}
           <div
             onPointerDown={(e) => e.stopPropagation()}
-            className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0"
+            className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0 md:hidden"
           >
             <Scrubber
               value={position}
@@ -572,8 +572,7 @@ export function NowPlayingPanel({
             />
           </div>
 
-          {/* Centered Split Elapsed | Total Timestamp */}
-          <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] lg:mt-4 lg:text-[13.5px]">
+          <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] md:hidden">
             <span className="font-semibold text-foreground">
               {formatTime(position)}
             </span>
@@ -606,8 +605,49 @@ export function NowPlayingPanel({
         </div>
       </div>
 
-      {/* ── Contrasting Bottom Tray: Previous · Play/Pause · Next ── */}
-      <footer className="shrink-0 px-8 py-4 pb-[max(0.85rem,env(safe-area-inset-bottom))] md:py-5">
+      {/* ── Contrasting Bottom Dock: Desktop Scrubber & Split Time + Previous · Play/Pause · Next ── */}
+      <footer className="shrink-0 px-8 py-4 pb-[max(0.85rem,env(safe-area-inset-bottom))] md:px-10 md:pt-4 md:pb-5">
+        {/* Desktop Scrubber & Split Elapsed | Total Timestamp above transport controls */}
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          className="mx-auto mb-3.5 hidden w-full max-w-[min(86vw,640px)] flex-col items-center md:flex"
+        >
+          <Scrubber
+            value={position}
+            max={effectiveDuration || 1}
+            styleVariant={appearance.scrubberKnob}
+            seed={track?.id ?? track?.title ?? 'zuno'}
+            tone={isLight ? 'inverted' : 'surface'}
+            onChange={onSeekChange}
+            onCommit={onSeekCommit}
+          />
+          <div className="mt-1.5 flex items-center justify-center gap-3 tabular-nums text-[12px] lg:text-[12.5px]">
+            <span
+              className={cn(
+                'font-semibold',
+                isLight ? 'text-background' : 'text-foreground',
+              )}
+            >
+              {formatTime(position)}
+            </span>
+            <span
+              className={cn(
+                'h-3 w-[1px]',
+                isLight ? 'bg-background/25' : 'bg-border',
+              )}
+              aria-hidden="true"
+            />
+            <span
+              className={cn(
+                'font-medium',
+                isLight ? 'text-background/60' : 'text-muted-foreground',
+              )}
+            >
+              {formatTime(effectiveDuration)}
+            </span>
+          </div>
+        </div>
+
         <div
           className="mx-auto flex max-w-[280px] items-center justify-between"
           onPointerDown={(e) => e.stopPropagation()}

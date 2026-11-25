@@ -225,7 +225,7 @@ export function NowPlayingVisualizer({
 
     const targetBands = new Float32Array(BANDS)
     const smoothBands = new Float32Array(BANDS)
-    const peaks = new Float32Array(32)
+    const peaks = new Float32Array(64)
     const webFreqBuf = new Uint8Array(new ArrayBuffer(64))
     let targetBass = 0
     let targetMid = 0
@@ -288,10 +288,10 @@ export function NowPlayingVisualizer({
       const minDim = Math.min(width, height)
       // Keep orb + full feathered glow strictly inside 48% of minDim -> ZERO clipped square edge!
       const maxRadius = minDim * 0.48
-      const baseR = minDim * 0.2
+      const baseR = minDim * 0.225
       const restScale = 0.88 + activity * 0.12
       const kickScale = restScale + sBass * 0.24 * gain
-      const rCore = Math.min(baseR * kickScale, maxRadius * 0.62)
+      const rCore = Math.min(baseR * kickScale, maxRadius * 0.64)
 
       // 1. Completely feathered radial glow guaranteed to fade to alpha 0 BEFORE canvas boundary
       const auraR = Math.min(rCore * (1.85 + sEnergy * 0.25), maxRadius)
@@ -307,13 +307,14 @@ export function NowPlayingVisualizer({
       ctx.fill()
 
       // 2. Expanding bass shockwave ripples (smoothly fade to 0 before reaching canvas edge)
+      const rippleStrokeW = Math.max(1.35, minDim * 0.005)
       for (let i = ripples.length - 1; i >= 0; i--) {
         const rp = ripples[i]
         const edgeFade = Math.max(0, 1 - rp.r / (maxRadius * 0.98))
         const a = rp.alpha * edgeFade
         if (a <= 0.005) continue
         ctx.strokeStyle = rgba(palette.primary, a)
-        ctx.lineWidth = 1.35
+        ctx.lineWidth = rippleStrokeW
         ctx.beginPath()
         ctx.arc(cx, cy, rp.r, 0, Math.PI * 2)
         ctx.stroke()
@@ -326,7 +327,7 @@ export function NowPlayingVisualizer({
         { scale: 0.94, amp: 0.12, speed: 1.5, alpha: 0.88, color: palette.bass, bandOffset: 0 },
       ]
 
-      const pts = 56
+      const pts = minDim > 260 ? 96 : 56
       for (let s = 0; s < shells.length; s++) {
         const sh = shells[s]
         ctx.beginPath()
@@ -363,27 +364,31 @@ export function NowPlayingVisualizer({
           ctx.fillStyle = coreGrad
           ctx.fill()
           ctx.strokeStyle = rgba(palette.primary, 0.32 + activity * 0.22 + sBass * 0.3)
-          ctx.lineWidth = 1.15
+          ctx.lineWidth = Math.max(1.15, minDim * 0.0045)
           ctx.stroke()
         } else {
           ctx.fillStyle = rgba(sh.color, sh.alpha * (0.45 + activity * 0.35 + sEnergy * 0.45))
           ctx.fill()
           ctx.strokeStyle = rgba(sh.color, sh.alpha * (0.65 + activity * 0.55))
-          ctx.lineWidth = 0.9
+          ctx.lineWidth = Math.max(0.9, minDim * 0.0034)
           ctx.stroke()
         }
       }
     }
 
     const drawWaveBars = () => {
-      const barCount = width < 260 ? 22 : 32
+      const barCount =
+        width < 260 ? 22 : width < 460 ? 32 : width < 700 ? 44 : width < 960 ? 54 : 64
       const half = barCount / 2
-      const padX = Math.max(12, width * 0.06)
+      const padX = Math.max(12, width * 0.05)
       const usableW = width - padX * 2
-      const gap = Math.max(2.5, Math.min(6, usableW / (barCount * 3.1)))
+      const gap = Math.max(2.5, Math.min(8, usableW / (barCount * 2.6)))
       const barW = Math.max(2.5, (usableW - gap * (barCount - 1)) / barCount)
-      const baselineY = height * 0.68
-      const maxH = height * 0.56
+      const baselineY = height * 0.7
+      const maxH = height * 0.6
+      const peakFall = Math.max(0.85, height * 0.0055)
+      const dotGap = Math.max(5, height * 0.025)
+      const dotR = Math.max(1.3, Math.min(4.2, barW * 0.34))
 
       for (let i = 0; i < barCount; i++) {
         const distFromCenter = Math.abs(i - (half - 0.5)) / half
@@ -396,14 +401,14 @@ export function NowPlayingVisualizer({
 
         // Calm symmetrical resting silhouette when paused so bars never vanish
         const idleCurve = Math.exp(-distFromCenter * distFromCenter * 3.4)
-        const idleH = Math.max(4, (4 + idleCurve * 12) * Math.min(1.15, height / 130))
+        const idleH = Math.max(4, (5 + idleCurve * 15) * Math.min(2.2, height / 130))
         const activeH = Math.max(idleH, shaped * maxH)
         const h = idleH + (activeH - idleH) * Math.max(activity, shaped)
 
         if (h > peaks[i]) {
           peaks[i] = h
         } else {
-          peaks[i] = Math.max(h, peaks[i] - 0.85)
+          peaks[i] = Math.max(h, peaks[i] - peakFall)
         }
 
         const x = padX + i * (barW + gap)
@@ -435,7 +440,7 @@ export function NowPlayingVisualizer({
         if (peaks[i] > idleH + 2) {
           ctx.fillStyle = rgba(palette.primary, 0.82 * Math.min(1, (peaks[i] - idleH) / 8))
           ctx.beginPath()
-          ctx.arc(x + barW * 0.5, baselineY - peaks[i] - 5, Math.max(1.3, barW * 0.34), 0, Math.PI * 2)
+          ctx.arc(x + barW * 0.5, baselineY - peaks[i] - dotGap, dotR, 0, Math.PI * 2)
           ctx.fill()
         }
       }
@@ -443,39 +448,47 @@ export function NowPlayingVisualizer({
 
     const drawFluidWave = (t: number) => {
       const cy = height * 0.52
-      const maxAmp = height * 0.34
-      const steps = 96
+      const maxAmp = height * 0.36
+      const steps = width > 640 ? 160 : 96
       const presence = 0.45 + activity * 0.55
+      const strokeScale = Math.max(1, Math.min(1.65, height / 190))
+      const idleScale = Math.max(1, Math.min(2.1, height / 180))
 
       const ribbons = [
         {
-          amp: Math.max(5.5, (0.14 + sBass * 0.9 * gain) * maxAmp * activity + 5.5 * (1 - activity)),
+          amp: Math.max(
+            5.5 * idleScale,
+            (0.14 + sBass * 0.9 * gain) * maxAmp * activity + 5.5 * idleScale * (1 - activity),
+          ),
           freq: 2.2,
           speed: 2.1,
           fill: true,
           alpha: 0.2 * presence,
           strokeAlpha: 0.82 * presence,
-          width: 2.1,
+          width: 2.1 * strokeScale,
           color: palette.bass,
         },
         {
-          amp: Math.max(3.5, (0.1 + sMid * 0.76 * gain) * maxAmp * activity + 3.5 * (1 - activity)),
+          amp: Math.max(
+            3.5 * idleScale,
+            (0.1 + sMid * 0.76 * gain) * maxAmp * activity + 3.5 * idleScale * (1 - activity),
+          ),
           freq: 3.4,
           speed: -2.8,
           fill: true,
           alpha: 0.12 * presence,
           strokeAlpha: 0.6 * presence,
-          width: 1.6,
+          width: 1.6 * strokeScale,
           color: palette.mid,
         },
         {
-          amp: (0.06 + sTreble * 0.62 * gain) * maxAmp * activity + 1.5 * (1 - activity),
+          amp: (0.06 + sTreble * 0.62 * gain) * maxAmp * activity + 1.5 * idleScale * (1 - activity),
           freq: 5.4,
           speed: 4.0,
           fill: false,
           alpha: 0,
           strokeAlpha: 0.5 * presence,
-          width: 1.2,
+          width: 1.2 * strokeScale,
           color: palette.treble,
         },
       ]
@@ -484,8 +497,8 @@ export function NowPlayingVisualizer({
       ctx.strokeStyle = rgba(palette.fg, 0.12)
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(width * 0.05, cy)
-      ctx.lineTo(width * 0.95, cy)
+      ctx.moveTo(width * 0.04, cy)
+      ctx.lineTo(width * 0.96, cy)
       ctx.stroke()
 
       for (const rib of ribbons) {
@@ -528,9 +541,10 @@ export function NowPlayingVisualizer({
       const cy = height * 0.5
       const minDim = Math.min(width, height)
       const maxRadius = minDim * 0.47
-      const innerR = minDim * (0.2 + sBass * 0.048 * gain)
-      const maxBarLen = Math.max(8, maxRadius - innerR - 10)
-      const rays = 48
+      const innerR = minDim * (0.21 + sBass * 0.048 * gain)
+      const gapFromRing = Math.max(4, minDim * 0.022)
+      const maxBarLen = Math.max(8, maxRadius - innerR - gapFromRing - 6)
+      const rays = minDim > 260 ? 64 : 48
       const presence = 0.48 + activity * 0.52
 
       // Soft central core glow (strictly inside ring)
@@ -544,29 +558,30 @@ export function NowPlayingVisualizer({
 
       // Inner acoustic ring
       ctx.strokeStyle = rgba(palette.primary, (0.42 + sBass * 0.42) * presence)
-      ctx.lineWidth = 1.4
+      ctx.lineWidth = Math.max(1.4, minDim * 0.0055)
       ctx.beginPath()
       ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
       ctx.stroke()
 
-      // 48 mirrored radial rays (calm resting ticks when paused)
+      // Mirrored radial rays (calm resting ticks when paused)
       ctx.lineCap = 'round'
+      const rayWidth = Math.max(1.7, Math.min(4.2, minDim * 0.0115))
       for (let i = 0; i < rays; i++) {
         const angle = (i / rays) * Math.PI * 2 - Math.PI / 2 + t * 0.16
         const mirrorIdx = i < rays / 2 ? i : rays - 1 - i
         const bIdx = Math.min(BANDS - 1, Math.floor((mirrorIdx / (rays / 2)) * BANDS))
         const v = Math.min(1, smoothBands[bIdx] * gain)
-        const idleLen = 3.5 + (i % 2 === 0 ? 2 : 0)
+        const idleLen = Math.max(3.5, minDim * 0.022) + (i % 2 === 0 ? Math.max(2, minDim * 0.012) : 0)
         const len = Math.min(maxBarLen, idleLen + v * (maxBarLen - idleLen))
 
-        const x0 = cx + Math.cos(angle) * (innerR + 4)
-        const y0 = cy + Math.sin(angle) * (innerR + 4)
-        const x1 = cx + Math.cos(angle) * (innerR + 4 + len)
-        const y1 = cy + Math.sin(angle) * (innerR + 4 + len)
+        const x0 = cx + Math.cos(angle) * (innerR + gapFromRing)
+        const y0 = cy + Math.sin(angle) * (innerR + gapFromRing)
+        const x1 = cx + Math.cos(angle) * (innerR + gapFromRing + len)
+        const y1 = cy + Math.sin(angle) * (innerR + gapFromRing + len)
 
         const c = mixRgb(palette.bass, palette.treble, mirrorIdx / (rays / 2))
         ctx.strokeStyle = rgba(c, (0.36 + v * 0.62) * presence)
-        ctx.lineWidth = Math.max(1.7, minDim * 0.013)
+        ctx.lineWidth = rayWidth
         ctx.beginPath()
         ctx.moveTo(x0, y0)
         ctx.lineTo(x1, y1)
@@ -574,17 +589,23 @@ export function NowPlayingVisualizer({
       }
 
       // Orbiting micro-satellite (strictly inside canvas bounds)
-      const orbitR = Math.min(maxRadius - 3, innerR + maxBarLen * 0.65 + 6)
+      const orbitR = Math.min(maxRadius - 3, innerR + gapFromRing + maxBarLen * 0.68 + 4)
       const orbitA = t * (1.1 + sTreble * 1.5)
       ctx.fillStyle = rgba(palette.fg, 0.78 * presence)
       ctx.beginPath()
-      ctx.arc(cx + Math.cos(orbitA) * orbitR, cy + Math.sin(orbitA) * orbitR, 2.2, 0, Math.PI * 2)
+      ctx.arc(
+        cx + Math.cos(orbitA) * orbitR,
+        cy + Math.sin(orbitA) * orbitR,
+        Math.max(2.2, Math.min(4.5, minDim * 0.01)),
+        0,
+        Math.PI * 2,
+      )
       ctx.fill()
     }
 
     const drawAuroraPulse = (t: number) => {
       const cx = width * 0.5
-      const cy = height * 0.46
+      const cy = height * 0.44
       const minDim = Math.min(width, height)
       const presence = 0.42 + activity * 0.58
 
@@ -592,21 +613,21 @@ export function NowPlayingVisualizer({
         {
           x: cx + Math.cos(t * 0.45) * width * 0.12,
           y: cy + Math.sin(t * 0.35) * height * 0.07,
-          r: minDim * (0.36 + sBass * 0.16 * gain),
+          r: minDim * (0.4 + sBass * 0.16 * gain),
           color: palette.bass,
           alpha: (0.09 + sBass * 0.15 * gain) * presence,
         },
         {
           x: cx - Math.cos(t * 0.38 + 1.4) * width * 0.14,
           y: cy - Math.sin(t * 0.5 + 0.8) * height * 0.08,
-          r: minDim * (0.3 + sMid * 0.13 * gain),
+          r: minDim * (0.33 + sMid * 0.13 * gain),
           color: palette.mid,
           alpha: (0.07 + sMid * 0.11 * gain) * presence,
         },
         {
           x: cx + Math.sin(t * 0.62) * width * 0.1,
           y: cy + Math.cos(t * 0.42) * height * 0.09,
-          r: minDim * (0.26 + sTreble * 0.11 * gain),
+          r: minDim * (0.28 + sTreble * 0.11 * gain),
           color: palette.treble,
           alpha: (0.05 + sTreble * 0.09 * gain) * presence,
         },
@@ -648,11 +669,16 @@ export function NowPlayingVisualizer({
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       if (rect.width <= 0 || rect.height <= 0) return
-      dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const nextDpr = Math.min(window.devicePixelRatio || 1, 2)
+      const nextW = Math.round(rect.width * nextDpr)
+      const nextH = Math.round(rect.height * nextDpr)
+      dpr = nextDpr
       width = rect.width
       height = rect.height
-      canvas.width = Math.round(width * dpr)
-      canvas.height = Math.round(height * dpr)
+      if (canvas.width !== nextW || canvas.height !== nextH) {
+        canvas.width = nextW
+        canvas.height = nextH
+      }
       // Always redraw immediately on resize so idle/paused canvas never blanks out
       drawScene(phase)
     }

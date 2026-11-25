@@ -154,7 +154,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.16')
+  const [appVersion, setAppVersion] = useState<string>('0.0.17')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)

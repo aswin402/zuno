@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.16-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.17-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -225,6 +225,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.14** — Fixed Linux MPRIS2 `PropertiesChanged` D-Bus signature (`(sa{sv}as)`) and wired instant GUI/tray notification updates so GNOME/KDE media banners accurately reflect Playing/Paused status and live track metadata.
 - [x] **v0.0.15** — Automated cross-platform GitHub Releases (Linux, macOS, Windows), Zuno-themed animated CLI installers (`install.sh` + `install.ps1`), and in-app self-updater with release dialog, SHA-256 verification, and automatic zero-copy data backup.
 - [x] **v0.0.16** — Fixed audio thread auto-advance starvation under UI/MPRIS status polling (both sequential order and shuffle modes), plus true random shuffle start and repeat-all cycle re-shuffling.
+- [x] **v0.0.17** — Desktop Now Playing layout refresh: moved scrubber & split timestamp into the bottom dock above playback controls (with dark/light contrast support), lowered the track title, and expanded all 5 Now Playing visualizers for large responsive desktop canvases.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.
