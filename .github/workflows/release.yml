@@ -1,0 +1,289 @@
+name: Release Zuno
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.0.15). Defaults to package.json version.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            ext: tar.gz
+          - target: macos-aarch64
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            ext: tar.gz
+          - target: macos-x86_64
+            os: macos-14
+            rust_target: x86_64-apple-darwin
+            ext: tar.gz
+          - target: windows-x86_64
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            ext: zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            pkg-config
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build production Web UI
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build single-binary release executables
+        env:
+          CARGO_INCREMENTAL: '0'
+        run: cargo build --release --target ${{ matrix.rust_target }} -p zuno -p zuno-mcp
+
+      - name: Package Unix archive (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="stage-${{ matrix.target }}"
+          ARCHIVE="zuno-${{ matrix.target }}.tar.gz"
+          mkdir -p "$STAGE/icons"
+          cp "target/${{ matrix.rust_target }}/release/zuno" "$STAGE/zuno"
+          cp "target/${{ matrix.rust_target }}/release/zuno-mcp" "$STAGE/zuno-mcp"
+          chmod 755 "$STAGE/zuno" "$STAGE/zuno-mcp"
+          [ -f public/zuno-logo.svg ] && cp public/zuno-logo.svg "$STAGE/icons/zuno.svg"
+          [ -f public/icon-192.png ] && cp public/icon-192.png "$STAGE/icons/zuno-192.png"
+          [ -f public/icon-512.png ] && cp public/icon-512.png "$STAGE/icons/zuno-512.png"
+          [ -f LICENSE ] && cp LICENSE "$STAGE/LICENSE"
+          mkdir -p release-dist
+          tar -czf "release-dist/$ARCHIVE" -C "$STAGE" .
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd release-dist && sha256sum "$ARCHIVE" > "$ARCHIVE.sha256")
+          else
+            (cd release-dist && shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256")
+          fi
+          ls -lh release-dist
+
+      - name: Package Windows archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage-${{ matrix.target }}"
+          $archive = "zuno-${{ matrix.target }}.zip"
+          New-Item -ItemType Directory -Force -Path "$stage\icons", "release-dist" | Out-Null
+          Copy-Item "target\${{ matrix.rust_target }}\release\zuno.exe" "$stage\zuno.exe"
+          Copy-Item "target\${{ matrix.rust_target }}\release\zuno-mcp.exe" "$stage\zuno-mcp.exe"
+          if (Test-Path "public\zuno-logo.svg") { Copy-Item "public\zuno-logo.svg" "$stage\icons\zuno.svg" }
+          if (Test-Path "public\icon-192.png") { Copy-Item "public\icon-192.png" "$stage\icons\zuno-192.png" }
+          if (Test-Path "public\icon-512.png") { Copy-Item "public\icon-512.png" "$stage\icons\zuno-512.png" }
+          if (Test-Path "src-tauri\icons\icon.png") { Copy-Item "src-tauri\icons\icon.png" "$stage\icons\icon.png" }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$stage\LICENSE" }
+          Compress-Archive -Path "$stage\*" -DestinationPath "release-dist\$archive" -Force
+          $hash = (Get-FileHash "release-dist\$archive" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -FilePath "release-dist\$archive.sha256" -Encoding ascii -NoNewline
+          Get-ChildItem release-dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zuno-${{ matrix.target }}
+          path: release-dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve tag, checksums, release notes & latest.json
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${INPUT_TAG}" ]]; then
+            TAG="${INPUT_TAG}"
+          else
+            PKG_VER="$(node -p "require('./package.json').version")"
+            TAG="v${PKG_VER}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          cd release-assets
+          cat *.sha256 | sed '/^$/d' | sort -k2 > SHA256SUMS.txt
+          cd ..
+
+          # Generate latest.json and extract matching CHANGELOG.md section
+          node - <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          const repo = process.env.REPO;
+          const tag = process.env.TAG || (() => {
+            if (process.env.GITHUB_REF && process.env.GITHUB_REF.startsWith('refs/tags/')) {
+              return process.env.GITHUB_REF.slice('refs/tags/'.length);
+            }
+            return process.env.INPUT_TAG || `v${require('./package.json').version}`;
+          })();
+          const version = tag.replace(/^v/, '');
+
+          // Extract section for this version from CHANGELOG.md
+          let notes = `Release ${tag} of Zuno — ultra-lightweight, offline-first music player.`;
+          if (fs.existsSync('CHANGELOG.md')) {
+            const raw = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const sections = raw.split(/^## \[/m).slice(1);
+            const match = sections.find((s) => s.startsWith(`${version}]`));
+            if (match) {
+              const firstNl = match.indexOf('\n');
+              const body = firstNl >= 0 ? match.slice(firstNl + 1).trim() : '';
+              if (body) notes = body;
+            }
+          }
+
+          const targets = {};
+          const assetsDir = 'release-assets';
+          const entries = [
+            { key: 'linux-x86_64', archive: 'zuno-linux-x86_64.tar.gz' },
+            { key: 'macos-aarch64', archive: 'zuno-macos-aarch64.tar.gz' },
+            { key: 'macos-x86_64', archive: 'zuno-macos-x86_64.tar.gz' },
+            { key: 'windows-x86_64', archive: 'zuno-windows-x86_64.zip' },
+          ];
+
+          for (const item of entries) {
+            const archivePath = path.join(assetsDir, item.archive);
+            const shaPath = path.join(assetsDir, `${item.archive}.sha256`);
+            if (fs.existsSync(archivePath) && fs.existsSync(shaPath)) {
+              const shaLine = fs.readFileSync(shaPath, 'utf8').trim();
+              const sha256 = shaLine.split(/\s+/)[0];
+              const size = fs.statSync(archivePath).size;
+              targets[item.key] = {
+                archive: item.archive,
+                url: `https://github.com/${repo}/releases/download/${tag}/${item.archive}`,
+                sha256,
+                size,
+              };
+            }
+          }
+
+          const manifest = {
+            version,
+            tag,
+            published_at: new Date().toISOString(),
+            release_url: `https://github.com/${repo}/releases/tag/${tag}`,
+            notes,
+            targets,
+          };
+
+          fs.writeFileSync(
+            path.join(assetsDir, 'latest.json'),
+            JSON.stringify(manifest, null, 2) + '\n',
+          );
+
+          const releaseBody = [
+            notes,
+            '',
+            '---',
+            '',
+            '### Quick Install (Single Binary)',
+            '',
+            '**Linux / macOS:**',
+            '```bash',
+            `curl -fsSL https://raw.githubusercontent.com/${repo}/main/install.sh | bash`,
+            '```',
+            '',
+            '**Windows (PowerShell):**',
+            '```powershell',
+            `irm https://raw.githubusercontent.com/${repo}/main/install.ps1 | iex`,
+            '```',
+            '',
+            '> Already running Zuno? The app detects this release automatically and offers 1-click **Backup & Install** inside Zuno.',
+          ].join('\n');
+
+          fs.writeFileSync('release-notes.md', releaseBody + '\n');
+          EOF
+
+          cat release-assets/latest.json
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Zuno $TAG" --notes-file release-notes.md
+            gh release upload "$TAG" \
+              release-assets/zuno-*.tar.gz \
+              release-assets/zuno-*.zip \
+              release-assets/SHA256SUMS.txt \
+              release-assets/latest.json \
+              --clobber
+          else
+            gh release create "$TAG" \
+              release-assets/zuno-*.tar.gz \
+              release-assets/zuno-*.zip \
+              release-assets/SHA256SUMS.txt \
+              release-assets/latest.json \
+              --title "Zuno $TAG" \
+              --notes-file release-notes.md
+          fi

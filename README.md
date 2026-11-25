@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.14-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.15-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -39,6 +39,7 @@ Most modern cross-platform music players bundle a full Chromium runtime (150–3
 - **10-Band Studio Equalizer (Pure Rust + Web Audio)** — Real-time 10-band ISO DSP (`32 Hz–16 kHz`) with draggable spline curve, 10 precision vertical faders, Preamp, automatic headroom trim + transparent Soft Limiter, Bass/Mid/Treble quick trims, 16 built-in presets across 4 categories, and unlimited saved custom presets — running natively in pure Rust (`zuno-audio`) inside the desktop app with zero allocations per sample.
 - **Full Appearance Studio** — Hierarchical live-preview **Customize** studio with 8 dual-mode Dark/Light theme families, interactive HSV 60/30/10 Custom Palette Studio, Custom Font Studio (16 self-hosted variable fonts + OS fonts + `.woff2/.ttf/.otf` uploads), 8 icon packs, 4 View Transitions, 6 surface materials, 5 canvas patterns, 4 active-song styles, and 7 progress scrubber styles.
 - **Native Desktop Tray & Pure-Rust Audio Engine** — Decodes MP3, FLAC, OGG, Opus, WAV, M4A, AAC, AIFF, ALAC, and WebM natively via `symphonia` + `rodio` with `lofty` tag scanning and zero-TCP `zuno://` cover loading. Closing the desktop window while playing destroys the WebView to free RAM while music continues seamlessly in the system tray.
+- **Built-in Self-Updater & Zero-Copy Data Backup** — Detects new GitHub Releases in the background (100% silent when offline), notifies you with an interactive release dialog, automatically backs up playlists, folders, EQ presets, and appearance settings into `~/zuno/.zuno/backups/` (keeping the last 5 snapshots without duplicating `songs/`), verifies SHA-256, swaps binaries atomically, and restarts into the new version in one click.
 - **Built-in CLI, Daemon & MCP Server** — Control Zuno from the UI, terminal, or any MCP-compatible AI client (`Claude`, `Cursor`, `Antigravity`, etc.) sharing one live state over local IPC.
 
 ---
@@ -83,19 +84,43 @@ zuno/
 │   ├── zuno-core/      # Pure Rust: scanner, lofty tags, BLAKE3 IDs, .m3u8 self-healer, queue, search, watcher
 │   ├── zuno-audio/     # Desktop audio thread (rodio + symphonia + pure-Rust 10-band EQ), ZunoService, Unix IPC
 │   └── zuno-mcp/       # Single ~4.7 MB binary: CLI, daemon, HTTP API + embedded UI, stdio & HTTP MCP server
-├── src-tauri/          # Standalone ~9.8 MB native Linux Tauri v2 desktop binary (direct IPC + tray + Rust audio)
+├── src-tauri/          # Standalone ~9.8 MB native Tauri v2 desktop binary (direct IPC + tray + Rust audio + self-updater)
 ├── public/             # Minimalist B&W SVG/PNG app icons, web manifest & 16 self-hosted variable fonts
+├── install.sh          # Zuno-themed single-binary CLI installer for Linux & macOS
+├── install.ps1         # Zuno-themed single-binary CLI installer for Windows (PowerShell)
 ├── scripts/
-│   └── install-linux.sh # Zero-sudo Linux installer (~/.local/bin/zuno, zuno-mcp, hicolor icons, zuno.desktop)
+│   ├── zuno-build.sh   # Storage-lean Cargo build/test/sweep helper (paired with justfile)
+│   └── install-linux.sh # Local zero-sudo Linux installer from source builds
 └── src/                # React 19 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui frontend
     ├── pages/          # HomePage, LastPlayedPage, PlaylistsPage, PlaylistPage, EqualizerPage, CustomizePage
-    ├── components/     # DesktopSidebar, DesktopPlayerBar, MobileNavbar, MobileDock, NowPlayingPanel, SearchOverlay, TrackRow, SortControl
+    ├── components/     # DesktopSidebar, DesktopPlayerBar, MobileNavbar, MobileDock, NowPlayingPanel, SearchOverlay, UpdateDialog, TrackRow, SortControl
     └── lib/            # zunoApi (Tauri IPC + HTTP), equalizer, appearance, fonts, sortTracks
 ```
 
 ---
 
-## Install on Linux (Standalone Native App)
+## Quick Install (Single Binary — Linux, macOS & Windows)
+
+Install the latest pre-built standalone **Zuno** desktop app + CLI directly from GitHub Releases with zero build tools required. The installer verifies SHA-256 checksums, automatically backs up any existing playlists & settings, and sets up your desktop launcher:
+
+### Linux & macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/aswin402/zuno/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/aswin402/zuno/main/install.ps1 | iex
+```
+
+**Installer options:**
+- Install a specific release: `... | bash -s -- --version v0.0.15` (Linux/macOS) or `-Version v0.0.15` (Windows)
+- Uninstall binaries & launchers (keeps `~/zuno/songs` & playlists): `--uninstall` / `-Uninstall`
+- Already installed? Zuno checks GitHub Releases automatically on launch (silently skipped when offline) and lets you **Backup & Install** new versions right inside the app via **Updates & Backup**.
+
+---
+
+## Build & Install from Source (Linux)
 
 ### System Libraries (Ubuntu / Debian)
 ```bash
@@ -198,6 +223,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.12** — Real-time bass & frequency-reactive Now Playing Visualizers backed by a lock-free pure-Rust 1024-pt FFT spectrum tap (`Sound Orb`, `Spectrum Wave Bars`, `Harmonic Waves`, `Radial Bass Ring`, `Ambient Bass Halo`), serene paused idle state, responsive fluid layout, quick switcher, and Customize Studio controls.
 - [x] **v0.0.13** — Zero-dependency `transitions.dev` UI motion system (`TextSwap`, `IconSwap`, `SlidingTabs`, `MotionSwitch`, `AccordionPanel`, `MotionToast`) with asymmetric open/close polish across modals, tooltips, dropdowns, players, Customize Studio, Equalizer, and page transitions.
 - [x] **v0.0.14** — Fixed Linux MPRIS2 `PropertiesChanged` D-Bus signature (`(sa{sv}as)`) and wired instant GUI/tray notification updates so GNOME/KDE media banners accurately reflect Playing/Paused status and live track metadata.
+- [x] **v0.0.15** — Automated cross-platform GitHub Releases (Linux, macOS, Windows), Zuno-themed animated CLI installers (`install.sh` + `install.ps1`), and in-app self-updater with release dialog, SHA-256 verification, and automatic zero-copy data backup.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

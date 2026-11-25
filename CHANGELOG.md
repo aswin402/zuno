@@ -5,6 +5,22 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.15] — 2026-11-25
+
+Automated cross-platform GitHub Releases (Linux, macOS, Windows), Zuno-themed animated single-binary CLI installers (`install.sh` + `install.ps1`), and an in-app self-updater with notification dialog and automatic zero-copy data backup.
+
+### Added
+- **Automated Cross-Platform GitHub Releases (`.github/workflows/release.yml`, `crates/zuno-audio/src/ipc_unix.rs`, `src-tauri/src/main.rs`)**:
+  - Builds and publishes single-binary archives for **Linux (`x86_64`)**, **macOS (`aarch64` & `x86_64`)**, and **Windows (`x86_64`)** on every `v*` tag (plus manual `workflow_dispatch`), alongside `SHA256SUMS.txt` and a machine-readable `latest.json` update manifest.
+  - Added cross-platform non-Unix IPC stubs (`ipc_unix.rs`) and native macOS (`osascript`) & Windows (`FolderBrowserDialog`) folder pickers.
+- **Zuno-Themed Cross-Platform CLI Installers (`install.sh`, `install.ps1`)**:
+  - One-line single-binary install for Linux & macOS (`curl -fsSL .../install.sh | bash`) and Windows PowerShell (`irm .../install.ps1 | iex`).
+  - Minimalist B&W Zuno terminal theme with animated equalizer-bar spinner, live progress bar, SHA-256 verification, automatic zero-copy backup of existing playlists/settings before upgrading, OS launcher integration (`.desktop`, `~/Applications/Zuno.app`, Windows Start Menu shortcut + `PATH`), `NO_COLOR`/non-TTY fallback, and `--version` / `--uninstall` flags.
+- **In-App Self-Updater & Automatic Data Backup (`src-tauri/src/updater.rs`, `src/components/UpdateDialog.tsx`, `src/lib/zunoApi.ts`, `src/App.tsx`, `DesktopSidebar.tsx`, `FloatingNavigation.tsx`, `MobileNavbar.tsx`)**:
+  - Zero-bloat Rust updater using native OS `curl` + pure-Rust FIPS 180-4 SHA-256 verification (keeps binary at ~9.8 MB) and silent background startup checks (zero lag/errors when offline, toggleable for strict air-gapped use).
+  - Automatic zero-copy backup snapshot (`~/zuno/.zuno/backups/v<version>-<timestamp>/`) preserving `.m3u8` playlists, linked library sources, playback state, index, and theme/EQ settings (retaining the last 5 backups, never duplicating audio files in `songs/`), plus atomic binary replacement with rollback protection and 1-click **Restart Zuno Now**.
+  - Added unit tests for semver comparison, FIPS SHA-256 test vectors, and zero-copy data backups.
+
 ## [0.0.14] — 2026-11-25
 
 Fixed Linux MPRIS2 D-Bus notification banner state sync so GNOME/KDE media notifications accurately reflect Playing/Paused status and track metadata in real time.

@@ -69,6 +69,42 @@ export interface AudioLevels {
   energy: number
 }
 
+export interface UpdateInfo {
+  current_version: string
+  latest_version: string
+  update_available: boolean
+  tag: string
+  release_url: string
+  published_at: string
+  notes: string
+  target: string
+  download_url: string | null
+  sha256: string | null
+  size_bytes: number | null
+  can_auto_install: boolean
+  install_path: string
+}
+
+export interface BackupReport {
+  backup_path: string
+  files_count: number
+  playlist_count: number
+  created_at_unix: number
+}
+
+export interface UpdateProgress {
+  stage: 'idle' | 'backup' | 'downloading' | 'verifying' | 'extracting' | 'installing' | 'done' | 'error'
+  message: string
+  percent: number
+}
+
+export interface UpdateInstallResult {
+  installed_version: string
+  installed_path: string
+  backup_path: string | null
+  backup_files: number
+}
+
 type IpcRequest =
   | { op: 'ping' }
   | { op: 'rescan' }
@@ -314,6 +350,58 @@ export const zunoApi = {
     } catch {
       return null
     }
+  },
+
+  async checkUpdate(): Promise<UpdateInfo | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    return await tauri.invoke<UpdateInfo>('zuno_check_update')
+  },
+
+  async backupData(uiSettingsJson?: string): Promise<BackupReport | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    return await tauri.invoke<BackupReport>('zuno_backup_data', {
+      uiSettingsJson: uiSettingsJson ?? null,
+    })
+  },
+
+  async getUpdateProgress(): Promise<UpdateProgress | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    try {
+      return await tauri.invoke<UpdateProgress>('zuno_update_progress')
+    } catch {
+      return null
+    }
+  },
+
+  async installUpdate(opts: {
+    downloadUrl: string
+    sha256?: string | null
+    sizeBytes?: number | null
+    targetVersion: string
+    createBackup: boolean
+    uiSettingsJson?: string
+  }): Promise<UpdateInstallResult> {
+    const tauri = getTauriInternals()
+    if (!tauri) {
+      throw new Error('Self-update is available in the native Zuno desktop app.')
+    }
+    return await tauri.invoke<UpdateInstallResult>('zuno_install_update', {
+      downloadUrl: opts.downloadUrl,
+      sha256: opts.sha256 ?? null,
+      sizeBytes: opts.sizeBytes ?? null,
+      targetVersion: opts.targetVersion,
+      createBackup: opts.createBackup,
+      uiSettingsJson: opts.uiSettingsJson ?? null,
+    })
+  },
+
+  async relaunchApp(): Promise<void> {
+    const tauri = getTauriInternals()
+    if (!tauri) return
+    await tauri.invoke('zuno_relaunch_app')
   },
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,

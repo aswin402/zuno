@@ -3,11 +3,12 @@
 mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
+mod updater;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -21,6 +22,7 @@ use zuno_core::ipc::{IpcRequest, IpcResponse};
 struct AppState {
     service: Arc<ZunoService>,
     quitting: AtomicBool,
+    update_progress: Arc<Mutex<updater::UpdateProgressEvent>>,
     #[cfg(target_os = "linux")]
     mpris: OnceLock<mpris::MprisHandle>,
 }
@@ -141,53 +143,169 @@ fn window_start_dragging(window: WebviewWindow) {
 }
 
 #[tauri::command]
+async fn zuno_check_update() -> Result<updater::UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(updater::check_for_update)
+        .await
+        .map_err(|e| format!("update check task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn zuno_backup_data(
+    ui_settings_json: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<updater::BackupReport, String> {
+    let paths = state.service.paths();
+    tauri::async_runtime::spawn_blocking(move || {
+        updater::backup_user_data(
+            &paths,
+            env!("CARGO_PKG_VERSION"),
+            ui_settings_json.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("backup task failed: {e}"))?
+}
+
+#[tauri::command]
+fn zuno_update_progress(state: tauri::State<'_, AppState>) -> updater::UpdateProgressEvent {
+    state
+        .update_progress
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn zuno_install_update(
+    download_url: String,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    target_version: String,
+    create_backup: bool,
+    ui_settings_json: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<updater::UpdateInstallResult, String> {
+    let paths = state.service.paths();
+    let progress = Arc::clone(&state.update_progress);
+    tauri::async_runtime::spawn_blocking(move || {
+        updater::install_update(
+            &progress,
+            &paths,
+            &download_url,
+            sha256.as_deref(),
+            size_bytes,
+            &target_version,
+            create_backup,
+            ui_settings_json.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("update install task failed: {e}"))?
+}
+
+#[tauri::command]
+fn zuno_relaunch_app(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.quitting.store(true, Ordering::SeqCst);
+    let _ = state.service.handle_request(IpcRequest::Stop);
+    state.notify_mpris();
+    updater::spawn_relaunched_app()?;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 async fn pick_music_folder() -> Option<String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let default_dir = {
-            let m = std::path::PathBuf::from(&home).join("Music");
-            if m.is_dir() {
-                format!("{}/", m.display())
-            } else {
-                format!("{home}/")
-            }
-        };
-
-        if let Ok(out) = std::process::Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--directory",
-                "--title=Select Music Folder for Zuno",
-                &format!("--filename={default_dir}"),
-            ])
-            .output()
+        #[cfg(target_os = "macos")]
         {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() {
-                    return Some(s);
+            if let Ok(out) = std::process::Command::new("osascript")
+                .args([
+                    "-e",
+                    r#"POSIX path of (choose folder with prompt "Select Music Folder for Zuno")"#,
+                ])
+                .output()
+            {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
                 }
             }
             return None;
         }
 
-        if let Ok(out) = std::process::Command::new("kdialog")
-            .args([
-                "--getexistingdirectory",
-                &default_dir,
-                "--title",
-                "Select Music Folder for Zuno",
-            ])
-            .output()
+        #[cfg(target_os = "windows")]
         {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() {
-                    return Some(s);
+            use std::os::windows::process::CommandExt;
+            let script = concat!(
+                "Add-Type -AssemblyName System.Windows.Forms; ",
+                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; ",
+                "$d.Description = 'Select Music Folder for Zuno'; ",
+                "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }"
+            );
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-NoProfile", "-STA", "-Command", script]);
+            cmd.creation_flags(0x08000000);
+            if let Ok(out) = cmd.output() {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
                 }
             }
+            return None;
         }
-        None
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let default_dir = {
+                let m = std::path::PathBuf::from(&home).join("Music");
+                if m.is_dir() {
+                    format!("{}/", m.display())
+                } else {
+                    format!("{home}/")
+                }
+            };
+
+            if let Ok(out) = std::process::Command::new("zenity")
+                .args([
+                    "--file-selection",
+                    "--directory",
+                    "--title=Select Music Folder for Zuno",
+                    &format!("--filename={default_dir}"),
+                ])
+                .output()
+            {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+                return None;
+            }
+
+            if let Ok(out) = std::process::Command::new("kdialog")
+                .args([
+                    "--getexistingdirectory",
+                    &default_dir,
+                    "--title",
+                    "Select Music Folder for Zuno",
+                ])
+                .output()
+            {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+            None
+        }
     })
     .await
     .ok()
@@ -213,6 +331,8 @@ fn show_or_create_main_window(app: &AppHandle) {
 }
 
 fn main() {
+    updater::cleanup_old_binaries();
+
     let paths = ZunoPaths::resolve_default();
     if let Err(e) = paths.ensure_dirs() {
         eprintln!("zuno: failed to prepare {}: {e}", paths.root().display());
@@ -239,6 +359,7 @@ fn main() {
         .manage(AppState {
             service,
             quitting: AtomicBool::new(false),
+            update_progress: Arc::new(Mutex::new(updater::UpdateProgressEvent::default())),
             #[cfg(target_os = "linux")]
             mpris: OnceLock::new(),
         })
@@ -269,6 +390,11 @@ fn main() {
             zuno_ipc,
             zuno_audio_levels,
             zuno_info,
+            zuno_check_update,
+            zuno_backup_data,
+            zuno_update_progress,
+            zuno_install_update,
+            zuno_relaunch_app,
             window_minimize,
             window_toggle_maximize,
             window_is_maximized,

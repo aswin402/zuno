@@ -17,6 +17,7 @@ import { FloatingNavigation } from '@/components/FloatingNavigation'
 import { GradualBlur } from '@/components/GradualBlur'
 import { MusicFoldersModal } from '@/components/MusicFoldersModal'
 import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
+import { UpdateDialog } from '@/components/UpdateDialog'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { Dialog } from '@/components/ui/dialog'
 import { MotionToast } from '@/components/ui/motion'
@@ -53,6 +54,7 @@ import {
   type Playlist,
   type RepeatMode,
   type Track,
+  type UpdateInfo,
 } from '@/lib/zunoApi'
 
 type ListContext =
@@ -62,6 +64,25 @@ type ListContext =
 
 const LAST_PLAYED_KEY = 'zuno:last_played'
 const SORT_PREF_KEY = 'zuno:sort_pref'
+const AUTO_CHECK_UPDATES_KEY = 'zuno:auto_check_updates'
+const SKIPPED_UPDATE_KEY = 'zuno:skipped_update_version'
+
+function loadAutoCheckUpdates(): boolean {
+  try {
+    const raw = localStorage.getItem(AUTO_CHECK_UPDATES_KEY)
+    return raw === null ? true : raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+function loadSkippedUpdateVersion(): string | null {
+  try {
+    return localStorage.getItem(SKIPPED_UPDATE_KEY)
+  } catch {
+    return null
+  }
+}
 
 const VALID_SORT_FIELDS: SortField[] = [
   'name',
@@ -133,6 +154,13 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
+  const [appVersion, setAppVersion] = useState<string>('0.0.15')
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(null)
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState<boolean>(loadAutoCheckUpdates)
+  const [skippedVersion, setSkippedVersion] = useState<string | null>(loadSkippedUpdateVersion)
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [foldersBusy, setFoldersBusy] = useState(false)
   const [lastPlayedIds, setLastPlayedIds] = useState<string[]>(loadLastPlayed)
@@ -353,10 +381,100 @@ export default function App() {
       setPlaylists(plRes)
       if (srcRes.length > 0) setSources(srcRes)
       if (infoRes?.suggested_dirs) setSuggestedDirs(infoRes.suggested_dirs)
+      if (infoRes?.version) setAppVersion(infoRes.version)
     } catch {
       /* backend offline */
     }
   }, [])
+
+  const collectUiSettingsSnapshot = useCallback((): string => {
+    const dump: Record<string, unknown> = {
+      exported_at: new Date().toISOString(),
+      version: appVersion,
+    }
+    try {
+      for (const key of [
+        'zuno:appearance',
+        'zuno:eq',
+        LAST_PLAYED_KEY,
+        SORT_PREF_KEY,
+        AUTO_CHECK_UPDATES_KEY,
+      ]) {
+        const raw = localStorage.getItem(key)
+        if (raw !== null) {
+          try {
+            dump[key] = JSON.parse(raw)
+          } catch {
+            dump[key] = raw
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return JSON.stringify(dump, null, 2)
+  }, [appVersion])
+
+  const handleCheckForUpdates = useCallback(
+    async (silent: boolean) => {
+      if (!nativeAudio) return
+      setUpdateChecking(true)
+      if (!silent) setUpdateCheckError(null)
+      try {
+        const info = await zunoApi.checkUpdate()
+        if (info) {
+          setUpdateInfo(info)
+          setUpdateCheckError(null)
+          if (info.update_available) {
+            if (!silent || info.latest_version !== skippedVersion) {
+              notify(`Zuno v${info.latest_version} is available`)
+              setUpdateDialogOpen(true)
+            }
+          } else if (!silent) {
+            notify(`Zuno v${info.current_version} is up to date`)
+          }
+        }
+      } catch (err) {
+        if (!silent) {
+          setUpdateCheckError(String(err).replace(/^Error:\s*/i, ''))
+        }
+      } finally {
+        setUpdateChecking(false)
+      }
+    },
+    [nativeAudio, skippedVersion, notify],
+  )
+
+  const handleToggleAutoCheckUpdates = useCallback((next: boolean) => {
+    setAutoCheckUpdates(next)
+    try {
+      localStorage.setItem(AUTO_CHECK_UPDATES_KEY, String(next))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const handleSkipUpdateVersion = useCallback(
+    (ver: string) => {
+      setSkippedVersion(ver)
+      try {
+        localStorage.setItem(SKIPPED_UPDATE_KEY, ver)
+      } catch {
+        /* ignore */
+      }
+      notify(`Skipped v${ver}`)
+    },
+    [notify],
+  )
+
+  // Silent background release check 2.5s after native app startup (never blocks or errors offline)
+  useEffect(() => {
+    if (!nativeAudio || !autoCheckUpdates) return
+    const timer = window.setTimeout(() => {
+      handleCheckForUpdates(true)
+    }, 2500)
+    return () => window.clearTimeout(timer)
+  }, [nativeAudio, autoCheckUpdates, handleCheckForUpdates])
 
   useEffect(() => {
     refreshLibrary()
@@ -1459,6 +1577,16 @@ export default function App() {
             setCreateOpen(true)
           }}
           onRescan={handleRescan}
+          appVersion={appVersion}
+          updateAvailableVersion={
+            updateInfo?.update_available ? updateInfo.latest_version : null
+          }
+          onOpenUpdates={() => {
+            setUpdateDialogOpen(true)
+            if (nativeAudio && !updateInfo) {
+              handleCheckForUpdates(false)
+            }
+          }}
         />
       )}
 
@@ -1520,6 +1648,16 @@ export default function App() {
             setCreateOpen(true)
           }}
           onRescan={handleRescan}
+          appVersion={appVersion}
+          updateAvailableVersion={
+            updateInfo?.update_available ? updateInfo.latest_version : null
+          }
+          onOpenUpdates={() => {
+            setUpdateDialogOpen(true)
+            if (nativeAudio && !updateInfo) {
+              handleCheckForUpdates(false)
+            }
+          }}
         />
 
         <MobileNavbar
@@ -1561,6 +1699,16 @@ export default function App() {
             setCreateOpen(true)
           }}
           onRescan={handleRescan}
+          appVersion={appVersion}
+          updateAvailableVersion={
+            updateInfo?.update_available ? updateInfo.latest_version : null
+          }
+          onOpenUpdates={() => {
+            setUpdateDialogOpen(true)
+            if (nativeAudio && !updateInfo) {
+              handleCheckForUpdates(false)
+            }
+          }}
         />
 
         <CompactScrollArea
@@ -1975,6 +2123,24 @@ export default function App() {
           </Button>
         </div>
       </Dialog>
+
+      {/* Release Update & Zero-Copy Data Backup Dialog */}
+      <UpdateDialog
+        open={updateDialogOpen}
+        appVersion={appVersion}
+        updateInfo={updateInfo}
+        checking={updateChecking}
+        checkError={updateCheckError}
+        autoCheck={autoCheckUpdates}
+        onToggleAutoCheck={handleToggleAutoCheckUpdates}
+        onCheckNow={() => handleCheckForUpdates(false)}
+        onSkipVersion={handleSkipUpdateVersion}
+        onCollectUiSettings={collectUiSettingsSnapshot}
+        onBackupDone={(report) =>
+          notify(`Backed up ${report.files_count} files safely`)
+        }
+        onClose={() => setUpdateDialogOpen(false)}
+      />
 
       {/* Auto-Next Fuse Animation Banner (triggers automatically when next song plays) */}
       {autoNextBanner && (

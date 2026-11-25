@@ -36,6 +36,9 @@ interface MobileNavbarProps {
   onOpenPlaylist: (slug: string) => void
   onCreatePlaylist: () => void
   onRescan: () => void
+  appVersion?: string
+  updateAvailableVersion?: string | null
+  onOpenUpdates?: () => void
 }
 
 /**
@@ -65,6 +68,9 @@ export function MobileNavbar({
   onOpenPlaylist,
   onCreatePlaylist,
   onRescan,
+  appVersion,
+  updateAvailableVersion,
+  onOpenUpdates,
 }: MobileNavbarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -219,6 +225,23 @@ export function MobileNavbar({
                   label="Rescan library"
                   onClick={() => closeAnd(onRescan)}
                 />
+
+                {onOpenUpdates && (
+                  <DrawerItem
+                    icon="refresh"
+                    pack={iconPack}
+                    label="Updates & Backup"
+                    badge={
+                      updateAvailableVersion
+                        ? `v${updateAvailableVersion}`
+                        : appVersion
+                          ? `v${appVersion}`
+                          : undefined
+                    }
+                    badgeActive={Boolean(updateAvailableVersion)}
+                    onClick={() => closeAnd(onOpenUpdates)}
+                  />
+                )}
               </div>
 
               {/* Playlists */}

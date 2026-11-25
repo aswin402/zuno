@@ -44,6 +44,9 @@ interface FloatingNavigationProps {
   onOpenFolders: () => void
   onCreatePlaylist: () => void
   onRescan: () => void
+  appVersion?: string
+  updateAvailableVersion?: string | null
+  onOpenUpdates?: () => void
 }
 
 /**
@@ -80,6 +83,9 @@ export function FloatingNavigation({
   onOpenFolders,
   onCreatePlaylist,
   onRescan,
+  appVersion,
+  updateAvailableVersion,
+  onOpenUpdates,
 }: FloatingNavigationProps) {
   const [dockExpanded, setDockExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -261,6 +267,17 @@ export function FloatingNavigation({
                 <ZunoIcon name="refresh" pack={iconPack} className="h-3.5 w-3.5" />
               </button>
             </Tooltip>
+            {onOpenUpdates && updateAvailableVersion && (
+              <Tooltip label={`Update v${updateAvailableVersion} available`} side="bottom">
+                <button
+                  type="button"
+                  onClick={onOpenUpdates}
+                  className="t-press rounded-full bg-primary px-2 py-0.5 font-mono text-[10px] font-semibold text-primary-foreground cursor-pointer"
+                >
+                  v{updateAvailableVersion}
+                </button>
+              </Tooltip>
+            )}
             <EaseThemeToggle
               mode={mode}
               transition={themeTransition}
@@ -357,6 +374,23 @@ export function FloatingNavigation({
                       <ZunoIcon name="refresh" pack={iconPack} className="h-3.5 w-3.5" />
                     </button>
                   </Tooltip>
+                  {onOpenUpdates && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDockExpanded(false)
+                        onOpenUpdates()
+                      }}
+                      className={cn(
+                        't-press rounded-full px-2 py-1 text-[10.5px] font-medium cursor-pointer',
+                        updateAvailableVersion
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                      )}
+                    >
+                      {updateAvailableVersion ? `v${updateAvailableVersion}` : 'Updates'}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -596,6 +630,29 @@ export function FloatingNavigation({
                     <ZunoIcon name="refresh" pack={iconPack} className="h-3.5 w-3.5" />
                     <span>Rescan</span>
                   </button>
+                  {onOpenUpdates && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onOpenUpdates()
+                      }}
+                      className={cn(
+                        'col-span-2 flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium cursor-pointer',
+                        updateAvailableVersion
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-background text-foreground hover:bg-secondary',
+                      )}
+                    >
+                      <span>
+                        {updateAvailableVersion
+                          ? `Update Available · v${updateAvailableVersion}`
+                          : appVersion
+                            ? `Updates & Backup (v${appVersion})`
+                            : 'Updates & Backup'}
+                      </span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

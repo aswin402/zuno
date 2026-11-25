@@ -1,3 +1,4 @@
+import { ArrowUpCircle } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { EaseThemeToggle } from '@/components/EaseThemeToggle'
@@ -47,6 +48,9 @@ interface DesktopSidebarProps {
   onOpenFolders: () => void
   onCreatePlaylist: () => void
   onRescan: () => void
+  appVersion?: string
+  updateAvailableVersion?: string | null
+  onOpenUpdates?: () => void
 }
 
 /**
@@ -78,6 +82,9 @@ export function DesktopSidebar({
   onOpenFolders,
   onCreatePlaylist,
   onRescan,
+  appVersion,
+  updateAvailableVersion,
+  onOpenUpdates,
 }: DesktopSidebarProps) {
   const isFav =
     page === 'playlist' &&
@@ -226,6 +233,34 @@ export function DesktopSidebar({
         </div>
         </div>
       </CompactScrollArea>
+
+      {/* Bottom Version & Update Status Footer */}
+      {onOpenUpdates && (
+        <div className="shrink-0 border-t border-border/70 px-3 py-2.5">
+          <button
+            type="button"
+            onClick={onOpenUpdates}
+            className={cn(
+              't-press flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs cursor-pointer',
+              updateAvailableVersion
+                ? 'bg-primary text-primary-foreground font-medium'
+                : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+            )}
+          >
+            <span className="flex items-center gap-2 truncate">
+              <ArrowUpCircle className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">
+                {updateAvailableVersion
+                  ? `Update v${updateAvailableVersion}`
+                  : 'Updates & Backup'}
+              </span>
+            </span>
+            {appVersion && !updateAvailableVersion && (
+              <span className="font-mono text-[10px] opacity-65">v{appVersion}</span>
+            )}
+          </button>
+        </div>
+      )}
     </aside>
   )
 }

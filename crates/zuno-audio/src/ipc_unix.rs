@@ -109,6 +109,27 @@ pub fn is_live_instance(socket_path: &Path) -> bool {
     )
 }
 
+#[cfg(not(unix))]
+pub fn spawn_unix_ipc_server(
+    _service: std::sync::Arc<crate::service::ZunoService>,
+    _socket_path: std::path::PathBuf,
+) -> zuno_core::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn try_send_unix_ipc(
+    _socket_path: &std::path::Path,
+    _req: &zuno_core::ipc::IpcRequest,
+) -> Option<zuno_core::ipc::IpcResponse> {
+    None
+}
+
+#[cfg(not(unix))]
+pub fn is_live_instance(_socket_path: &std::path::Path) -> bool {
+    false
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
