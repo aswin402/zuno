@@ -1,4 +1,5 @@
 import { ArtworkTile } from '@/components/ArtworkTile'
+import { IconSwap, TextSwap } from '@/components/ui/motion'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
@@ -114,9 +115,11 @@ export function MobileDock({
               {/* Title + compact music-running bars + Artist */}
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-[14px] font-semibold leading-tight text-foreground">
-                    {track.title}
-                  </p>
+                  <TextSwap
+                    as="p"
+                    text={track.title}
+                    className="min-w-0 truncate text-[14px] font-semibold leading-tight text-foreground"
+                  />
                   {isPlaying && (
                     <Loader2
                       barCount={4}
@@ -128,9 +131,11 @@ export function MobileDock({
                     />
                   )}
                 </div>
-                <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {artistLabel}
-                </p>
+                <TextSwap
+                  as="p"
+                  text={artistLabel}
+                  className="mt-0.5 truncate text-xs text-muted-foreground"
+                />
               </div>
             </div>
 
@@ -163,16 +168,26 @@ export function MobileDock({
                   type="button"
                   onClick={onTogglePlay}
                   aria-label={isPlaying ? 'Pause' : 'Play'}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-foreground transition-all hover:bg-accent active:scale-95 cursor-pointer"
+                  className="t-press flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-foreground hover:bg-accent cursor-pointer"
                 >
-                  <ZunoIcon
-                    name={isPlaying ? 'pause' : 'play'}
-                    pack={iconPack}
-                    filled
-                    className={cn(
-                      'h-4 w-4',
-                      !isPlaying && 'translate-x-[1px]',
-                    )}
+                  <IconSwap
+                    active={isPlaying ? 'b' : 'a'}
+                    iconA={
+                      <ZunoIcon
+                        name="play"
+                        pack={iconPack}
+                        filled
+                        className="h-4 w-4 translate-x-[1px]"
+                      />
+                    }
+                    iconB={
+                      <ZunoIcon
+                        name="pause"
+                        pack={iconPack}
+                        filled
+                        className="h-4 w-4"
+                      />
+                    }
                   />
                 </button>
               )}

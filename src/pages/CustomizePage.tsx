@@ -7,7 +7,6 @@ import {
   AudioLines,
   Box,
   Check,
-  ChevronRight,
   Compass,
   Contrast,
   Disc3,
@@ -62,6 +61,12 @@ import {
   WindowCornersPreview,
 } from '@/components/StudioPreviews'
 import { ThemeSelector } from '@/components/ThemeSelector'
+import {
+  AccordionChevron,
+  AccordionPanel,
+  MotionSwitch,
+  SlidingTabs,
+} from '@/components/ui/motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
@@ -640,10 +645,11 @@ export function CustomizePage({
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-2">
-                        <ChevronRight
+                        <AccordionChevron
+                          open={isOpen}
                           className={cn(
-                            'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150',
-                            isOpen && 'rotate-90 text-foreground',
+                            'shrink-0',
+                            isOpen ? 'text-foreground' : 'text-muted-foreground',
                           )}
                         />
                         <BranchIcon
@@ -667,9 +673,9 @@ export function CustomizePage({
                       </span>
                     </button>
 
-                    {/* Indented Child Component Tree */}
-                    {isOpen && (
-                      <div className="mt-0.5 ml-3.5 space-y-0.5 border-l border-border/80 pl-2.5">
+                    {/* Indented Child Component Tree (transitions.dev 21 · Accordion expand) */}
+                    <AccordionPanel open={isOpen}>
+                      <div className="ml-3.5 space-y-0.5 border-l border-border/80 pl-2.5 pt-0.5">
                         {branch.children.map((item) => {
                           const Icon = item.icon
                           const active = activePage === item.id
@@ -679,7 +685,7 @@ export function CustomizePage({
                               type="button"
                               onClick={() => selectPage(item.id)}
                               className={cn(
-                                'relative flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors cursor-pointer',
+                                't-press relative flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] cursor-pointer',
                                 active
                                   ? 'bg-secondary font-medium text-foreground'
                                   : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
@@ -702,7 +708,7 @@ export function CustomizePage({
                           )
                         })}
                       </div>
-                    )}
+                    </AccordionPanel>
                   </div>
                 )
               })}
@@ -842,6 +848,7 @@ export function CustomizePage({
           </div>
 
           {/* ═══════════════════ 1. COLOR THEMES & FONTS ═══════════════════ */}
+          <div key={activePage} className="t-page-enter">
           {activePage === 'theme_presets' && (
             <div className="space-y-6">
               <LivePreviewStage
@@ -2632,6 +2639,7 @@ export function CustomizePage({
               </Group>
             </div>
           )}
+          </div>
         </div>
       </CompactScrollArea>
     </div>
@@ -2668,26 +2676,13 @@ function Segmented<T extends string>({
   onChange: (v: T) => void
 }) {
   return (
-    <div className="inline-flex flex-wrap gap-1.5 rounded-2xl border border-border bg-card p-1.5">
-      {options.map((opt) => {
-        const active = opt.value === value
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            className={cn(
-              'rounded-xl px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer',
-              active
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-            )}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
+    <SlidingTabs<T>
+      value={value}
+      options={options}
+      onChange={onChange}
+      variant="card"
+      wrap
+    />
   )
 }
 
@@ -2705,6 +2700,8 @@ function ToggleRow({
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
       onClick={() => onChange(!checked)}
       className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition-colors hover:bg-secondary/40 cursor-pointer"
     >
@@ -2712,21 +2709,7 @@ function ToggleRow({
         <p className="text-sm font-medium text-foreground">{label}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
-      <span
-        className={cn(
-          'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-accent',
-        )}
-      >
-        <span
-          className={cn(
-            'inline-block h-3.5 w-3.5 rounded-full transition-transform',
-            checked
-              ? 'translate-x-[18px] bg-primary-foreground'
-              : 'translate-x-[3px] bg-muted-foreground',
-          )}
-        />
-      </span>
+      <MotionSwitch checked={checked} interactive={false} size="sm" />
     </button>
   )
 }

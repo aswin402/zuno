@@ -1,5 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Check, Plus, RotateCcw, Shield, Trash2 } from 'lucide-react'
+import {
+  AccordionPanel,
+  MotionSwitch,
+  SlidingTabs,
+} from '@/components/ui/motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
@@ -258,58 +263,51 @@ export function EqualizerPage({
             role="switch"
             aria-checked={settings.enabled}
             onClick={() => onChange({ enabled: !settings.enabled })}
-            className={cn(
-              'inline-flex h-9 items-center gap-2 rounded-full border px-3.5 text-xs font-medium transition-all cursor-pointer',
-              settings.enabled
-                ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                : 'border-border bg-card text-muted-foreground hover:bg-secondary hover:text-foreground',
-            )}
+            className="t-press inline-flex h-9 items-center gap-2 rounded-full border border-border bg-card pl-2.5 pr-3 text-xs font-medium text-foreground hover:bg-secondary cursor-pointer"
           >
-            <span
-              className={cn(
-                'h-2 w-2 rounded-full transition-colors',
-                settings.enabled ? 'bg-primary-foreground' : 'bg-muted-foreground/50',
-              )}
-            />
-            <span>{settings.enabled ? 'On' : 'Off'}</span>
+            <MotionSwitch checked={settings.enabled} interactive={false} size="sm" />
+            <span className="min-w-[20px] text-left">
+              {settings.enabled ? 'On' : 'Off'}
+            </span>
           </button>
         </div>
       </header>
 
-      {/* Inline Save Custom Preset Drawer */}
-      {savingOpen && (
-        <form
-          onSubmit={handleSaveSubmit}
-          className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3"
-        >
-          <input
-            autoFocus
-            value={presetName}
-            onChange={(e) => setPresetName(e.target.value)}
-            placeholder="Name your custom preset (e.g. Night Desk, IEM Warm)..."
-            maxLength={32}
-            className="h-9 min-w-[200px] flex-1 rounded-full border border-border bg-background px-4 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={!presetName.trim()}
-            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40 cursor-pointer"
+      {/* Inline Save Custom Preset Drawer (transitions.dev 21 · Accordion expand) */}
+      <AccordionPanel open={savingOpen}>
+        <div className="pt-4">
+          <form
+            onSubmit={handleSaveSubmit}
+            className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3"
           >
-            <Check className="h-3.5 w-3.5" />
-            Save preset
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSavingOpen(false)
-              setPresetName('')
-            }}
-            className="h-9 rounded-full px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
-          >
-            Cancel
-          </button>
-        </form>
-      )}
+            <input
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Name your custom preset (e.g. Night Desk, IEM Warm)..."
+              maxLength={32}
+              className="h-9 min-w-[200px] flex-1 rounded-full border border-border bg-background px-4 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!presetName.trim()}
+              className="t-press inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 cursor-pointer"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Save preset
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSavingOpen(false)
+                setPresetName('')
+              }}
+              className="t-press h-9 rounded-full px-3 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
+      </AccordionPanel>
 
       {/* Main Studio Console: Interactive Frequency Curve + 10 Precision Vertical Faders */}
       <section className="mt-6 overflow-hidden rounded-3xl border border-border bg-card">
@@ -574,39 +572,30 @@ export function EqualizerPage({
       {/* Preset Categories & Curated / Custom Preset Cards */}
       <section className="mt-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {EQ_CATEGORIES.map((cat) => {
+          <SlidingTabs<EqCategory>
+            value={category}
+            onChange={setCategory}
+            variant="compact"
+            wrap
+            ariaLabel="Equalizer preset categories"
+            options={EQ_CATEGORIES.map((cat) => {
               const count =
                 cat.id === 'all'
                   ? allPresets.length
                   : allPresets.filter((p) => p.category === cat.id).length
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setCategory(cat.id)}
-                  className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium transition-colors cursor-pointer',
-                    category === cat.id
-                      ? 'bg-primary text-primary-foreground'
-                      : 'border border-border bg-card text-muted-foreground hover:bg-secondary hover:text-foreground',
-                  )}
-                >
-                  <span>{cat.label}</span>
-                  <span
-                    className={cn(
-                      'tabular-nums text-[10px]',
-                      category === cat.id
-                        ? 'text-primary-foreground/70'
-                        : 'text-muted-foreground/60',
-                    )}
-                  >
-                    {count}
-                  </span>
-                </button>
-              )
+              return {
+                value: cat.id,
+                label: (
+                  <>
+                    <span>{cat.label}</span>
+                    <span className="tabular-nums text-[10px] opacity-65">
+                      {count}
+                    </span>
+                  </>
+                ),
+              }
             })}
-          </div>
+          />
         </div>
 
         {filteredPresets.length === 0 ? (

@@ -20,7 +20,7 @@ export function AutoNextBanner({
     <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
       <div
         className={cn(
-          'pointer-events-auto relative flex max-w-sm items-center gap-3 overflow-hidden rounded-full border border-border bg-popover/95 px-4 py-2 text-xs text-popover-foreground shadow-2xl backdrop-blur-md animate-dock-pop',
+          't-page-enter pointer-events-auto relative flex max-w-sm items-center gap-3 overflow-hidden rounded-full border border-border bg-popover/95 px-4 py-2 text-xs text-popover-foreground shadow-2xl',
         )}
       >
         {/* Burning fuse progress sweep */}
@@ -39,7 +39,7 @@ export function AutoNextBanner({
         <button
           type="button"
           onClick={onUndo}
-          className="relative z-10 inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent cursor-pointer"
+          className="t-press relative z-10 inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-accent cursor-pointer"
         >
           <Undo2 className="h-3 w-3 text-primary" />
           Undo

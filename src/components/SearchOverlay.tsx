@@ -33,7 +33,33 @@ export function SearchOverlay({
   onSelectTrack,
   onClose,
 }: SearchOverlayProps) {
+  const [mounted, setMounted] = useState(open)
+  const [phase, setPhase] = useState<'enter' | 'open' | 'closing'>(
+    open ? 'open' : 'enter',
+  )
   const [highlightIdx, setHighlightIdx] = useState(0)
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true)
+      setPhase('enter')
+      let raf2 = 0
+      const raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => setPhase('open'))
+      })
+      return () => {
+        cancelAnimationFrame(raf1)
+        cancelAnimationFrame(raf2)
+      }
+    }
+    if (!mounted) return
+    setPhase('closing')
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const timer = window.setTimeout(() => setMounted(false), reduced ? 0 : 165)
+    return () => window.clearTimeout(timer)
+  }, [open, mounted])
 
   const trimmed = query.trim().toLowerCase()
 
@@ -66,7 +92,7 @@ export function SearchOverlay({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  if (!open) return null
+  if (!mounted) return null
 
   const fieldWidth =
     typeof window !== 'undefined' && window.innerWidth < 520
@@ -76,12 +102,20 @@ export function SearchOverlay({
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-50 flex flex-col items-center bg-black/55 px-4 pt-[11vh] backdrop-blur-sm animate-dock-pop"
+      className={cn(
+        't-modal-backdrop fixed inset-0 z-50 flex flex-col items-center bg-black/55 px-4 pt-[11vh] backdrop-blur-sm',
+        phase === 'open' && 'is-open',
+        phase === 'closing' && 'is-closing pointer-events-none',
+      )}
       data-stroke="on"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-[440px] flex-col items-center"
+        className={cn(
+          't-modal flex w-full max-w-[440px] flex-col items-center',
+          phase === 'open' && 'is-open',
+          phase === 'closing' && 'is-closing',
+        )}
       >
         {/* Bencho Search morphing circle -> pill */}
         <Search

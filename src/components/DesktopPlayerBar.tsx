@@ -4,6 +4,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconSwap, TextSwap } from '@/components/ui/motion'
 import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
 import { PulseHeart } from '@/components/PulseHeart'
@@ -111,7 +112,7 @@ export function DesktopPlayerBar({
           <Tooltip label="Previous" side="top">
             <button
               onClick={onPrev}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+              className="t-press flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
               aria-label="Previous"
             >
               <ZunoIcon name="prev" pack={iconPack} filled className="h-4 w-4" />
@@ -126,14 +127,27 @@ export function DesktopPlayerBar({
             ) : (
               <button
                 onClick={onTogglePlay}
-                className="flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                className="t-press flex h-9 w-9 items-center justify-center rounded-full text-foreground hover:bg-secondary cursor-pointer"
                 aria-label={isPlaying ? 'Pause' : 'Play'}
               >
-                <ZunoIcon
-                  name={isPlaying ? 'pause' : 'play'}
-                  pack={iconPack}
-                  filled
-                  className={cn('h-4.5 w-4.5', !isPlaying && 'translate-x-[1px]')}
+                <IconSwap
+                  active={isPlaying ? 'b' : 'a'}
+                  iconA={
+                    <ZunoIcon
+                      name="play"
+                      pack={iconPack}
+                      filled
+                      className="h-4.5 w-4.5 translate-x-[1px]"
+                    />
+                  }
+                  iconB={
+                    <ZunoIcon
+                      name="pause"
+                      pack={iconPack}
+                      filled
+                      className="h-4.5 w-4.5"
+                    />
+                  }
                 />
               </button>
             )}
@@ -142,7 +156,7 @@ export function DesktopPlayerBar({
           <Tooltip label="Next" side="top">
             <button
               onClick={onNext}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+              className="t-press flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
               aria-label="Next"
             >
               <ZunoIcon name="next" pack={iconPack} filled className="h-4 w-4" />
@@ -153,12 +167,16 @@ export function DesktopPlayerBar({
         {/* 2. Track Title & Artist (clicking dock or track opens full-screen player) */}
         <Tooltip label="Open full-screen player" side="top" className="w-48 shrink-0 min-w-0 justify-start">
           <div className="w-full min-w-0 text-left">
-            <p className="truncate text-sm font-semibold leading-snug text-foreground">
-              {track ? track.title : 'Not Playing'}
-            </p>
-            <p className="truncate text-xs leading-snug text-muted-foreground">
-              {artistLabel}
-            </p>
+            <TextSwap
+              as="p"
+              text={track ? track.title : 'Not Playing'}
+              className="truncate text-sm font-semibold leading-snug text-foreground"
+            />
+            <TextSwap
+              as="p"
+              text={artistLabel}
+              className="truncate text-xs leading-snug text-muted-foreground"
+            />
           </div>
         </Tooltip>
 

@@ -5,6 +5,19 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.13] — 2026-11-25
+
+Smooth zero-dependency UI motion system built on `transitions.dev` tokens, asymmetric open/close polish rules, and community component patterns across all player, studio, dialog, and navigation surfaces (with full `prefers-reduced-motion` support).
+
+### Added
+- **Pure-CSS `transitions.dev` Motion System (`src/styles/transitions.css`, `src/index.css`)**: Added the full shared motion token scale (`--duration-*`, `--ease-*`, `--distance-*`, `--scale-*`, `--blur-*`), semantic component variables, GPU-friendly `t-*` recipes, tactile `.t-press` feedback, and mandatory `@media (prefers-reduced-motion: reduce)` guards.
+- **Reusable Motion Primitives (`src/components/ui/motion.tsx`)**: Added zero-dependency `TextSwap`, `IconSwap`, `SlidingTabs` (measured sliding active pill with `ResizeObserver` snap-on-mount and multi-row wrap support), `MotionSwitch` (double-bounce overshoot thumb gated on user interaction), `AccordionPanel` / `AccordionChevron` (`grid-template-rows: 0fr ↔ 1fr` + `scaleY(-1)` chevron flip), and `MotionToast`.
+
+### Improved
+- **Now Playing & Docks (`src/components/NowPlayingPanel.tsx`, `src/components/DesktopPlayerBar.tsx`, `src/components/MobileDock.tsx`)**: Added blurred vertical `TextSwap` on song title/artist changes (inspired by `Music Player Likes`), `IconSwap` on classic Play/Pause morphing, `SlidingTabs` on the Queue/Playlists sheet switcher, and `.t-page-enter` transitions between sheet tabs.
+- **Dialogs, Search, Dropdowns & Tooltips (`src/components/ui/dialog.tsx`, `src/components/SearchOverlay.tsx`, `src/components/ui/dropdown-menu.tsx`, `src/components/ui/tooltip.tsx`)**: Applied asymmetric open/close clocks (`250ms` open / `150ms` close on modals, search overlay, and dropdowns; `150ms` with `80ms` intent delay in / instant `50ms` out on tooltips).
+- **Customize Studio, Equalizer & Page Transitions (`src/pages/CustomizePage.tsx`, `src/pages/EqualizerPage.tsx`, `src/App.tsx`, `src/components/AutoNextBanner.tsx`)**: Upgraded all Customize Studio tree branches and Equalizer save drawer to `AccordionPanel`, all segmented controls and EQ category filters to `SlidingTabs`, all toggle rows and EQ master power to `MotionSwitch`, and main page switches & floating toasts to `.t-page-enter` and `MotionToast`.
+
 ## [0.0.12] — 2026-11-25
 
 Real-time bass- and frequency-reactive Now Playing Visualizers powered by a pure-Rust lock-free FFT engine (desktop) and Web Audio `AnalyserNode` (web/mobile), with serene paused idle states, fluid responsive scaling, and full Customize Studio controls.

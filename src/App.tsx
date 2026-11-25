@@ -19,6 +19,7 @@ import { MusicFoldersModal } from '@/components/MusicFoldersModal'
 import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { Dialog } from '@/components/ui/dialog'
+import { MotionToast } from '@/components/ui/motion'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -1574,7 +1575,14 @@ export default function App() {
             appearance.navStyle !== 'sidebar' && 'lg:pt-14',
           )}
         >
-        <main>
+        <main
+          key={
+            page === 'playlist'
+              ? `playlist:${listCtx.kind === 'playlist' ? listCtx.slug : ''}`
+              : page
+          }
+          className="t-page-enter"
+        >
           {page === 'home' && (
             <HomePage
               tracks={tracks}
@@ -1977,12 +1985,8 @@ export default function App() {
         />
       )}
 
-      {/* Floating Top-Center Hint Toast (never collides inline with dock or rows) */}
-      {toast && !autoNextBanner && (
-        <div className="pointer-events-none absolute top-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-popover/95 px-4 py-2 text-xs font-medium text-popover-foreground shadow-2xl backdrop-blur-md animate-dock-pop whitespace-nowrap">
-          {toast}
-        </div>
-      )}
+      {/* Floating Top-Center Hint Toast (transitions.dev 22 · asymmetric 350ms open / 250ms close) */}
+      <MotionToast message={!autoNextBanner ? toast : null} edge="top" />
       </div>
     </div>
   )

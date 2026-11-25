@@ -20,10 +20,10 @@ import {
 } from 'react'
 import { cn } from '@/lib/utils'
 
-const EASE_CURVE = 'cubic-bezier(0.23, 1, 0.32, 1)'
-// Matches EaseUI Select & DropdownMenu: opens in 150ms, closes faster in 100ms.
-const OPEN_MS = 150
-const CLOSE_MS = 100
+const EASE_CURVE = 'var(--dropdown-ease, cubic-bezier(0.22, 1, 0.36, 1))'
+// Matches transitions.dev Menu dropdown: asymmetric 250ms open (0.97 -> 1), 150ms close (1 -> 0.99).
+const OPEN_MS = 250
+const CLOSE_MS = 150
 
 interface DropdownMenuContextValue {
   open: boolean
@@ -278,7 +278,13 @@ export function DropdownMenuContent({
         transformOrigin: `${isTop ? 'bottom' : 'top'} ${align === 'end' ? 'right' : 'left'}`,
         pointerEvents: open ? 'auto' : 'none',
         opacity: shown ? 1 : 0,
-        transform: reduce ? 'none' : shown ? 'scale(1)' : 'scale(0.97)',
+        transform: reduce
+          ? 'none'
+          : shown
+            ? 'scale(1)'
+            : open
+              ? 'scale(var(--dropdown-pre-scale, 0.97))'
+              : 'scale(var(--dropdown-closing-scale, 0.99))',
         transition: `opacity ${durationMs}ms ${EASE_CURVE}, transform ${durationMs}ms ${EASE_CURVE}`,
       }}
       className={cn(
@@ -329,7 +335,7 @@ export function DropdownMenuItem({
         }
       }}
       className={cn(
-        'flex min-h-9 w-full touch-manipulation items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium outline-none transition-colors duration-150 cursor-pointer',
+        't-press flex min-h-9 w-full touch-manipulation items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium outline-none cursor-pointer',
         destructive
           ? 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10'
           : 'text-popover-foreground hover:bg-secondary focus:bg-secondary',

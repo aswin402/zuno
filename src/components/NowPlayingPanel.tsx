@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconSwap, SlidingTabs, TextSwap } from '@/components/ui/motion'
 import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
@@ -542,14 +543,18 @@ export function NowPlayingPanel({
               </div>
             )}
 
-          {/* Centered Track Title & Artist */}
+          {/* Centered Track Title & Artist (transitions.dev 04 · TextSwap on track change) */}
           <div className="w-full max-w-[min(90vw,680px)] shrink-0 text-center">
-            <h2 className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground">
-              {track ? track.title : 'Not Playing'}
-            </h2>
-            <p className="mt-1.5 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground">
-              {subtitle}
-            </p>
+            <TextSwap
+              as="h2"
+              text={track ? track.title : 'Not Playing'}
+              className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground"
+            />
+            <TextSwap
+              as="p"
+              text={subtitle}
+              className="mt-1.5 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground"
+            />
           </div>
 
           {/* Clean Multi-Style Scrubber (matches user's chosen Customize scrubber style) */}
@@ -687,11 +692,24 @@ export function NowPlayingPanel({
                 )}
               </span>
             ) : (
-              <ZunoIcon
-                name={isPlaying ? 'pause' : 'play'}
-                pack={iconPack}
-                filled
-                className={cn('h-5 w-5', !isPlaying && 'translate-x-[1.5px]')}
+              <IconSwap
+                active={isPlaying ? 'b' : 'a'}
+                iconA={
+                  <ZunoIcon
+                    name="play"
+                    pack={iconPack}
+                    filled
+                    className="h-5 w-5 translate-x-[1.5px]"
+                  />
+                }
+                iconB={
+                  <ZunoIcon
+                    name="pause"
+                    pack={iconPack}
+                    filled
+                    className="h-5 w-5"
+                  />
+                }
               />
             )}
           </button>
@@ -762,45 +780,42 @@ export function NowPlayingPanel({
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                {/* Queue / Playlists segmented pill switch */}
-                <div className="inline-flex rounded-full border border-border bg-secondary/70 p-0.5">
-                  <button
-                    type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => setSheetTab('queue')}
-                    className={cn(
-                      'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
-                      sheetTab === 'queue'
-                        ? 'bg-primary text-primary-foreground shadow-xs'
-                        : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    Queue
-                    {queueTracks.length > 0 && (
-                      <span className="ml-1.5 tabular-nums opacity-75">
-                        {queueTracks.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => setSheetTab('playlists')}
-                    className={cn(
-                      'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
-                      sheetTab === 'playlists'
-                        ? 'bg-primary text-primary-foreground shadow-xs'
-                        : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    Playlists
-                    {orderedPlaylists.length > 0 && (
-                      <span className="ml-1.5 tabular-nums opacity-75">
-                        {orderedPlaylists.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
+                {/* Queue / Playlists sliding pill switch (transitions.dev 16 · SlidingTabs) */}
+                <SlidingTabs
+                  variant="pill"
+                  stopPointerDown
+                  ariaLabel="Queue and Playlists"
+                  value={sheetTab === 'playlists' ? 'playlists' : 'queue'}
+                  onChange={(tab) => setSheetTab(tab)}
+                  options={[
+                    {
+                      value: 'queue',
+                      label: (
+                        <>
+                          Queue
+                          {queueTracks.length > 0 && (
+                            <span className="ml-1.5 tabular-nums opacity-75">
+                              {queueTracks.length}
+                            </span>
+                          )}
+                        </>
+                      ),
+                    },
+                    {
+                      value: 'playlists',
+                      label: (
+                        <>
+                          Playlists
+                          {orderedPlaylists.length > 0 && (
+                            <span className="ml-1.5 tabular-nums opacity-75">
+                              {orderedPlaylists.length}
+                            </span>
+                          )}
+                        </>
+                      ),
+                    },
+                  ]}
+                />
 
                 {/* Right contextual controls */}
                 <div
@@ -855,7 +870,11 @@ export function NowPlayingPanel({
 
             {/* Tab 1: Up Next Queue */}
             {sheetTab === 'queue' && (
-              <CompactScrollArea className="min-h-0 flex-1" viewportClassName="p-3">
+              <CompactScrollArea
+                key="sheet-queue"
+                className="t-page-enter min-h-0 flex-1"
+                viewportClassName="p-3"
+              >
                 <p className="mb-2 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   Playing from · {playlistLabel}
                 </p>
@@ -1000,7 +1019,11 @@ export function NowPlayingPanel({
 
             {/* Tab 2: Playlists (open any playlist OR quick-add current song) */}
             {sheetTab === 'playlists' && (
-              <CompactScrollArea className="min-h-0 flex-1" viewportClassName="p-3">
+              <CompactScrollArea
+                key="sheet-playlists"
+                className="t-page-enter min-h-0 flex-1"
+                viewportClassName="p-3"
+              >
                 <div className="space-y-1.5">
                   {orderedPlaylists.map((pl) => {
                     const isFav = pl.slug === 'favorites' || pl.slug === 'fav'
