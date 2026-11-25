@@ -12,7 +12,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{
     AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
-use zuno_audio::{ZunoService, ipc_unix};
+use zuno_audio::{AudioLevels, ZunoService, ipc_unix};
 use zuno_core::ZunoPaths;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
 
@@ -24,6 +24,11 @@ struct AppState {
 #[tauri::command]
 fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
     state.service.handle_request(req)
+}
+
+#[tauri::command]
+fn zuno_audio_levels(state: tauri::State<'_, AppState>) -> AudioLevels {
+    state.service.audio_levels()
 }
 
 #[tauri::command]
@@ -211,6 +216,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             zuno_ipc,
+            zuno_audio_levels,
             zuno_info,
             window_minimize,
             window_toggle_maximize,

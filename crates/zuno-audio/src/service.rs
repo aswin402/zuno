@@ -1,5 +1,6 @@
 use crate::engine::{AudioEngine, RodioEngine};
 use crate::eq::EqConfig;
+use crate::spectrum::{AudioLevels, SharedSpectrum};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -40,6 +41,7 @@ struct InnerState {
 pub struct ZunoService {
     inner: Arc<Mutex<InnerState>>,
     audio_tx: mpsc::Sender<AudioCmd>,
+    spectrum: Option<Arc<SharedSpectrum>>,
 }
 
 impl ZunoService {
@@ -78,9 +80,11 @@ impl ZunoService {
         }));
 
         let (tx, rx) = mpsc::channel::<AudioCmd>();
+        let spectrum = engine.spectrum();
         let service = Arc::new(Self {
             inner: Arc::clone(&inner),
             audio_tx: tx.clone(),
+            spectrum,
         });
 
         let weak_service = Arc::downgrade(&service);
@@ -218,6 +222,14 @@ impl ZunoService {
 
     pub fn paths(&self) -> ZunoPaths {
         self.inner.lock().unwrap().library.paths().clone()
+    }
+
+    /// Lock-free real-time 24-band audio spectrum + bass/mid/treble/energy snapshot for visualizers.
+    pub fn audio_levels(&self) -> AudioLevels {
+        self.spectrum
+            .as_ref()
+            .map(|s| s.snapshot())
+            .unwrap_or_default()
     }
 
     pub fn extract_cover(&self, track_id: &str) -> Option<CoverArt> {

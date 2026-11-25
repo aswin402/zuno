@@ -61,6 +61,14 @@ export interface ServerInfo {
   version: string
 }
 
+export interface AudioLevels {
+  bands: number[]
+  bass: number
+  mid: number
+  treble: number
+  energy: number
+}
+
 type IpcRequest =
   | { op: 'ping' }
   | { op: 'rescan' }
@@ -297,6 +305,16 @@ export const zunoApi = {
     }),
 
   queueClear: () => callApi<PlaybackStatus>({ op: 'queue_clear' }),
+
+  async audioLevels(): Promise<AudioLevels | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    try {
+      return await tauri.invoke<AudioLevels>('zuno_audio_levels')
+    } catch {
+      return null
+    }
+  },
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,
   coverUrl: (trackId: string, size?: number) => {

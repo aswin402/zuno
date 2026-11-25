@@ -66,6 +66,15 @@ export type IconStrokeId = 'thin' | 'regular' | 'bold'
 export type TrackIconStyleId = 'ring' | 'filled' | 'minimal' | 'number'
 export type PlayingStyleId = 'pulse' | 'equalizer' | 'pulse-bars' | 'minimal'
 export type PlayButtonStyleId = 'classic' | 'waveform' | 'vinyl'
+export type VisualizerStyleId =
+  | 'orb'
+  | 'wave-bars'
+  | 'fluid-wave'
+  | 'radial-ring'
+  | 'aurora-pulse'
+  | 'none'
+export type VisualizerColorId = 'theme' | 'spectrum' | 'mono'
+export type VisualizerIntensityId = 'subtle' | 'balanced' | 'dynamic'
 export type PlayerBarStyleId = 'docked' | 'floating'
 export type TitlebarStyleId = 'minimal' | 'macos' | 'dots' | 'pill' | 'geometric'
 export type TitlebarAlignId = 'right' | 'left'
@@ -115,6 +124,9 @@ export interface AppearanceSettings {
   trackIconStyle: TrackIconStyleId
   playingStyle: PlayingStyleId
   playButtonStyle: PlayButtonStyleId
+  visualizerStyle: VisualizerStyleId
+  visualizerColor: VisualizerColorId
+  visualizerIntensity: VisualizerIntensityId
   playerBarStyle: PlayerBarStyleId
   scrubberKnob: ScrubberKnobStyleId
   titlebarStyle: TitlebarStyleId
@@ -158,6 +170,9 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   trackIconStyle: 'ring',
   playingStyle: 'pulse',
   playButtonStyle: 'classic',
+  visualizerStyle: 'orb',
+  visualizerColor: 'theme',
+  visualizerIntensity: 'balanced',
   playerBarStyle: 'floating',
   scrubberKnob: 'ring',
   titlebarStyle: 'minimal',

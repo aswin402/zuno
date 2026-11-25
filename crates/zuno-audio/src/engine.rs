@@ -1,4 +1,5 @@
 use crate::eq::{EqConfig, EqSource, SharedEq};
+use crate::spectrum::SharedSpectrum;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::f32::consts::FRAC_PI_2;
 use std::fs::File;
@@ -18,6 +19,9 @@ pub trait AudioEngine: Send + 'static {
     fn set_volume(&mut self, volume: f32);
     fn set_eq(&mut self, _eq: EqConfig) {}
     fn set_crossfade(&mut self, _secs: f32) {}
+    fn spectrum(&self) -> Option<Arc<SharedSpectrum>> {
+        None
+    }
     /// Advances any active fade-out / fade-in envelopes. Returns true while a transition is active.
     fn tick_transition(&mut self) -> bool {
         false
@@ -37,6 +41,7 @@ pub struct RodioEngine {
     base_volume: f32,
     crossfade_secs: f32,
     eq: Arc<SharedEq>,
+    spectrum: Arc<SharedSpectrum>,
     loaded: bool,
 }
 
@@ -50,6 +55,7 @@ impl RodioEngine {
             base_volume: 0.8,
             crossfade_secs: 0.0,
             eq: Arc::new(SharedEq::default()),
+            spectrum: Arc::new(SharedSpectrum::new()),
             loaded: false,
         }
     }
@@ -105,7 +111,11 @@ impl AudioEngine for RodioEngine {
         let file = File::open(path)?;
         let decoded = Decoder::new(BufReader::with_capacity(128 * 1024, file))
             .map_err(|e| ZunoError::Audio(format!("failed to decode {}: {e}", path.display())))?;
-        let source = EqSource::new(decoded.convert_samples::<f32>(), Arc::clone(&self.eq));
+        let source = EqSource::with_spectrum(
+            decoded.convert_samples::<f32>(),
+            Arc::clone(&self.eq),
+            Some(Arc::clone(&self.spectrum)),
+        );
 
         if self.crossfade_secs > 0.05 {
             // Smooth fade-in on incoming track (full crossfade when overlapping, gentle swell from silence)
@@ -133,6 +143,7 @@ impl AudioEngine for RodioEngine {
             old_fade.stop();
         }
         self.fading_in = None;
+        self.spectrum.clear();
         if let Some(ref sink) = self.sink {
             sink.set_volume(self.base_volume);
             sink.pause();
@@ -150,6 +161,7 @@ impl AudioEngine for RodioEngine {
             old_fade.stop();
         }
         self.fading_in = None;
+        self.spectrum.clear();
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
@@ -180,6 +192,10 @@ impl AudioEngine for RodioEngine {
 
     fn set_crossfade(&mut self, secs: f32) {
         self.crossfade_secs = secs.clamp(0.0, 10.0);
+    }
+
+    fn spectrum(&self) -> Option<Arc<SharedSpectrum>> {
+        Some(Arc::clone(&self.spectrum))
     }
 
     fn tick_transition(&mut self) -> bool {

@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.11-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.12-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -195,6 +195,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.9** — Desktop Now Playing UX fix: borderless up-arrow Queue trigger button replacing the mobile swipe line on desktop, smooth bidirectional drawer slide/fade transitions, and full-height viewport fit below the custom titlebar.
 - [x] **v0.0.10** — Sticky floating mobile bottom dock (`MobileDock.tsx`) with transparent backdrop removal and adaptive scroll clearance.
 - [x] **v0.0.11** — Bottom-only React Bits `GradualBlur` progressive liquid edge blur behind floating mobile and desktop docks with Customize Studio preview & toggle.
+- [x] **v0.0.12** — Real-time bass & frequency-reactive Now Playing Visualizers backed by a lock-free pure-Rust 1024-pt FFT spectrum tap (`Sound Orb`, `Spectrum Wave Bars`, `Harmonic Waves`, `Radial Bass Ring`, `Ambient Bass Halo`), serene paused idle state, responsive fluid layout, quick switcher, and Customize Studio controls.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Check, ChevronUp, MoreHorizontal, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronUp, MoreHorizontal, Sparkles, X } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,13 +13,27 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { Loader2 } from '@/components/PulseBarsLoader'
+import { NowPlayingVisualizer } from '@/components/NowPlayingVisualizer'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn, formatTime } from '@/lib/utils'
-import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
-import type { Playlist, RepeatMode, Track } from '@/lib/zunoApi'
+import {
+  DEFAULT_APPEARANCE,
+  type AppearanceSettings,
+  type VisualizerStyleId,
+} from '@/lib/appearance'
+import { isTauriRuntime, type Playlist, type RepeatMode, type Track } from '@/lib/zunoApi'
+
+const VISUALIZER_LABELS: Record<VisualizerStyleId, string> = {
+  orb: 'Sound Orb',
+  'wave-bars': 'Wave Bars',
+  'fluid-wave': 'Waves',
+  'radial-ring': 'Bass Ring',
+  'aurora-pulse': 'Halo',
+  none: 'Off',
+}
 
 interface NowPlayingPanelProps {
   track: Track | null
@@ -37,11 +51,14 @@ interface NowPlayingPanelProps {
   eqEnabled?: boolean
   eqLabel?: string
   appearance?: AppearanceSettings
+  audioEl?: HTMLAudioElement | null
   isMobileSheet?: boolean
   onCloseMobile?: () => void
   onOpenQueue: () => void
   onOpenPlaylist?: (slug: string) => void
   onOpenEqualizer?: () => void
+  onCycleVisualizer?: () => void
+  onEnsureAudioAttached?: () => void
   onSelectQueueIndex?: (idx: number) => void
   onDeleteTrack?: (track: Track) => void
   onTogglePlay: () => void
@@ -73,9 +90,12 @@ export function NowPlayingPanel({
   eqEnabled = false,
   eqLabel = 'Off',
   appearance = DEFAULT_APPEARANCE,
+  audioEl = null,
   onCloseMobile,
   onOpenPlaylist,
   onOpenEqualizer,
+  onCycleVisualizer,
+  onEnsureAudioAttached,
   onSelectQueueIndex,
   onDeleteTrack,
   onTogglePlay,
@@ -119,6 +139,13 @@ export function NowPlayingPanel({
       if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current)
     }
   }, [])
+
+  // In web/mobile browser mode, lazily attach AnalyserNode when Now Playing visualizer is playing
+  useEffect(() => {
+    if (isPlaying && appearance.visualizerStyle !== 'none' && !isTauriRuntime()) {
+      onEnsureAudioAttached?.()
+    }
+  }, [isPlaying, appearance.visualizerStyle, onEnsureAudioAttached])
 
   // Swipe-up (to open Queue/Playlists) & horizontal swipe (Prev/Next) on stage
   const gestureStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null)
@@ -275,6 +302,19 @@ export function NowPlayingPanel({
             : 'bg-card border-b border-border/80 shadow-[0_20px_48px_rgba(0,0,0,0.6)]',
         )}
       >
+        {/* Full-Stage Ambient Bass Halo Visualizer (when Aurora Halo style is active) */}
+        {appearance.visualizerStyle === 'aurora-pulse' && (
+          <NowPlayingVisualizer
+            styleVariant="aurora-pulse"
+            colorMode={appearance.visualizerColor}
+            intensity={appearance.visualizerIntensity}
+            mode={appearance.mode}
+            isPlaying={isPlaying}
+            audioEl={audioEl}
+            className="absolute inset-0 z-0 h-full w-full"
+          />
+        )}
+
         {/* Top Bar: Back ←  |  Now playing  |  Heart + clean ··· Menu */}
         <header className="relative z-20 mx-auto flex h-11 w-full max-w-5xl shrink-0 items-center justify-between px-5 lg:h-14 lg:px-10">
           <button
@@ -378,6 +418,30 @@ export function NowPlayingPanel({
                   </DropdownMenuItem>
                 )}
 
+                {/* Visualizer Quick Switcher */}
+                {onCycleVisualizer && (
+                  <DropdownMenuItem
+                    keepOpen
+                    onSelect={onCycleVisualizer}
+                    className="justify-between"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+                      Visualizer
+                    </span>
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                        appearance.visualizerStyle !== 'none'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {VISUALIZER_LABELS[appearance.visualizerStyle]}
+                    </span>
+                  </DropdownMenuItem>
+                )}
+
                 {/* Equalizer shortcut */}
                 {onOpenEqualizer && (
                   <DropdownMenuItem
@@ -446,22 +510,44 @@ export function NowPlayingPanel({
           </div>
         </header>
 
-        {/* ── Hero Centerpiece: Zuno Play Animation + Title + Artist + Animated Waveform + Split Time ── */}
+        {/* ── Hero Centerpiece: Fluid Responsive Audio-Reactive Visualizer + Title + Artist + Scrubber + Split Time ── */}
         <div
           style={{
             transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
           }}
           className={cn(
-            'flex min-h-0 flex-1 flex-col items-center justify-center px-6',
+            'relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6',
             swipeX === 0 && 'transition-transform duration-300 ease-out',
           )}
         >
+          {/* Floating borderless Audio-Reactive Sound Orb / Wave Bars / Harmonic Waves / Bass Ring */}
+          {appearance.visualizerStyle !== 'none' &&
+            appearance.visualizerStyle !== 'aurora-pulse' && (
+              <div className="mb-[clamp(0.75rem,2.4dvh,1.75rem)] flex w-full max-w-[min(92vw,560px)] shrink items-center justify-center">
+                <NowPlayingVisualizer
+                  styleVariant={appearance.visualizerStyle}
+                  colorMode={appearance.visualizerColor}
+                  intensity={appearance.visualizerIntensity}
+                  mode={appearance.mode}
+                  isPlaying={isPlaying}
+                  audioEl={audioEl}
+                  className={cn(
+                    'w-full',
+                    appearance.visualizerStyle === 'orb' ||
+                      appearance.visualizerStyle === 'radial-ring'
+                      ? 'h-[clamp(116px,26dvh,240px)]'
+                      : 'h-[clamp(84px,19dvh,176px)]',
+                  )}
+                />
+              </div>
+            )}
+
           {/* Centered Track Title & Artist */}
-          <div className="w-full max-w-[340px] text-center lg:max-w-2xl">
-            <h2 className="truncate text-[28px] font-bold leading-tight tracking-tight text-foreground sm:text-[34px] lg:text-[46px]">
+          <div className="w-full max-w-[min(90vw,680px)] shrink-0 text-center">
+            <h2 className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground">
               {track ? track.title : 'Not Playing'}
             </h2>
-            <p className="mt-2 truncate text-[14px] font-medium text-muted-foreground lg:mt-2.5 lg:text-[16px]">
+            <p className="mt-1.5 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground">
               {subtitle}
             </p>
           </div>
@@ -469,7 +555,7 @@ export function NowPlayingPanel({
           {/* Clean Multi-Style Scrubber (matches user's chosen Customize scrubber style) */}
           <div
             onPointerDown={(e) => e.stopPropagation()}
-            className="mt-10 w-full max-w-[340px] sm:max-w-[420px] lg:mt-12 lg:max-w-[540px]"
+            className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0"
           >
             <Scrubber
               value={position}
@@ -482,7 +568,7 @@ export function NowPlayingPanel({
           </div>
 
           {/* Centered Split Elapsed | Total Timestamp */}
-          <div className="mt-4 flex items-center justify-center gap-3 tabular-nums text-[12.5px] lg:mt-5 lg:text-[13.5px]">
+          <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] lg:mt-4 lg:text-[13.5px]">
             <span className="font-semibold text-foreground">
               {formatTime(position)}
             </span>

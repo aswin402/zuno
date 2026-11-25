@@ -1854,8 +1854,24 @@ export default function App() {
             eqEnabled={eqSettings.enabled}
             eqLabel={eqLabel}
             appearance={appearance}
+            audioEl={audioRef.current}
             isMobileSheet
             onCloseMobile={() => setMobilePlayerOpen(false)}
+            onEnsureAudioAttached={handleEnsureAudioAttached}
+            onCycleVisualizer={() => {
+              const order = [
+                'orb',
+                'wave-bars',
+                'fluid-wave',
+                'radial-ring',
+                'aurora-pulse',
+                'none',
+              ] as const
+              const idx = order.indexOf(appearance.visualizerStyle)
+              updateAppearance({
+                visualizerStyle: order[(idx + 1) % order.length],
+              })
+            }}
             onOpenPlaylist={(slug) => {
               setMobilePlayerOpen(false)
               setSearchOpen(false)

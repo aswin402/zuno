@@ -4,6 +4,7 @@ import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { EaseThemeToggle, runThemeViewTransition } from '@/components/EaseThemeToggle'
 import { GradualBlur } from '@/components/GradualBlur'
 import { Loader2 } from '@/components/PulseBarsLoader'
+import { NowPlayingVisualizer } from '@/components/NowPlayingVisualizer'
 import { Scrubber } from '@/components/Scrubber'
 import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
@@ -1140,7 +1141,93 @@ export function PlayingTrackLivePreview({
   )
 }
 
-/** 16. Audio Crossfade Live Curve Stage */
+/** 17. Now Playing Audio-Reactive Visualizer Interactive Live Preview */
+export function VisualizerLivePreview({
+  settings,
+  isPlaying,
+  onTogglePlay,
+}: {
+  settings: AppearanceSettings
+  isPlaying: boolean
+  onTogglePlay: () => void
+}) {
+  const [kickPulse, setKickPulse] = useState(0)
+  const isAmbient = settings.visualizerStyle === 'aurora-pulse'
+
+  return (
+    <div className="relative flex h-[240px] w-full max-w-xl flex-col items-center justify-between overflow-hidden rounded-2xl border border-border bg-card px-5 py-4 shadow-md">
+      {isAmbient && (
+        <NowPlayingVisualizer
+          styleVariant="aurora-pulse"
+          colorMode={settings.visualizerColor}
+          intensity={settings.visualizerIntensity}
+          mode={settings.mode}
+          isPlaying={isPlaying}
+          demo
+          kickPulse={kickPulse}
+          className="absolute inset-0 z-0 h-full w-full"
+        />
+      )}
+
+      <div className="relative z-10 flex w-full items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          Now Playing · {settings.visualizerStyle}
+        </span>
+        <div className="flex items-center gap-1.5">
+          {settings.visualizerStyle !== 'none' && (
+            <button
+              type="button"
+              onClick={() => setKickPulse((k) => k + 1)}
+              className="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-background/85 px-2.5 text-[10.5px] font-medium text-foreground transition-colors hover:bg-secondary active:scale-95 cursor-pointer"
+            >
+              <Sparkles className="h-3 w-3 text-primary" />
+              <span>Pulse Bass</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            className="inline-flex h-7 items-center gap-1 rounded-full bg-primary px-2.5 text-[10.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+          >
+            <ZunoIcon
+              name={isPlaying ? 'pause' : 'play'}
+              pack={settings.iconPack}
+              filled
+              className="h-2.5 w-2.5"
+            />
+            <span>{isPlaying ? 'Playing' : 'Paused'}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="relative z-10 flex min-h-0 flex-1 w-full flex-col items-center justify-center">
+        {settings.visualizerStyle === 'none' ? (
+          <p className="font-mono text-[11px] text-muted-foreground/75">
+            Minimal typography mode — visualizer off
+          </p>
+        ) : !isAmbient ? (
+          <NowPlayingVisualizer
+            styleVariant={settings.visualizerStyle}
+            colorMode={settings.visualizerColor}
+            intensity={settings.visualizerIntensity}
+            mode={settings.mode}
+            isPlaying={isPlaying}
+            demo
+            kickPulse={kickPulse}
+            className="h-[118px] w-full max-w-[360px]"
+          />
+        ) : null}
+      </div>
+
+      <div className="relative z-10 text-center">
+        <p className="text-sm font-semibold tracking-tight text-foreground">midnight_chords</p>
+        <p className="text-[11px] text-muted-foreground">
+          Ambient · {settings.visualizerColor} · {settings.visualizerIntensity}
+        </p>
+      </div>
+    </div>
+  )
+}
 export function AudioCrossfadeLivePreview({ crossfadeSecs }: { crossfadeSecs: number }) {
   const fmt = crossfadeSecs > 0 ? `${crossfadeSecs.toFixed(crossfadeSecs % 1 === 0 ? 0 : 1)}s` : 'Off'
   return (

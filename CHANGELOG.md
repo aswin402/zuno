@@ -5,6 +5,17 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12] — 2026-11-25
+
+Real-time bass- and frequency-reactive Now Playing Visualizers powered by a pure-Rust lock-free FFT engine (desktop) and Web Audio `AnalyserNode` (web/mobile), with serene paused idle states, fluid responsive scaling, and full Customize Studio controls.
+
+### Added
+- **Lock-Free Pure-Rust 1024-pt FFT Spectrum Telemetry (`crates/zuno-audio/src/spectrum.rs`, `eq.rs`, `engine.rs`, `service.rs`, `src-tauri/src/main.rs`, `src/lib/zunoApi.ts`)**: Stack-resident radix-2 Cooley-Tukey FFT publishing 24 log-spaced frequency bands (`35 Hz–15 kHz`) plus `bass`, `mid`, `treble`, and `energy` via `AtomicU32`s and `zuno_audio_levels`, with automatic 650ms idle TTL for 0% CPU overhead when Now Playing is closed or paused.
+- **Multi-Mode Audio-Reactive Now Playing Visualizer (`src/components/NowPlayingVisualizer.tsx`, `src/components/NowPlayingPanel.tsx`, `src/App.tsx`)**:
+  - 5 unclipped floating styles (**Sound Orb** with expanding bass shockwaves, **Spectrum Wave Bars** with reflections & peak-hold dots, **Harmonic Waves**, **Radial Bass Ring**, and **Ambient Bass Halo**) plus **Minimal (Off)**, with a live quick-cycle item inside the Now Playing `···` menu.
+  - Smoothly decays into a clearly visible, serene resting **idle state** when paused (0% idle CPU after settling, with instant redraw on window resize, visibility restore, or theme change) and scales responsively across all screen dimensions via viewport `clamp()` sizing.
+- **Customize Studio Visualizer Controls (`src/pages/CustomizePage.tsx`, `src/components/StudioPreviews.tsx`, `src/lib/appearance.ts`)**: Added **Customize → Music Components → Now Playing Visualizer** featuring an interactive live preview with **Play/Pause** and **Pulse Bass** kick trigger, style selector, **Color Mode** (`Theme Matched`, `Harmonic Color`, `Pure Mono`), and **Bass & Sound Reactivity** (`Subtle`, `Balanced`, `Dynamic`).
+
 ## [0.0.11] — 2026-11-25
 
 Bottom-only progressive `GradualBlur` edge effect (`@react-bits/GradualBlur-TS-TW`) behind the floating bottom docks.

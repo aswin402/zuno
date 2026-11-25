@@ -1,3 +1,4 @@
+use crate::spectrum::{SharedSpectrum, SpectrumAnalyzer};
 use rodio::Source;
 use rodio::source::SeekError;
 use serde::{Deserialize, Serialize};
@@ -182,10 +183,14 @@ fn design_peaking(fs: f32, f0: f32, q: f32, gain_db: f32) -> BiquadCoeffs {
 
 const MAX_CH: usize = 8;
 
-/// Zero-allocation real-time 10-band ISO Equalizer + transparent soft limiter `rodio::Source`.
+/// Zero-allocation real-time 10-band ISO Equalizer + transparent soft limiter `rodio::Source`,
+/// with an optional zero-idle-cost real-time FFT spectrum tap.
 pub struct EqSource<S> {
     inner: S,
     shared: Arc<SharedEq>,
+    spectrum: Option<Arc<SharedSpectrum>>,
+    analyzer: Option<Box<SpectrumAnalyzer>>,
+    mono_accum: f32,
     last_gen: u64,
     channels: usize,
     sample_rate: f32,
@@ -207,11 +212,25 @@ where
     S: Source<Item = f32>,
 {
     pub fn new(inner: S, shared: Arc<SharedEq>) -> Self {
+        Self::with_spectrum(inner, shared, None)
+    }
+
+    pub fn with_spectrum(
+        inner: S,
+        shared: Arc<SharedEq>,
+        spectrum: Option<Arc<SharedSpectrum>>,
+    ) -> Self {
         let channels = (inner.channels() as usize).clamp(1, MAX_CH);
         let sample_rate = inner.sample_rate().max(8000) as f32;
+        let analyzer = spectrum
+            .as_ref()
+            .map(|_| Box::new(SpectrumAnalyzer::new(sample_rate)));
         let mut src = Self {
             inner,
             shared,
+            spectrum,
+            analyzer,
+            mono_accum: 0.0,
             last_gen: 0,
             channels,
             sample_rate,
@@ -273,6 +292,22 @@ where
         self.z1 = [[0.0; MAX_CH]; 10];
         self.z2 = [[0.0; MAX_CH]; 10];
         self.ch_cursor = 0;
+        self.mono_accum = 0.0;
+        if let Some(ref mut a) = self.analyzer {
+            a.reset();
+        }
+    }
+
+    #[inline]
+    fn tap_spectrum(&mut self, ch: usize, out: f32) {
+        if let (Some(spec), Some(analyzer)) = (&self.spectrum, &mut self.analyzer) {
+            self.mono_accum += out;
+            if ch + 1 == self.channels {
+                let mono = self.mono_accum / self.channels as f32;
+                self.mono_accum = 0.0;
+                analyzer.push_mono(mono, spec);
+            }
+        }
     }
 
     #[inline]
@@ -315,6 +350,7 @@ where
         // Fast bit-exact bypass when EQ is fully off (0 DSP FLOPs!)
         if !self.enabled && self.current_wet < 0.0005 {
             self.current_wet = 0.0;
+            self.tap_spectrum(ch, dry);
             return Some(dry);
         }
 
@@ -334,7 +370,9 @@ where
         }
 
         let w = self.current_wet;
-        Some(dry * (1.0 - w) + x * w)
+        let out = dry * (1.0 - w) + x * w;
+        self.tap_spectrum(ch, out);
+        Some(out)
     }
 }
 

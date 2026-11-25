@@ -58,6 +58,7 @@ import {
   ThemeToggleLivePreview,
   ThemeTransitionLivePreview,
   TypographyPreview,
+  VisualizerLivePreview,
   WindowCornersPreview,
 } from '@/components/StudioPreviews'
 import { ThemeSelector } from '@/components/ThemeSelector'
@@ -97,6 +98,9 @@ import {
   type TitlebarAlignId,
   type TitlebarStyleId,
   type TrackIconStyleId,
+  type VisualizerColorId,
+  type VisualizerIntensityId,
+  type VisualizerStyleId,
   type WindowRadiusId,
 } from '@/lib/appearance'
 
@@ -121,6 +125,7 @@ type StudioPageId =
   | 'theme_transitions'
   | 'layout_geometry'
   | 'playing_track'
+  | 'now_playing_visualizer'
   | 'scrubber'
   | 'play_button'
   | 'player_bar'
@@ -300,6 +305,15 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
           'Customize how the currently playing song animates and how idle track indicators appear in lists.',
         keywords: 'playing active song equalizer pulse ring pulse bars loader minimal leading icon number',
         icon: Play,
+      },
+      {
+        id: 'now_playing_visualizer',
+        categoryId: 'music_components',
+        label: 'Now Playing Visualizer',
+        description:
+          'Real-time bass & frequency-reactive animations for Now Playing: Sound Orb, Wave Bars, Harmonic Waves, Bass Ring & Ambient Halo.',
+        keywords: 'visualizer now playing orb wave bars harmonic sine radial bass ring aurora halo sound spectrum animation fft',
+        icon: Sparkles,
       },
       {
         id: 'scrubber',
@@ -2008,6 +2022,198 @@ export function CustomizePage({
                   ]}
                 />
               </Group>
+            </div>
+          )}
+
+          {activePage === 'now_playing_visualizer' && (
+            <div className="space-y-6">
+              <LivePreviewStage
+                title="Live Audio-Reactive Now Playing Preview"
+                hint="Click Pulse Bass to test low-end shockwaves"
+                mode={settings.mode}
+                transition={settings.themeTransition}
+                transitionStart={settings.themeTransitionStart}
+                toggleStyle={settings.themeToggleStyle}
+                onToggleMode={handleToggleMode}
+              >
+                <VisualizerLivePreview
+                  settings={settings}
+                  isPlaying={previewPlaying}
+                  onTogglePlay={() => setPreviewPlaying((p) => !p)}
+                />
+              </LivePreviewStage>
+
+              <Group
+                title="Visualizer Animation Theme"
+                description="Reacts live to your song's real bass, mid, treble, and 24-band frequency energy."
+              >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {(
+                    [
+                      {
+                        id: 'orb',
+                        label: 'Sound Orb',
+                        desc: 'Organic morphing orb with expanding bass shockwave rings',
+                        recommended: true,
+                      },
+                      {
+                        id: 'wave-bars',
+                        label: 'Spectrum Wave Bars',
+                        desc: '32 mirrored studio bars with reflections & peak-hold dots',
+                      },
+                      {
+                        id: 'fluid-wave',
+                        label: 'Harmonic Waves',
+                        desc: 'Layered bass, vocal & treble ribbons flowing smoothly across stage',
+                      },
+                      {
+                        id: 'radial-ring',
+                        label: 'Radial Bass Ring',
+                        desc: '360° frequency burst around a breathing bass core + orbit dot',
+                      },
+                      {
+                        id: 'aurora-pulse',
+                        label: 'Ambient Bass Halo',
+                        desc: 'Full-stage soft atmospheric aura pulsing behind the track title',
+                      },
+                      {
+                        id: 'none',
+                        label: 'Minimal (Off)',
+                        desc: 'Pure typography-only Now Playing screen',
+                      },
+                    ] as {
+                      id: VisualizerStyleId
+                      label: string
+                      desc: string
+                      recommended?: boolean
+                    }[]
+                  ).map((opt) => {
+                    const active = settings.visualizerStyle === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChange({ visualizerStyle: opt.id })}
+                        className={cn(
+                          'flex flex-col justify-between gap-3 rounded-2xl border p-3.5 text-left transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-secondary'
+                            : 'border-border bg-card hover:bg-secondary/55',
+                        )}
+                      >
+                        {/* Minimalist Schematic Icon Preview */}
+                        <div className="flex h-16 w-full items-center justify-center overflow-hidden rounded-xl border border-border bg-background/80">
+                          {opt.id === 'orb' && (
+                            <div className="relative flex h-11 w-11 items-center justify-center">
+                              <span className="absolute inset-0 rounded-full border border-primary/35" />
+                              <span className="h-7 w-7 rounded-full bg-gradient-to-br from-foreground via-primary to-primary/30 shadow-md" />
+                            </div>
+                          )}
+                          {opt.id === 'wave-bars' && (
+                            <div className="flex h-9 items-end gap-1">
+                              {[35, 60, 88, 100, 74, 52, 82, 95, 65, 38].map((h, i) => (
+                                <span
+                                  key={i}
+                                  style={{ height: `${h}%` }}
+                                  className="w-1.5 rounded-full bg-primary/85"
+                                />
+                              ))}
+                            </div>
+                          )}
+                          {opt.id === 'fluid-wave' && (
+                            <svg viewBox="0 0 120 40" className="h-10 w-28" aria-hidden="true">
+                              <path
+                                d="M4 20 Q 22 4, 42 20 T 80 20 T 116 20"
+                                fill="none"
+                                stroke="var(--primary)"
+                                strokeWidth="2.2"
+                                strokeLinecap="round"
+                              />
+                              <path
+                                d="M4 20 Q 28 34, 52 20 T 94 20 T 116 20"
+                                fill="none"
+                                stroke="var(--foreground)"
+                                strokeOpacity="0.45"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          )}
+                          {opt.id === 'radial-ring' && (
+                            <div className="relative flex h-11 w-11 items-center justify-center">
+                              <span className="h-10 w-10 rounded-full border-2 border-dashed border-primary/75" />
+                              <span className="absolute h-5 w-5 rounded-full border border-primary bg-primary/20" />
+                            </div>
+                          )}
+                          {opt.id === 'aurora-pulse' && (
+                            <div className="relative flex h-full w-full items-center justify-center">
+                              <span className="h-12 w-24 rounded-full bg-primary/20 blur-md" />
+                              <span className="absolute font-mono text-[10px] font-medium text-foreground/80">
+                                Track
+                              </span>
+                            </div>
+                          )}
+                          {opt.id === 'none' && (
+                            <span className="font-mono text-[10.5px] text-muted-foreground/70">
+                              Text only
+                            </span>
+                          )}
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-xs font-semibold text-foreground">
+                              {opt.label}
+                            </span>
+                            {active ? (
+                              <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                            ) : opt.recommended ? (
+                              <span className="rounded-full bg-primary/15 px-1.5 py-0.5 font-mono text-[9px] text-primary">
+                                Rec
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            {opt.desc}
+                          </span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <div className="grid gap-6 sm:grid-cols-2">
+                <Group
+                  title="Visualizer Color Mode"
+                  description="Match your active 60/30/10 theme, use harmonic frequency tones, or stay monochrome."
+                >
+                  <Segmented<VisualizerColorId>
+                    value={settings.visualizerColor}
+                    onChange={(visualizerColor) => onChange({ visualizerColor })}
+                    options={[
+                      { value: 'theme', label: 'Theme Matched' },
+                      { value: 'spectrum', label: 'Harmonic Color' },
+                      { value: 'mono', label: 'Pure Mono' },
+                    ]}
+                  />
+                </Group>
+
+                <Group
+                  title="Bass & Sound Reactivity"
+                  description="Control how strongly kicks, bass drops, and vocal waves drive motion."
+                >
+                  <Segmented<VisualizerIntensityId>
+                    value={settings.visualizerIntensity}
+                    onChange={(visualizerIntensity) => onChange({ visualizerIntensity })}
+                    options={[
+                      { value: 'subtle', label: 'Subtle' },
+                      { value: 'balanced', label: 'Balanced' },
+                      { value: 'dynamic', label: 'Dynamic' },
+                    ]}
+                  />
+                </Group>
+              </div>
             </div>
           )}
 
