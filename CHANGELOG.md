@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.14] — 2026-11-25
+
+Fixed Linux MPRIS2 D-Bus notification banner state sync so GNOME/KDE media notifications accurately reflect Playing/Paused status and track metadata in real time.
+
+### Fixed
+- **MPRIS2 `PropertiesChanged` GVariant Signature (`src-tauri/src/mpris.rs`)**: Replaced tuple `.to_variant()` (which double-boxed `changed.end()` into `v`, emitting `(svas)` instead of `(sa{sv}as)` and causing GNOME Shell to drop all updates) with `glib::Variant::tuple_from_iter(...)`, explicit `insert_value("Metadata", ...)`, RFC-3986 `glib::filename_to_uri` cover URLs, and a unit test asserting exact D-Bus GVariant signatures.
+- **Instant GUI & Tray Notification Sync (`src-tauri/src/main.rs`, `src-tauri/src/mpris.rs`)**: Added `MprisHandle` (`notify_change` / `notify_seeked`) triggered immediately on playback-mutating `zuno_ipc` and system tray commands instead of waiting for the 350ms fallback poll.
+
 ## [0.0.13] — 2026-11-25
 
 Smooth zero-dependency UI motion system built on `transitions.dev` tokens, asymmetric open/close polish rules, and community component patterns across all player, studio, dialog, and navigation surfaces (with full `prefers-reduced-motion` support).

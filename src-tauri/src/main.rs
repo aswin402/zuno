@@ -4,8 +4,10 @@ mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+use std::sync::Arc;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -19,11 +21,58 @@ use zuno_core::ipc::{IpcRequest, IpcResponse};
 struct AppState {
     service: Arc<ZunoService>,
     quitting: AtomicBool,
+    #[cfg(target_os = "linux")]
+    mpris: OnceLock<mpris::MprisHandle>,
+}
+
+impl AppState {
+    fn notify_mpris(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(handle) = self.mpris.get() {
+            handle.notify_change();
+        }
+    }
+
+    fn notify_mpris_seeked(&self, position_secs: f64) {
+        #[cfg(target_os = "linux")]
+        if let Some(handle) = self.mpris.get() {
+            handle.notify_seeked(position_secs);
+        }
+    }
 }
 
 #[tauri::command]
 fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
-    state.service.handle_request(req)
+    let seek_pos = match &req {
+        IpcRequest::Seek { position_secs } => Some(*position_secs),
+        _ => None,
+    };
+    let affects_mpris = matches!(
+        req,
+        IpcRequest::Play { .. }
+            | IpcRequest::Pause
+            | IpcRequest::Resume
+            | IpcRequest::TogglePause
+            | IpcRequest::Stop
+            | IpcRequest::Next
+            | IpcRequest::Previous
+            | IpcRequest::SetVolume { .. }
+            | IpcRequest::SetQueue { .. }
+            | IpcRequest::JumpQueue { .. }
+            | IpcRequest::SetMode { .. }
+            | IpcRequest::QueueClear
+            | IpcRequest::RemoveSource { .. }
+            | IpcRequest::DeleteSong { .. }
+    );
+    let resp = state.service.handle_request(req);
+    if matches!(resp, IpcResponse::Ok { .. }) {
+        if affects_mpris {
+            state.notify_mpris();
+        } else if let Some(pos) = seek_pos {
+            state.notify_mpris_seeked(pos);
+        }
+    }
+    resp
 }
 
 #[tauri::command]
@@ -190,6 +239,8 @@ fn main() {
         .manage(AppState {
             service,
             quitting: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            mpris: OnceLock::new(),
         })
         // Async zero-TCP custom URI scheme for cached embedded album cover art:
         // `zuno://localhost/cover/<id>` or `zuno://localhost/cover/<id>?s=96` (thumbnail)
@@ -232,8 +283,9 @@ fn main() {
             // lock screen controls, hardware media keys, Bluetooth buttons & playerctl).
             #[cfg(target_os = "linux")]
             {
-                let mpris_svc = Arc::clone(&app.state::<AppState>().service);
-                mpris::start_mpris(
+                let st = app.state::<AppState>();
+                let mpris_svc = Arc::clone(&st.service);
+                let handle = mpris::start_mpris(
                     mpris_svc,
                     app.handle().clone(),
                     |handle| show_or_create_main_window(handle),
@@ -241,9 +293,11 @@ fn main() {
                         let st = handle.state::<AppState>();
                         st.quitting.store(true, Ordering::SeqCst);
                         let _ = st.service.handle_request(IpcRequest::Stop);
+                        st.notify_mpris();
                         handle.exit(0);
                     },
                 );
+                let _ = st.mpris.set(handle);
             }
 
             // Minimalist B&W Zuno system tray icon with Play/Pause/Next/Prev & Destroy-WebView support
@@ -271,16 +325,20 @@ fn main() {
                         "show" => show_or_create_main_window(app),
                         "toggle" => {
                             let _ = state.service.handle_request(IpcRequest::TogglePause);
+                            state.notify_mpris();
                         }
                         "next" => {
                             let _ = state.service.handle_request(IpcRequest::Next);
+                            state.notify_mpris();
                         }
                         "prev" => {
                             let _ = state.service.handle_request(IpcRequest::Previous);
+                            state.notify_mpris();
                         }
                         "quit" => {
                             state.quitting.store(true, Ordering::SeqCst);
                             let _ = state.service.handle_request(IpcRequest::Stop);
+                            state.notify_mpris();
                             app.exit(0);
                         }
                         _ => {}

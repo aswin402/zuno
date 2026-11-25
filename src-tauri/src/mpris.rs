@@ -129,45 +129,22 @@ impl MprisShared {
             fallback.exists().then_some(fallback)
         };
 
-        let url = art_path.map(|p| format!("file://{}", p.display()));
+        let url = art_path.map(|p| {
+            glib::filename_to_uri(&p, None)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| format!("file://{}", p.display()))
+        });
         cache.track_id = Some(track.id.clone());
         cache.art_url = url.clone();
         url
     }
 
     fn metadata_variant(&self, status: &PlaybackStatus) -> glib::Variant {
-        let dict = glib::VariantDict::new(None);
-        if let Some(ref track) = status.current_track {
-            let obj_path = format!("/org/zuno/track/{}", sanitize_object_segment(&track.id));
-            if let Ok(path) = ObjectPath::try_from(obj_path) {
-                dict.insert("mpris:trackid", path);
-            }
-            let length_us = (track.duration_secs as i64).saturating_mul(1_000_000);
-            dict.insert("mpris:length", length_us);
-            dict.insert("xesam:title", track.title.as_str());
-
-            let artist = if track.artist.is_empty() || track.artist == "Unknown Artist" {
-                if !track.folder.is_empty() {
-                    track.folder.clone()
-                } else {
-                    "Unknown Artist".to_string()
-                }
-            } else {
-                track.artist.clone()
-            };
-            dict.insert("xesam:artist", vec![artist]);
-
-            if !track.album.is_empty() {
-                dict.insert("xesam:album", track.album.as_str());
-            } else if !track.folder.is_empty() {
-                dict.insert("xesam:album", track.folder.as_str());
-            }
-
-            if let Some(art_url) = self.art_url_for_track(track) {
-                dict.insert("mpris:artUrl", art_url);
-            }
-        }
-        dict.end()
+        let art_url = status
+            .current_track
+            .as_ref()
+            .and_then(|t| self.art_url_for_track(t));
+        build_metadata_variant(status.current_track.as_ref(), art_url.as_deref())
     }
 
     fn emit_changes(&self) {
@@ -208,7 +185,7 @@ impl MprisShared {
             changed.insert("PlaybackStatus", playback_status_str(status.state));
         }
         if prev.track_id != next.track_id || prev.duration_secs != next.duration_secs {
-            changed.insert("Metadata", self.metadata_variant(&status));
+            changed.insert_value("Metadata", &self.metadata_variant(&status));
         }
         if prev.volume_pct != next.volume_pct {
             changed.insert("Volume", status.volume as f64);
@@ -220,7 +197,11 @@ impl MprisShared {
             changed.insert("LoopStatus", loop_status_str(status.repeat));
         }
 
-        let payload = (PLAYER_IFACE, changed.end(), Vec::<String>::new()).to_variant();
+        // IMPORTANT: Use `Variant::tuple_from_iter` (NOT `(...).to_variant()`),
+        // because `ToVariant for glib::Variant` boxes `changed.end()` into `v`,
+        // which would emit `(svas)` instead of the D-Bus required `(sa{sv}as)`
+        // and cause GNOME Shell / KDE / playerctl to silently drop every update!
+        let payload = build_properties_changed_payload(PLAYER_IFACE, changed.end(), &[]);
         let _ = conn.emit_signal(
             None,
             MPRIS_OBJECT_PATH,
@@ -248,10 +229,85 @@ impl MprisShared {
     }
 }
 
+/// Thread-safe handle allowing GUI / tray commands to flush MPRIS D-Bus updates immediately.
+#[derive(Clone)]
+pub struct MprisHandle {
+    shared: Arc<MprisShared>,
+}
+
+impl MprisHandle {
+    pub fn notify_change(&self) {
+        let shared = Arc::clone(&self.shared);
+        glib::MainContext::default().invoke(move || {
+            shared.emit_changes();
+        });
+    }
+
+    pub fn notify_seeked(&self, position_secs: f64) {
+        let shared = Arc::clone(&self.shared);
+        let pos_us = (position_secs.max(0.0) * 1_000_000.0).round() as i64;
+        glib::MainContext::default().invoke(move || {
+            shared.emit_seeked(pos_us);
+        });
+    }
+}
+
+fn build_metadata_variant(track: Option<&Track>, art_url: Option<&str>) -> glib::Variant {
+    let dict = glib::VariantDict::new(None);
+    if let Some(track) = track {
+        let obj_path = format!("/org/zuno/track/{}", sanitize_object_segment(&track.id));
+        if let Ok(path) = ObjectPath::try_from(obj_path) {
+            dict.insert("mpris:trackid", path);
+        }
+        let length_us = (track.duration_secs as i64).saturating_mul(1_000_000);
+        dict.insert("mpris:length", length_us);
+        dict.insert("xesam:title", track.title.as_str());
+
+        let artist = if track.artist.is_empty() || track.artist == "Unknown Artist" {
+            if !track.folder.is_empty() {
+                track.folder.clone()
+            } else {
+                "Unknown Artist".to_string()
+            }
+        } else {
+            track.artist.clone()
+        };
+        dict.insert("xesam:artist", vec![artist]);
+
+        if !track.album.is_empty() {
+            dict.insert("xesam:album", track.album.as_str());
+        } else if !track.folder.is_empty() {
+            dict.insert("xesam:album", track.folder.as_str());
+        }
+
+        if let Some(url) = art_url {
+            dict.insert("mpris:artUrl", url);
+        }
+    }
+    dict.end()
+}
+
+fn build_properties_changed_payload(
+    iface: &str,
+    changed: glib::Variant,
+    invalidated: &[&str],
+) -> glib::Variant {
+    glib::Variant::tuple_from_iter([
+        iface.to_variant(),
+        changed,
+        invalidated.to_variant(),
+    ])
+}
+
 /// Start native Linux MPRIS2 D-Bus media integration on the GTK/GLib main loop.
 /// Enables Ubuntu/GNOME/KDE notification media banner (album art + Play/Pause/Next/Prev),
 /// lock screen controls, hardware media keys, Bluetooth headphone buttons, and `playerctl`.
-pub fn start_mpris<F, Q>(service: Arc<ZunoService>, app_handle: AppHandle, on_raise: F, on_quit: Q)
+pub fn start_mpris<F, Q>(
+    service: Arc<ZunoService>,
+    app_handle: AppHandle,
+    on_raise: F,
+    on_quit: Q,
+) -> MprisHandle
 where
     F: Fn(&AppHandle) + Send + Sync + 'static,
     Q: Fn(&AppHandle) + Send + Sync + 'static,
@@ -456,12 +512,15 @@ where
     std::mem::forget(owner_id);
 
     // Lightweight 350ms change detector on GLib loop: emits D-Bus `PropertiesChanged`
-    // strictly when track, play state, volume, shuffle, or repeat actually changes.
+    // strictly when track, play state, volume, shuffle, or repeat actually changes
+    // (covers automatic track advance & external CLI/MCP Unix IPC changes).
     let shared_poll = Arc::clone(&shared);
     glib::timeout_add_local(Duration::from_millis(350), move || {
         shared_poll.emit_changes();
         glib::ControlFlow::Continue
     });
+
+    MprisHandle { shared }
 }
 
 fn playback_status_str(state: PlayState) -> &'static str {
@@ -489,5 +548,72 @@ fn sanitize_object_segment(raw: &str) -> String {
         "track".to_string()
     } else {
         clean
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn properties_changed_payload_has_exact_dbus_signature_sa_sv_as() {
+        let track = Track {
+            id: "abc123".into(),
+            rel_path: "songs/demo.mp3".into(),
+            source_dir: None,
+            folder: "Favorites".into(),
+            title: "Natpe Thunai".into(),
+            artist: "HipHop Tamizha".into(),
+            album: "Natpe Thunai".into(),
+            genre: None,
+            duration_secs: 274,
+            has_cover: false,
+            file_size: 1024,
+            modified_secs: 0,
+        };
+
+        let meta = build_metadata_variant(Some(&track), Some("file:///tmp/cover.png"));
+        assert_eq!(meta.type_().as_str(), "a{sv}");
+
+        let meta_dict = glib::VariantDict::new(Some(&meta));
+        let track_id = meta_dict
+            .lookup_value("mpris:trackid", None)
+            .expect("mpris:trackid missing");
+        assert_eq!(track_id.type_().as_str(), "o");
+        assert_eq!(track_id.str(), Some("/org/zuno/track/abc123"));
+
+        let title = meta_dict
+            .lookup_value("xesam:title", None)
+            .expect("xesam:title missing");
+        assert_eq!(title.type_().as_str(), "s");
+        assert_eq!(title.str(), Some("Natpe Thunai"));
+
+        let artists = meta_dict
+            .lookup_value("xesam:artist", None)
+            .expect("xesam:artist missing");
+        assert_eq!(artists.type_().as_str(), "as");
+
+        let changed = glib::VariantDict::new(None);
+        changed.insert("PlaybackStatus", playback_status_str(PlayState::Playing));
+        changed.insert_value("Metadata", &meta);
+
+        let payload = build_properties_changed_payload(PLAYER_IFACE, changed.end(), &[]);
+        // Must be `(sa{sv}as)` — NOT `(svas)` — otherwise GNOME Shell silently drops the signal!
+        assert_eq!(payload.type_().as_str(), "(sa{sv}as)");
+        assert_eq!(payload.child_value(0).str(), Some(PLAYER_IFACE));
+
+        let changed_variant = payload.child_value(1);
+        assert_eq!(changed_variant.type_().as_str(), "a{sv}");
+        let changed_dict = glib::VariantDict::new(Some(&changed_variant));
+        let ps = changed_dict
+            .lookup_value("PlaybackStatus", None)
+            .expect("PlaybackStatus missing");
+        assert_eq!(ps.type_().as_str(), "s");
+        assert_eq!(ps.str(), Some("Playing"));
+
+        let emitted_meta = changed_dict
+            .lookup_value("Metadata", None)
+            .expect("Metadata missing");
+        assert_eq!(emitted_meta.type_().as_str(), "a{sv}");
     }
 }
