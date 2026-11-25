@@ -16,6 +16,8 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 APP_DIR="$DATA_DIR/applications"
 ICON_BASE="$DATA_DIR/icons/hicolor"
 
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+
 cd "$ROOT_DIR"
 
 echo "==> Checking build artifacts..."
@@ -24,12 +26,12 @@ if [ ! -f "dist/index.html" ]; then
   npm run build
 fi
 
-if [ ! -f "target/release/zuno" ]; then
+if [ ! -f "$TARGET_DIR/release/zuno" ]; then
   echo "==> Building native Tauri v2 desktop binary (zuno)..."
   cargo build --release -p zuno
 fi
 
-if [ ! -f "target/release/zuno-mcp" ]; then
+if [ ! -f "$TARGET_DIR/release/zuno-mcp" ]; then
   echo "==> Building CLI & MCP binary (zuno-mcp)..."
   cargo build --release -p zuno-mcp
 fi
@@ -42,8 +44,8 @@ mkdir -p "$BIN_DIR" "$APP_DIR" \
   "$HOME/zuno/songs" \
   "$HOME/zuno/playlists"
 
-install -m 755 "target/release/zuno" "$BIN_DIR/zuno"
-install -m 755 "target/release/zuno-mcp" "$BIN_DIR/zuno-mcp"
+install -m 755 "$TARGET_DIR/release/zuno" "$BIN_DIR/zuno"
+install -m 755 "$TARGET_DIR/release/zuno-mcp" "$BIN_DIR/zuno-mcp"
 
 # Clean up any legacy external web/ folder (frontend is now compiled straight into the binaries)
 rm -rf "$DATA_DIR/zuno/web"
