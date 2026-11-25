@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Archive,
   ArrowUpCircle,
@@ -13,7 +13,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { MotionSwitch } from '@/components/ui/motion'
-import { cn } from '@/lib/utils'
+import { formatError, shortenHomePath } from '@/lib/format'
+import { cn, formatBytes } from '@/lib/utils'
 import {
   isTauriRuntime,
   zunoApi,
@@ -26,6 +27,7 @@ import {
 interface UpdateDialogProps {
   open: boolean
   appVersion: string
+  homeDir?: string | null
   updateInfo: UpdateInfo | null
   checking: boolean
   checkError: string | null
@@ -38,9 +40,9 @@ interface UpdateDialogProps {
   onClose: () => void
 }
 
-function formatBytes(bytes: number | null | undefined): string {
+function formatReleaseSize(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return ''
-  return `${(bytes / 1_048_576).toFixed(1)} MB`
+  return formatBytes(bytes)
 }
 
 function formatReleaseDate(iso: string): string {
@@ -54,10 +56,6 @@ function formatReleaseDate(iso: string): string {
   })
 }
 
-function shortenPath(p: string): string {
-  return p.replace(/^\/home\/[^/]+/, '~').replace(/^\/Users\/[^/]+/, '~')
-}
-
 const CLI_INSTALL_CMD =
   'curl -fsSL https://raw.githubusercontent.com/aswin402/zuno/main/install.sh | bash'
 
@@ -68,22 +66,19 @@ const STAGES: { id: UpdateProgress['stage']; label: string }[] = [
   { id: 'installing', label: 'Install updated binary' },
 ]
 
+const STAGE_INDEX_MAP: Record<UpdateProgress['stage'], number> = {
+  idle: -1,
+  error: -1,
+  backup: 0,
+  downloading: 1,
+  verifying: 2,
+  extracting: 3,
+  installing: 3,
+  done: 4,
+}
+
 function stageIndex(stage: UpdateProgress['stage']): number {
-  switch (stage) {
-    case 'backup':
-      return 0
-    case 'downloading':
-      return 1
-    case 'verifying':
-      return 2
-    case 'extracting':
-    case 'installing':
-      return 3
-    case 'done':
-      return 4
-    default:
-      return -1
-  }
+  return STAGE_INDEX_MAP[stage] ?? -1
 }
 
 /**
@@ -95,6 +90,7 @@ function stageIndex(stage: UpdateProgress['stage']): number {
 export function UpdateDialog({
   open,
   appVersion,
+  homeDir,
   updateInfo,
   checking,
   checkError,
@@ -119,18 +115,31 @@ export function UpdateDialog({
   const [manualBackupBusy, setManualBackupBusy] = useState(false)
   const [manualBackup, setManualBackup] = useState<BackupReport | null>(null)
   const [copiedCli, setCopiedCli] = useState(false)
+  const copyTimerRef = useRef<number | null>(null)
 
-  // Poll live backend update progress while installing
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
+  // Poll live backend update progress while installing (with in-flight guard)
   useEffect(() => {
     if (!installing) return
     let active = true
+    let inFlight = false
     const tick = () => {
+      if (!active || inFlight) return
+      inFlight = true
       zunoApi
         .getUpdateProgress()
         .then((p) => {
           if (active && p) setProgress(p)
         })
         .catch(() => {})
+        .finally(() => {
+          inFlight = false
+        })
     }
     tick()
     const id = window.setInterval(tick, 160)
@@ -172,7 +181,7 @@ export function UpdateDialog({
       })
       setInstallResult(result)
     } catch (err) {
-      setInstallError(String(err).replace(/^Error:\s*/i, ''))
+      setInstallError(formatError(err))
     } finally {
       setInstalling(false)
     }
@@ -189,7 +198,7 @@ export function UpdateDialog({
         onBackupDone?.(report)
       }
     } catch (err) {
-      setInstallError(String(err).replace(/^Error:\s*/i, ''))
+      setInstallError(formatError(err))
     } finally {
       setManualBackupBusy(false)
     }
@@ -198,7 +207,11 @@ export function UpdateDialog({
   function handleCopyCli() {
     navigator.clipboard?.writeText(CLI_INSTALL_CMD).catch(() => {})
     setCopiedCli(true)
-    window.setTimeout(() => setCopiedCli(false), 1800)
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null
+      setCopiedCli(false)
+    }, 1800)
   }
 
   const title = installResult
@@ -239,13 +252,13 @@ export function UpdateDialog({
                     Installed Zuno v{installResult.installed_version}
                   </p>
                   <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {shortenPath(installResult.installed_path)}
+                    {shortenHomePath(installResult.installed_path, homeDir)}
                   </p>
                   {installResult.backup_path && (
                     <p className="pt-1 text-xs text-muted-foreground">
                       Backup saved ({installResult.backup_files} files):{' '}
                       <span className="font-mono text-[11px] text-foreground">
-                        {shortenPath(installResult.backup_path)}
+                        {shortenHomePath(installResult.backup_path, homeDir)}
                       </span>
                     </p>
                   )}
@@ -349,8 +362,8 @@ export function UpdateDialog({
                     {formatReleaseDate(updateInfo.published_at) && (
                       <span>{formatReleaseDate(updateInfo.published_at)}</span>
                     )}
-                    {formatBytes(updateInfo.size_bytes) && (
-                      <span>· {formatBytes(updateInfo.size_bytes)}</span>
+                    {formatReleaseSize(updateInfo.size_bytes) && (
+                      <span>· {formatReleaseSize(updateInfo.size_bytes)}</span>
                     )}
                   </div>
                 </div>
@@ -447,7 +460,7 @@ export function UpdateDialog({
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                       {manualBackup
-                        ? `Saved ${manualBackup.files_count} files → ${shortenPath(manualBackup.backup_path)}`
+                        ? `Saved ${manualBackup.files_count} files → ${shortenHomePath(manualBackup.backup_path, homeDir)}`
                         : 'Snapshots playlists, folders, EQ presets & theme settings.'}
                     </p>
                   </div>

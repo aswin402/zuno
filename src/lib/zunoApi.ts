@@ -1,3 +1,5 @@
+import { clampUiZoom } from '@/lib/appearance'
+import { isHlsStreamUrl } from '@/lib/radioUrl'
 import type {
   DiscoveredStation,
   FmHardwareStatus,
@@ -63,6 +65,7 @@ export interface ServerInfo {
   root_dir: string
   songs_dir: string
   playlists_dir: string
+  home_dir?: string | null
   suggested_dirs?: string[]
   mcp_http_url: string
   version: string
@@ -451,7 +454,7 @@ export const zunoApi = {
         genre: null,
         bitrate: null,
         content_type: null,
-        is_hls: /\.m3u8(\?|$)/i.test(url),
+        is_hls: isHlsStreamUrl(url),
       }
     }
     return await tauri.invoke<ResolvedStreamInfo>('zuno_radio_resolve_url', { url })
@@ -554,7 +557,7 @@ export const zunoWindow = {
     }
   },
   setZoom: async (percent: number): Promise<void> => {
-    const clamped = Math.round(Math.min(200, Math.max(50, percent)))
+    const clamped = clampUiZoom(percent)
     const factor = clamped / 100
     const tauri = getTauriInternals()
     if (tauri) {

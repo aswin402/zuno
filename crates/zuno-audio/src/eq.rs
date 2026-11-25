@@ -1,3 +1,4 @@
+use crate::engine::MIN_SAMPLE_RATE;
 use crate::spectrum::{SharedSpectrum, SpectrumAnalyzer};
 use rodio::Source;
 use rodio::source::SeekError;
@@ -7,8 +8,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+pub const EQ_BANDS: usize = 10;
+pub const EQ_MIN_DB: f32 = -12.0;
+pub const EQ_MAX_DB: f32 = 12.0;
+const EQ_PEAKING_Q: f32 = 1.4;
+const EQ_UNITY_EPS_DB: f32 = 0.01;
+const EQ_RAMP_TAU_SECS: f32 = 0.012;
+const EQ_AUTO_TRIM_THRESHOLD_DB: f32 = 2.5;
+const EQ_AUTO_TRIM_SLOPE: f32 = 0.45;
+const LIMITER_KNEE: f32 = 0.88;
+const LIMITER_HEADROOM: f32 = 0.11;
+
 /// ISO 10-band center frequencies matching the Zuno frontend EqualizerPage.
-pub const EQ_FREQS: [f32; 10] = [
+pub const EQ_FREQS: [f32; EQ_BANDS] = [
     32.0, 64.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
 
@@ -17,7 +29,7 @@ pub struct EqConfig {
     pub enabled: bool,
     pub preamp_db: f32,
     pub limiter: bool,
-    pub bands_db: [f32; 10],
+    pub bands_db: [f32; EQ_BANDS],
 }
 
 impl Default for EqConfig {
@@ -26,7 +38,7 @@ impl Default for EqConfig {
             enabled: false,
             preamp_db: 0.0,
             limiter: true,
-            bands_db: [0.0; 10],
+            bands_db: [0.0; EQ_BANDS],
         }
     }
 }
@@ -54,9 +66,9 @@ impl SharedEq {
     }
 
     pub fn update(&self, mut cfg: EqConfig) {
-        cfg.preamp_db = cfg.preamp_db.clamp(-12.0, 12.0);
+        cfg.preamp_db = cfg.preamp_db.clamp(EQ_MIN_DB, EQ_MAX_DB);
         for b in &mut cfg.bands_db {
-            *b = b.clamp(-12.0, 12.0);
+            *b = b.clamp(EQ_MIN_DB, EQ_MAX_DB);
         }
         if let Ok(mut guard) = self.config.write() {
             *guard = cfg;
@@ -101,83 +113,68 @@ impl Default for BiquadCoeffs {
     }
 }
 
+impl BiquadCoeffs {
+    #[inline]
+    fn normalized(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Self {
+        let inv = 1.0 / a0;
+        Self {
+            b0: b0 * inv,
+            b1: b1 * inv,
+            b2: b2 * inv,
+            a1: a1 * inv,
+            a2: a2 * inv,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BandFilterKind {
+    LowShelf,
+    Peaking,
+    HighShelf,
+}
+
 /// Robert Bristow-Johnson Audio EQ Cookbook coefficients (matching Web Audio BiquadFilterNode).
-fn design_low_shelf(fs: f32, f0: f32, gain_db: f32) -> BiquadCoeffs {
-    if gain_db.abs() < 0.01 || f0 >= fs * 0.48 {
+fn design_biquad(kind: BandFilterKind, fs: f32, f0: f32, gain_db: f32) -> BiquadCoeffs {
+    if gain_db.abs() < EQ_UNITY_EPS_DB || f0 >= fs * 0.48 {
         return BiquadCoeffs::default();
     }
     let a = 10f32.powf(gain_db / 40.0);
     let w0 = 2.0 * PI * f0 / fs;
     let cos_w0 = w0.cos();
     let sin_w0 = w0.sin();
-    let alpha = sin_w0 / 2.0 * std::f32::consts::SQRT_2;
-    let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
 
-    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
-    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
-    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
-    let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
-    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
-    let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+    match kind {
+        BandFilterKind::LowShelf | BandFilterKind::HighShelf => {
+            let sign = if matches!(kind, BandFilterKind::HighShelf) {
+                1.0
+            } else {
+                -1.0
+            };
+            let alpha = sin_w0 * 0.5 * std::f32::consts::SQRT_2;
+            let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+            let ap1 = a + 1.0;
+            let am1 = a - 1.0;
 
-    BiquadCoeffs {
-        b0: b0 / a0,
-        b1: b1 / a0,
-        b2: b2 / a0,
-        a1: a1 / a0,
-        a2: a2 / a0,
-    }
-}
-
-fn design_high_shelf(fs: f32, f0: f32, gain_db: f32) -> BiquadCoeffs {
-    if gain_db.abs() < 0.01 || f0 >= fs * 0.48 {
-        return BiquadCoeffs::default();
-    }
-    let a = 10f32.powf(gain_db / 40.0);
-    let w0 = 2.0 * PI * f0 / fs;
-    let cos_w0 = w0.cos();
-    let sin_w0 = w0.sin();
-    let alpha = sin_w0 / 2.0 * std::f32::consts::SQRT_2;
-    let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
-
-    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
-    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
-    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
-    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
-    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
-    let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
-
-    BiquadCoeffs {
-        b0: b0 / a0,
-        b1: b1 / a0,
-        b2: b2 / a0,
-        a1: a1 / a0,
-        a2: a2 / a0,
-    }
-}
-
-fn design_peaking(fs: f32, f0: f32, q: f32, gain_db: f32) -> BiquadCoeffs {
-    if gain_db.abs() < 0.01 || f0 >= fs * 0.48 {
-        return BiquadCoeffs::default();
-    }
-    let a = 10f32.powf(gain_db / 40.0);
-    let w0 = 2.0 * PI * f0 / fs;
-    let cos_w0 = w0.cos();
-    let alpha = w0.sin() / (2.0 * q);
-
-    let b0 = 1.0 + alpha * a;
-    let b1 = -2.0 * cos_w0;
-    let b2 = 1.0 - alpha * a;
-    let a0 = 1.0 + alpha / a;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha / a;
-
-    BiquadCoeffs {
-        b0: b0 / a0,
-        b1: b1 / a0,
-        b2: b2 / a0,
-        a1: a1 / a0,
-        a2: a2 / a0,
+            let b0 = a * (ap1 + sign * am1 * cos_w0 + two_sqrt_a_alpha);
+            let b1 = -2.0 * sign * a * (am1 + sign * ap1 * cos_w0);
+            let b2 = a * (ap1 + sign * am1 * cos_w0 - two_sqrt_a_alpha);
+            let a0 = ap1 - sign * am1 * cos_w0 + two_sqrt_a_alpha;
+            let a1 = 2.0 * sign * (am1 - sign * ap1 * cos_w0);
+            let a2 = ap1 - sign * am1 * cos_w0 - two_sqrt_a_alpha;
+            BiquadCoeffs::normalized(b0, b1, b2, a0, a1, a2)
+        }
+        BandFilterKind::Peaking => {
+            let alpha = sin_w0 / (2.0 * EQ_PEAKING_Q);
+            BiquadCoeffs::normalized(
+                1.0 + alpha * a,
+                -2.0 * cos_w0,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cos_w0,
+                1.0 - alpha / a,
+            )
+        }
     }
 }
 
@@ -194,17 +191,19 @@ pub struct EqSource<S> {
     last_gen: u64,
     channels: usize,
     sample_rate: f32,
+    ramp_alpha: f32,
     ch_cursor: usize,
     enabled: bool,
     limiter: bool,
+    active_mask: u16,
     target_preamp: f32,
     current_preamp: f32,
     target_wet: f32,
     current_wet: f32,
-    coeffs: [BiquadCoeffs; 10],
+    coeffs: [BiquadCoeffs; EQ_BANDS],
     // Direct Form II Transposed delay states per band & channel
-    z1: [[f32; MAX_CH]; 10],
-    z2: [[f32; MAX_CH]; 10],
+    z1: [[f32; MAX_CH]; EQ_BANDS],
+    z2: [[f32; MAX_CH]; EQ_BANDS],
 }
 
 impl<S> EqSource<S>
@@ -221,7 +220,9 @@ where
         spectrum: Option<Arc<SharedSpectrum>>,
     ) -> Self {
         let channels = (inner.channels() as usize).clamp(1, MAX_CH);
-        let sample_rate = inner.sample_rate().max(8000) as f32;
+        let sample_rate = inner.sample_rate().max(MIN_SAMPLE_RATE) as f32;
+        // Sample-rate-independent exponential smoothing (~12ms time constant at any sample rate).
+        let ramp_alpha = (1.0 - (-1.0 / (EQ_RAMP_TAU_SECS * sample_rate)).exp()).clamp(0.0002, 0.05);
         let analyzer = spectrum
             .as_ref()
             .map(|_| Box::new(SpectrumAnalyzer::new(sample_rate)));
@@ -234,16 +235,18 @@ where
             last_gen: 0,
             channels,
             sample_rate,
+            ramp_alpha,
             ch_cursor: 0,
             enabled: false,
             limiter: true,
+            active_mask: 0,
             target_preamp: 1.0,
             current_preamp: 1.0,
             target_wet: 0.0,
             current_wet: 0.0,
-            coeffs: [BiquadCoeffs::default(); 10],
-            z1: [[0.0; MAX_CH]; 10],
-            z2: [[0.0; MAX_CH]; 10],
+            coeffs: [BiquadCoeffs::default(); EQ_BANDS],
+            z1: [[0.0; MAX_CH]; EQ_BANDS],
+            z2: [[0.0; MAX_CH]; EQ_BANDS],
         };
         src.sync_config();
         src.current_preamp = src.target_preamp;
@@ -260,14 +263,10 @@ where
 
         // Gentle automatic headroom trim when boosting bands with limiter ON
         // to prevent digital clipping noise on mastered tracks.
-        let peak_boost = cfg
-            .bands_db
-            .iter()
-            .copied()
-            .fold(0.0f32, f32::max);
+        let peak_boost = cfg.bands_db.iter().copied().fold(0.0f32, f32::max);
         let total_boost = (cfg.preamp_db + peak_boost).max(0.0);
-        let auto_trim = if cfg.enabled && cfg.limiter && total_boost > 2.5 {
-            -(total_boost - 2.5) * 0.45
+        let auto_trim = if cfg.enabled && cfg.limiter && total_boost > EQ_AUTO_TRIM_THRESHOLD_DB {
+            -(total_boost - EQ_AUTO_TRIM_THRESHOLD_DB) * EQ_AUTO_TRIM_SLOPE
         } else {
             0.0
         };
@@ -278,19 +277,29 @@ where
         };
         self.target_preamp = 10f32.powf(eff_preamp / 20.0);
 
+        let mut mask = 0u16;
         for (i, &freq) in EQ_FREQS.iter().enumerate() {
             let db = if cfg.enabled { cfg.bands_db[i] } else { 0.0 };
-            self.coeffs[i] = match i {
-                0 => design_low_shelf(self.sample_rate, freq, db),
-                9 => design_high_shelf(self.sample_rate, freq, db),
-                _ => design_peaking(self.sample_rate, freq, 1.4, db),
+            let kind = match i {
+                0 => BandFilterKind::LowShelf,
+                last if last + 1 == EQ_BANDS => BandFilterKind::HighShelf,
+                _ => BandFilterKind::Peaking,
             };
+            self.coeffs[i] = design_biquad(kind, self.sample_rate, freq, db);
+            if db.abs() >= EQ_UNITY_EPS_DB && freq < self.sample_rate * 0.48 {
+                mask |= 1u16 << i;
+            } else {
+                // Zero delay state for unity bands so re-enabling later stays click-free.
+                self.z1[i] = [0.0; MAX_CH];
+                self.z2[i] = [0.0; MAX_CH];
+            }
         }
+        self.active_mask = mask;
     }
 
     fn reset_states(&mut self) {
-        self.z1 = [[0.0; MAX_CH]; 10];
-        self.z2 = [[0.0; MAX_CH]; 10];
+        self.z1 = [[0.0; MAX_CH]; EQ_BANDS];
+        self.z2 = [[0.0; MAX_CH]; EQ_BANDS];
         self.ch_cursor = 0;
         self.mono_accum = 0.0;
         if let Some(ref mut a) = self.analyzer {
@@ -312,13 +321,13 @@ where
 
     #[inline]
     fn soft_limit(x: f32) -> f32 {
-        // Transparent unity below 0.88; smooth asymptotic soft ceiling below 0.99
+        // Transparent unity below knee; smooth asymptotic soft ceiling below 0.99.
         let ax = x.abs();
-        if ax <= 0.88 {
+        if ax <= LIMITER_KNEE {
             x
         } else {
-            let excess = ax - 0.88;
-            let shaped = 0.88 + 0.11 * (excess / (0.11 + excess));
+            let excess = ax - LIMITER_KNEE;
+            let shaped = LIMITER_KNEE + LIMITER_HEADROOM * (excess / (LIMITER_HEADROOM + excess));
             shaped.copysign(x)
         }
     }
@@ -334,17 +343,18 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let dry = self.inner.next()?;
         let ch = self.ch_cursor;
-        self.ch_cursor = (ch + 1) % self.channels;
+        let next_ch = ch + 1;
+        self.ch_cursor = if next_ch >= self.channels { 0 } else { next_ch };
 
         // Check atomic generation once per audio frame (zero lock in steady state)
         if ch == 0 && self.shared.generation() != self.last_gen {
             self.sync_config();
         }
 
-        // Smooth clickless crossfade & preamp ramp (~12ms)
+        // Sample-rate-normalized clickless crossfade & preamp ramp
         if ch == 0 {
-            self.current_wet += (self.target_wet - self.current_wet) * 0.002;
-            self.current_preamp += (self.target_preamp - self.current_preamp) * 0.002;
+            self.current_wet += (self.target_wet - self.current_wet) * self.ramp_alpha;
+            self.current_preamp += (self.target_preamp - self.current_preamp) * self.ramp_alpha;
         }
 
         // Fast bit-exact bypass when EQ is fully off (0 DSP FLOPs!)
@@ -355,7 +365,10 @@ where
         }
 
         let mut x = dry * self.current_preamp;
-        for band in 0..10 {
+        let mut mask = self.active_mask;
+        while mask != 0 {
+            let band = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             let c = &self.coeffs[band];
             let y = c.b0 * x + self.z1[band][ch];
             self.z1[band][ch] = c.b1 * x - c.a1 * y + self.z2[band][ch];

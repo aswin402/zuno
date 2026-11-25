@@ -8,6 +8,7 @@ import {
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
+import { isTauriRuntime, zunoApi } from '@/lib/zunoApi'
 import {
   BUILTIN_EQ_PRESETS,
   buildEqSplinePath,
@@ -79,37 +80,72 @@ export function EqualizerPage({
     if (isPlaying) onEnsureAudioAttached()
   }, [isPlaying, onEnsureAudioAttached])
 
-  // Zero-rerender live monochrome spectrum ribbon (mutates single SVG path via ref at ~30fps,
+  // Zero-rerender live monochrome spectrum ribbon (works in BOTH native Tauri FFT & Web Audio,
   // pauses automatically when tab is hidden to save CPU)
   useEffect(() => {
     const pathEl = spectrumPathRef.current
-    if (!isPlaying || !audioEl) {
+    const native = isTauriRuntime()
+    if (!isPlaying || (!native && !audioEl)) {
       if (pathEl) pathEl.setAttribute('d', '')
       return
     }
+    let disposed = false
     let raf = 0
     let lastDraw = 0
+    let pollTimer: number | undefined
+    let pollInFlight = false
     const bins = new Uint8Array(new ArrayBuffer(64))
+    const nativeBands = new Float32Array(24)
+
+    const drawRibbon = (values: ArrayLike<number>, count: number, maxVal: number) => {
+      const el = spectrumPathRef.current
+      if (!el || count < 2) return
+      const usableW = CURVE_W - PAD_X * 2
+      const baseY = CURVE_H - PAD_Y
+      const maxH = (CURVE_H - PAD_Y * 2) * 0.62
+      const pts: string[] = [`M ${PAD_X} ${baseY}`]
+      for (let i = 0; i < count; i++) {
+        const x = PAD_X + (i / (count - 1)) * usableW
+        const norm = Math.max(0, Math.min(1, (values[i] ?? 0) / maxVal))
+        const y = baseY - norm * maxH
+        pts.push(`L ${x.toFixed(1)} ${y.toFixed(1)}`)
+      }
+      pts.push(`L ${CURVE_W - PAD_X} ${baseY} Z`)
+      el.setAttribute('d', pts.join(' '))
+    }
+
+    if (native) {
+      const pollNative = () => {
+        if (disposed || document.hidden || pollInFlight) return
+        pollInFlight = true
+        zunoApi
+          .audioLevels()
+          .then((lvl) => {
+            if (disposed || !lvl) return
+            const len = Math.min(nativeBands.length, lvl.bands.length)
+            for (let i = 0; i < len; i++) {
+              nativeBands[i] = lvl.bands[i] ?? 0
+            }
+            drawRibbon(nativeBands, len, 1)
+          })
+          .finally(() => {
+            pollInFlight = false
+          })
+      }
+      pollNative()
+      pollTimer = window.setInterval(pollNative, 33)
+      return () => {
+        disposed = true
+        if (pollTimer !== undefined) window.clearInterval(pollTimer)
+        if (spectrumPathRef.current) spectrumPathRef.current.setAttribute('d', '')
+      }
+    }
 
     const tick = (now: number) => {
       if (!document.hidden && now - lastDraw >= 32) {
         lastDraw = now
-        const el = spectrumPathRef.current
-        if (el && readSpectrumData(audioEl, bins)) {
-          const usableBins = 32
-          const usableW = CURVE_W - PAD_X * 2
-          const baseY = CURVE_H - PAD_Y
-          const maxH = (CURVE_H - PAD_Y * 2) * 0.62
-          const pts: string[] = [`M ${PAD_X} ${baseY}`]
-
-          for (let i = 0; i < usableBins; i++) {
-            const x = PAD_X + (i / (usableBins - 1)) * usableW
-            const norm = (bins[i] ?? 0) / 255
-            const y = baseY - norm * maxH
-            pts.push(`L ${x.toFixed(1)} ${y.toFixed(1)}`)
-          }
-          pts.push(`L ${CURVE_W - PAD_X} ${baseY} Z`)
-          el.setAttribute('d', pts.join(' '))
+        if (readSpectrumData(audioEl, bins)) {
+          drawRibbon(bins, 32, 255)
         }
       }
       raf = requestAnimationFrame(tick)
@@ -117,6 +153,7 @@ export function EqualizerPage({
 
     raf = requestAnimationFrame(tick)
     return () => {
+      disposed = true
       cancelAnimationFrame(raf)
       if (spectrumPathRef.current) spectrumPathRef.current.setAttribute('d', '')
     }
@@ -126,6 +163,21 @@ export function EqualizerPage({
     () => [...BUILTIN_EQ_PRESETS, ...settings.customPresets],
     [settings.customPresets],
   )
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<EqCategory, number> = {
+      all: allPresets.length,
+      reference: 0,
+      bass: 0,
+      vocals: 0,
+      genres: 0,
+      custom: 0,
+    }
+    for (const p of allPresets) {
+      counts[p.category] = (counts[p.category] ?? 0) + 1
+    }
+    return counts
+  }, [allPresets])
 
   const filteredPresets = useMemo(() => {
     if (category === 'all') return allPresets
@@ -578,23 +630,17 @@ export function EqualizerPage({
             variant="compact"
             wrap
             ariaLabel="Equalizer preset categories"
-            options={EQ_CATEGORIES.map((cat) => {
-              const count =
-                cat.id === 'all'
-                  ? allPresets.length
-                  : allPresets.filter((p) => p.category === cat.id).length
-              return {
-                value: cat.id,
-                label: (
-                  <>
-                    <span>{cat.label}</span>
-                    <span className="tabular-nums text-[10px] opacity-65">
-                      {count}
-                    </span>
-                  </>
-                ),
-              }
-            })}
+            options={EQ_CATEGORIES.map((cat) => ({
+              value: cat.id,
+              label: (
+                <>
+                  <span>{cat.label}</span>
+                  <span className="tabular-nums text-[10px] opacity-65">
+                    {categoryCounts[cat.id]}
+                  </span>
+                </>
+              ),
+            }))}
           />
         </div>
 

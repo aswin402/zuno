@@ -4,6 +4,7 @@ import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
 import { ZunoLogo } from '@/components/ZunoLogo'
+import { isFavoritesPlaylist } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type {
   IconPackId,
@@ -93,7 +94,7 @@ export function DesktopSidebar({
 }: DesktopSidebarProps) {
   const isFav =
     page === 'playlist' &&
-    (activePlaylistSlug === 'favorites' || activePlaylistSlug === 'fav')
+    Boolean(activePlaylistSlug && isFavoritesPlaylist({ slug: activePlaylistSlug }))
 
   return (
     <aside className="hidden h-full w-[224px] shrink-0 flex-col border-r border-border bg-card lg:flex">

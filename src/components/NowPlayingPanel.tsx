@@ -30,6 +30,12 @@ import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import {
+  DEFAULT_VOLUME,
+  displayArtist,
+  isFavoritesPlaylist,
+  MUTE_EPSILON,
+} from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import {
   DEFAULT_APPEARANCE,
@@ -182,20 +188,21 @@ export function NowPlayingPanel({
   const iconPack = appearance.iconPack
   const isLight = appearance.mode === 'light'
 
-  const subtitle = track
-    ? track.artist === 'Unknown Artist' && track.folder
-      ? track.folder
-      : track.artist
-    : 'Select a track'
+  const subtitle = track ? displayArtist(track) : 'Select a track'
 
   const orderedPlaylists = useMemo(() => {
     return [...playlists].sort((a, b) => {
-      const aFav = a.slug === 'favorites' || a.slug === 'fav' ? 0 : 1
-      const bFav = b.slug === 'favorites' || b.slug === 'fav' ? 0 : 1
+      const aFav = isFavoritesPlaylist(a) ? 0 : 1
+      const bFav = isFavoritesPlaylist(b) ? 0 : 1
       if (aFav !== bFav) return aFav - bFav
       return a.title.localeCompare(b.title)
     })
   }, [playlists])
+
+  const playlistTrackSets = useMemo(
+    () => new Map(playlists.map((pl) => [pl.slug, new Set(pl.track_ids)])),
+    [playlists],
+  )
 
   // Escape closes popover / drawer first, then full-screen player
   useEffect(() => {
@@ -496,12 +503,12 @@ export function NowPlayingPanel({
                 <div className="mt-0.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2">
                   <button
                     type="button"
-                    onClick={() => onVolumeChange(volume > 0 ? 0 : 0.8)}
+                    onClick={() => onVolumeChange(volume > MUTE_EPSILON ? 0 : DEFAULT_VOLUME)}
                     aria-label="Mute or unmute"
                     className="text-muted-foreground hover:text-foreground cursor-pointer"
                   >
                     <ZunoIcon
-                      name={volume <= 0.001 ? 'mute' : 'volume'}
+                      name={volume <= MUTE_EPSILON ? 'mute' : 'volume'}
                       pack={iconPack}
                       className="h-3.5 w-3.5"
                     />
@@ -1013,10 +1020,7 @@ export function NowPlayingPanel({
                     renderItem={(item, idx) => {
                       const isCurrent = idx === queueIndex
                       const playingHere = isCurrent && isPlaying
-                      const itemArtist =
-                        item.artist === 'Unknown Artist' && item.folder
-                          ? item.folder
-                          : item.artist
+                      const itemArtist = displayArtist(item)
                       return (
                         <button
                           type="button"
@@ -1149,8 +1153,10 @@ export function NowPlayingPanel({
               >
                 <div className="space-y-1.5">
                   {orderedPlaylists.map((pl) => {
-                    const isFav = pl.slug === 'favorites' || pl.slug === 'fav'
-                    const alreadyIn = track ? pl.track_ids.includes(track.id) : false
+                    const isFav = isFavoritesPlaylist(pl)
+                    const alreadyIn = track
+                      ? Boolean(playlistTrackSets.get(pl.slug)?.has(track.id))
+                      : false
                     return (
                       <div
                         key={pl.slug}

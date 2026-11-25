@@ -106,40 +106,14 @@ struct GitHubApiAsset {
 }
 
 pub fn current_target() -> &'static str {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        "linux-x86_64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        "linux-aarch64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "macos-aarch64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "macos-x86_64"
-    }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        "windows-x86_64"
-    }
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    {
-        "windows-aarch64"
-    }
-    #[cfg(not(any(
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "windows", target_arch = "aarch64"),
-    )))]
-    {
-        "unknown"
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("windows", "x86_64") => "windows-x86_64",
+        ("windows", "aarch64") => "windows-aarch64",
+        _ => "unknown",
     }
 }
 
@@ -150,20 +124,101 @@ fn repo_slug() -> String {
         .unwrap_or_else(|| DEFAULT_REPO.to_string())
 }
 
-fn parse_semver(raw: &str) -> Option<(u64, u64, u64)> {
-    let trimmed = raw.trim().trim_start_matches('v').trim_start_matches('V');
-    let core = trimmed.split(['-', '+']).next()?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemVer {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    pre: Vec<String>,
+}
+
+impl Ord for SemVer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let core = (self.major, self.minor, self.patch).cmp(&(other.major, other.minor, other.patch));
+        if core != Ordering::Equal {
+            return core;
+        }
+        // SemVer 2.0: a release without prerelease has higher precedence than a prerelease.
+        match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => {
+                for (a, b) in self.pre.iter().zip(other.pre.iter()) {
+                    let ord = match (a.parse::<u64>(), b.parse::<u64>()) {
+                        (Ok(na), Ok(nb)) => na.cmp(&nb),
+                        (Ok(_), Err(_)) => Ordering::Less,
+                        (Err(_), Ok(_)) => Ordering::Greater,
+                        (Err(_), Err(_)) => a.cmp(b),
+                    };
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+                self.pre.len().cmp(&other.pre.len())
+            }
+        }
+    }
+}
+
+impl PartialOrd for SemVer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn strip_v_prefix(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed)
+}
+
+fn parse_semver(raw: &str) -> Option<SemVer> {
+    let trimmed = strip_v_prefix(raw);
+    let no_build = trimmed.split('+').next()?;
+    let (core, pre_str) = match no_build.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (no_build, None),
+    };
     let mut parts = core.split('.');
     let major = parts.next()?.parse::<u64>().ok()?;
     let minor = parts.next().unwrap_or("0").parse::<u64>().ok()?;
     let patch = parts.next().unwrap_or("0").parse::<u64>().ok()?;
-    Some((major, minor, patch))
+    if parts.next().is_some() {
+        return None;
+    }
+    let pre = pre_str
+        .map(|s| s.split('.').map(str::to_string).collect())
+        .unwrap_or_default();
+    Some(SemVer {
+        major,
+        minor,
+        patch,
+        pre,
+    })
 }
 
 pub fn is_newer_version(current: &str, latest: &str) -> bool {
     match (parse_semver(current), parse_semver(latest)) {
         (Some(c), Some(l)) => l > c,
         _ => false,
+    }
+}
+
+/// Safely wrap a literal string for PowerShell single-quoted context (`'` -> `''`).
+#[cfg(target_os = "windows")]
+fn ps_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -245,15 +300,17 @@ pub fn backup_user_data(
         }
     }
 
-    // 2. Copy core Zuno JSON metadata files (`sources.json`, `state.json`, `index.json`, `radio.json`)
-    for (src, name) in [
-        (paths.sources_path(), "sources.json"),
-        (paths.state_path(), "state.json"),
-        (paths.index_path(), "index.json"),
-        (paths.radio_path(), "radio.json"),
+    // 2. Copy core Zuno JSON metadata files using their canonical filenames from `ZunoPaths`
+    for src in [
+        paths.sources_path(),
+        paths.state_path(),
+        paths.index_path(),
+        paths.radio_path(),
     ] {
-        if src.is_file() && fs::copy(&src, backup_dir.join(name)).is_ok() {
-            files_count += 1;
+        if let Some(name) = src.file_name() {
+            if src.is_file() && fs::copy(&src, backup_dir.join(name)).is_ok() {
+                files_count += 1;
+            }
         }
     }
 
@@ -329,12 +386,7 @@ fn http_get_text(url: &str, timeout_secs: u64) -> Result<String, String> {
         &format!("User-Agent: Zuno/{}", env!("CARGO_PKG_VERSION")),
         url,
     ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::configure_hidden_command(&mut cmd);
 
     match cmd.output() {
         Ok(out) if out.status.success() => {
@@ -351,13 +403,13 @@ fn http_get_text(url: &str, timeout_secs: u64) -> Result<String, String> {
         Err(e) => {
             #[cfg(target_os = "windows")]
             {
+                let safe_url = ps_single_quote(url);
                 let ps_script = format!(
-                    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (Invoke-WebRequest -UseBasicParsing -TimeoutSec {timeout_secs} -Uri '{url}').Content"
+                    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (Invoke-WebRequest -UseBasicParsing -TimeoutSec {timeout_secs} -Uri {safe_url}).Content"
                 );
                 let mut ps = Command::new("powershell");
                 ps.args(["-NoProfile", "-Command", &ps_script]);
-                use std::os::windows::process::CommandExt;
-                ps.creation_flags(0x08000000);
+                crate::configure_hidden_command(&mut ps);
                 if let Ok(out) = ps.output() {
                     if out.status.success() {
                         return String::from_utf8(out.stdout)
@@ -387,12 +439,7 @@ fn http_download_file(url: &str, dest: &Path) -> Result<(), String> {
         &dest_str,
         url,
     ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::configure_hidden_command(&mut cmd);
 
     match cmd.output() {
         Ok(out) if out.status.success() => Ok(()),
@@ -407,13 +454,14 @@ fn http_download_file(url: &str, dest: &Path) -> Result<(), String> {
         Err(e) => {
             #[cfg(target_os = "windows")]
             {
+                let safe_url = ps_single_quote(url);
+                let safe_dest = ps_single_quote(&dest_str);
                 let ps_script = format!(
-                    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile '{dest_str}'"
+                    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri {safe_url} -OutFile {safe_dest}"
                 );
                 let mut ps = Command::new("powershell");
                 ps.args(["-NoProfile", "-Command", &ps_script]);
-                use std::os::windows::process::CommandExt;
-                ps.creation_flags(0x08000000);
+                crate::configure_hidden_command(&mut ps);
                 if let Ok(out) = ps.output() {
                     if out.status.success() {
                         return Ok(());
@@ -527,15 +575,14 @@ fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
+        let safe_archive = ps_single_quote(&archive.to_string_lossy());
+        let safe_dest = ps_single_quote(&dest_dir.to_string_lossy());
         let ps_script = format!(
-            "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-            archive.display(),
-            dest_dir.display()
+            "Expand-Archive -LiteralPath {safe_archive} -DestinationPath {safe_dest} -Force"
         );
         let mut cmd = Command::new("powershell");
         cmd.args(["-NoProfile", "-Command", &ps_script]);
-        cmd.creation_flags(0x08000000);
+        crate::configure_hidden_command(&mut cmd);
         let out = cmd
             .output()
             .map_err(|e| format!("failed to unpack zip archive: {e}"))?;
@@ -676,6 +723,8 @@ pub fn install_update(
     let tmp_dir = paths.cache_dir().join(format!("tmp-update-{now_unix}"));
     fs::create_dir_all(&tmp_dir)
         .map_err(|e| format!("failed to prepare temp update directory: {e}"))?;
+    // RAII guard ensures `tmp_dir` is cleaned up on EVERY exit path (including SHA-256 errors).
+    let _tmp_guard = TempDirGuard(tmp_dir.clone());
 
     let archive_name = if cfg!(target_os = "windows") {
         "zuno-update.zip"
@@ -684,10 +733,11 @@ pub fn install_update(
     };
     let archive_path = tmp_dir.join(archive_name);
 
+    let clean_ver = strip_v_prefix(target_version).to_string();
     set_progress(
         progress,
         "downloading",
-        format!("Downloading Zuno v{}…", target_version.trim_start_matches('v')),
+        format!("Downloading Zuno v{clean_ver}…"),
         22,
     );
 
@@ -696,7 +746,7 @@ pub fn install_update(
         let done = Arc::clone(&done_flag);
         let prog = Arc::clone(progress);
         let watch_path = archive_path.clone();
-        let ver_label = target_version.trim_start_matches('v').to_string();
+        let ver_label = clean_ver.clone();
         std::thread::spawn(move || {
             while !done.load(Ordering::Relaxed) {
                 if let Ok(meta) = fs::metadata(&watch_path) {
@@ -732,23 +782,24 @@ pub fn install_update(
 
     if let Err(err) = dl_res {
         set_progress(progress, "error", &err, 0);
-        let _ = fs::remove_dir_all(&tmp_dir);
         return Err(err);
     }
 
     // 3. SHA-256 Verification
     if let Some(expected) = expected_sha256.filter(|s| !s.trim().is_empty()) {
         set_progress(progress, "verifying", "Verifying SHA-256 integrity…", 78);
-        let actual = sha256_file(&archive_path)
-            .map_err(|e| format!("failed to hash downloaded archive: {e}"))?;
+        let actual = sha256_file(&archive_path).map_err(|e| {
+            let msg = format!("failed to hash downloaded archive: {e}");
+            set_progress(progress, "error", &msg, 0);
+            msg
+        })?;
         if !actual.eq_ignore_ascii_case(expected.trim()) {
+            let exp_prefix: String = expected.trim().chars().take(12).collect();
+            let act_prefix: String = actual.chars().take(12).collect();
             let msg = format!(
-                "SHA-256 mismatch — aborted safely (expected {}, got {})",
-                &expected[..expected.len().min(12)],
-                &actual[..actual.len().min(12)]
+                "SHA-256 mismatch — aborted safely (expected {exp_prefix}, got {act_prefix})"
             );
             set_progress(progress, "error", &msg, 0);
-            let _ = fs::remove_dir_all(&tmp_dir);
             return Err(msg);
         }
     }
@@ -758,7 +809,6 @@ pub fn install_update(
     let extract_dir = tmp_dir.join("extract");
     if let Err(err) = extract_archive(&archive_path, &extract_dir) {
         set_progress(progress, "error", &err, 0);
-        let _ = fs::remove_dir_all(&tmp_dir);
         return Err(err);
     }
 
@@ -772,7 +822,6 @@ pub fn install_update(
 
     if let Err(err) = atomic_swap_binary(&extract_dir.join(app_bin_name), &exe_path) {
         set_progress(progress, "error", &err, 0);
-        let _ = fs::remove_dir_all(&tmp_dir);
         return Err(err);
     }
 
@@ -785,9 +834,6 @@ pub fn install_update(
         }
     }
 
-    let _ = fs::remove_dir_all(&tmp_dir);
-
-    let clean_ver = target_version.trim_start_matches('v').to_string();
     set_progress(
         progress,
         "done",
@@ -965,10 +1011,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn semver_comparison_handles_v_prefix_and_ordering() {
+    fn semver_comparison_handles_v_prefix_prerelease_and_ordering() {
         assert!(is_newer_version("0.0.14", "v0.0.15"));
         assert!(is_newer_version("v0.0.14", "0.1.0"));
         assert!(is_newer_version("0.9.9", "1.0.0"));
+        assert!(is_newer_version("1.0.0-alpha.1", "1.0.0"));
+        assert!(is_newer_version("1.0.0-alpha.2", "1.0.0-alpha.10"));
+        assert!(is_newer_version("1.0.0-alpha.1", "1.0.0-beta.1"));
+        assert!(!is_newer_version("1.0.0", "1.0.0-rc.1"));
         assert!(!is_newer_version("0.0.15", "v0.0.15"));
         assert!(!is_newer_version("0.0.15", "v0.0.14"));
         assert!(!is_newer_version("1.0.0", "0.9.9"));

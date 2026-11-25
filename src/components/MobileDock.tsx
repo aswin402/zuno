@@ -5,6 +5,7 @@ import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
+import { displayArtist } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Track } from '@/lib/zunoApi'
@@ -97,11 +98,7 @@ export function MobileDock({
     },
   ]
 
-  const artistLabel = track
-    ? track.artist === 'Unknown Artist' && track.folder
-      ? track.folder
-      : track.artist
-    : ''
+  const artistLabel = displayArtist(track)
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3.5 pb-[max(0.85rem,env(safe-area-inset-bottom))] lg:hidden">

@@ -84,9 +84,29 @@ const LUCIDE_MAP: Record<ZunoIconName, typeof Music> = {
   radio: Radio,
 }
 
+interface IconPackConfig {
+  animClass: string
+  renderer: 'lucide' | 'skiper99' | 'custom'
+  customVariant?: 'tabler' | 'iconsax' | 'hugeicons'
+  duotone?: boolean
+  strokeScale?: number
+}
+
+const ICON_PACK_CONFIG: Record<IconPackId, IconPackConfig> = {
+  lucide: { animClass: '', renderer: 'lucide' },
+  itshover: { animClass: 'zuno-pack-itshover', renderer: 'lucide' },
+  pulsoicon: { animClass: 'zuno-pack-pulso', renderer: 'lucide' },
+  skiper99: { animClass: 'zuno-pack-skiper99', renderer: 'skiper99' },
+  tabler: { animClass: '', renderer: 'custom', customVariant: 'tabler' },
+  iconsax: { animClass: '', renderer: 'custom', customVariant: 'iconsax', duotone: true },
+  hugeicons: { animClass: 'zuno-pack-hugeicons', renderer: 'custom', customVariant: 'hugeicons' },
+  humbleicons: { animClass: '', renderer: 'custom', customVariant: 'tabler', strokeScale: 0.92 },
+  majesticons: { animClass: '', renderer: 'custom', customVariant: 'tabler', strokeScale: 1.2 },
+}
+
 /**
- * Multi-pack icon renderer supporting Lucide, Tabler, Iconsax, Hugeicons Animated,
- * and ItsHover Animated with zero heavy third-party icon bundle overhead.
+ * Multi-pack icon renderer supporting Lucide, Skiper 99, Tabler, Iconsax, Hugeicons Animated,
+ * ItsHover, PulsoIcon, Humbleicons, and Majesticons with zero heavy icon bundle overhead.
  */
 export function ZunoIcon({
   name,
@@ -94,75 +114,35 @@ export function ZunoIcon({
   className,
   filled = false,
 }: ZunoIconProps) {
-  const animClass =
-    pack === 'skiper99'
-      ? 'zuno-pack-skiper99'
-      : pack === 'hugeicons'
-        ? 'zuno-pack-hugeicons'
-        : pack === 'itshover'
-          ? 'zuno-pack-itshover'
-          : pack === 'pulsoicon'
-            ? 'zuno-pack-pulso'
-            : ''
+  const cfg = ICON_PACK_CONFIG[pack] ?? ICON_PACK_CONFIG.lucide
 
-  if (pack === 'skiper99') {
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className={cn('zuno-icon', animClass, className)}
-        aria-hidden="true"
-      >
-        {renderSkiper99Path(name, filled)}
-      </svg>
-    )
-  }
-
-  if (pack === 'lucide' || pack === 'itshover' || pack === 'pulsoicon') {
+  if (cfg.renderer === 'lucide') {
     const Icon = LUCIDE_MAP[name]
     return (
       <Icon
-        className={cn(
-          'zuno-icon',
-          animClass,
-          filled && 'fill-current',
-          className,
-        )}
+        className={cn('zuno-icon', cfg.animClass, filled && 'fill-current', className)}
       />
     )
   }
-
-  // Tabler, Iconsax (duotone), Hugeicons Animated, Humbleicons (crisp minimal), Majesticons (confident bold)
-  const duotone = pack === 'iconsax'
-  const boldMajestic = pack === 'majesticons'
-  const roundedCap =
-    pack === 'tabler' ||
-    pack === 'iconsax' ||
-    pack === 'hugeicons' ||
-    pack === 'humbleicons' ||
-    pack === 'majesticons'
 
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeLinecap={roundedCap ? 'round' : 'butt'}
+      strokeLinecap="round"
       strokeLinejoin="round"
       style={
-        boldMajestic
-          ? { strokeWidth: 'calc(var(--zuno-icon-stroke, 1.75) * 1.2)' }
-          : pack === 'humbleicons'
-            ? { strokeWidth: 'calc(var(--zuno-icon-stroke, 1.75) * 0.92)' }
-            : undefined
+        cfg.strokeScale
+          ? { strokeWidth: `calc(var(--zuno-icon-stroke, 1.75) * ${cfg.strokeScale})` }
+          : undefined
       }
-      className={cn('zuno-icon', animClass, className)}
+      className={cn('zuno-icon', cfg.animClass, className)}
       aria-hidden="true"
     >
-      {renderCustomPath(name, pack === 'humbleicons' || pack === 'majesticons' ? 'tabler' : pack, duotone, filled)}
+      {cfg.renderer === 'skiper99'
+        ? renderSkiper99Path(name, filled)
+        : renderCustomPath(name, cfg.customVariant ?? 'tabler', Boolean(cfg.duotone), filled)}
     </svg>
   )
 }

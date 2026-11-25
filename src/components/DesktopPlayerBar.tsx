@@ -13,6 +13,7 @@ import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { DEFAULT_VOLUME, displayArtist, MUTE_EPSILON } from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
 import type { RepeatMode, Track } from '@/lib/zunoApi'
@@ -85,11 +86,7 @@ export function DesktopPlayerBar({
   const effectiveDuration = duration > 0 ? duration : (track?.duration_secs ?? 0)
   const iconPack = appearance.iconPack
 
-  const artistLabel = track
-    ? track.artist === 'Unknown Artist' && track.folder
-      ? track.folder
-      : track.artist
-    : 'Select a song'
+  const artistLabel = track ? displayArtist(track) : 'Select a song'
 
   const floating = appearance.playerBarStyle === 'floating'
   const repeatLabel =
@@ -370,7 +367,7 @@ export function DesktopPlayerBar({
                 )}
               >
                 <ZunoIcon
-                  name={volume <= 0.001 ? 'mute' : 'volume'}
+                  name={volume <= MUTE_EPSILON ? 'mute' : 'volume'}
                   pack={iconPack}
                   className="h-4 w-4"
                 />
@@ -385,12 +382,12 @@ export function DesktopPlayerBar({
             >
               <button
                 type="button"
-                onClick={() => onVolumeChange(volume > 0 ? 0 : 0.8)}
+                onClick={() => onVolumeChange(volume > MUTE_EPSILON ? 0 : DEFAULT_VOLUME)}
                 className="text-muted-foreground hover:text-foreground cursor-pointer"
                 aria-label="Mute or unmute"
               >
                 <ZunoIcon
-                  name={volume <= 0.001 ? 'mute' : 'volume'}
+                  name={volume <= MUTE_EPSILON ? 'mute' : 'volume'}
                   pack={iconPack}
                   className="h-3.5 w-3.5"
                 />

@@ -4,6 +4,7 @@ import { Dialog } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
+import { formatError, shortenHomePath } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { isTauriRuntime, type MusicSource } from '@/lib/zunoApi'
 
@@ -11,16 +12,13 @@ interface MusicFoldersModalProps {
   open: boolean
   sources: MusicSource[]
   suggestedDirs: string[]
+  homeDir?: string | null
   busy?: boolean
   onClose: () => void
   onPickNativeFolder: () => Promise<void>
   onAddFolder: (path: string) => Promise<void>
   onRemoveFolder: (path: string) => Promise<void>
   onRescan: () => Promise<void>
-}
-
-function shortenHome(p: string): string {
-  return p.replace(/^\/home\/[^/]+/, '~')
 }
 
 /**
@@ -31,6 +29,7 @@ export function MusicFoldersModal({
   open,
   sources,
   suggestedDirs,
+  homeDir,
   busy = false,
   onClose,
   onPickNativeFolder,
@@ -54,7 +53,7 @@ export function MusicFoldersModal({
       await onAddFolder(clean)
       setManualPath('')
     } catch (err) {
-      setError(String(err).replace(/^Error:\s*/i, ''))
+      setError(formatError(err))
     }
   }
 
@@ -63,7 +62,7 @@ export function MusicFoldersModal({
     try {
       await onAddFolder(dir)
     } catch (err) {
-      setError(String(err).replace(/^Error:\s*/i, ''))
+      setError(formatError(err))
     }
   }
 
@@ -87,7 +86,7 @@ export function MusicFoldersModal({
                 try {
                   await onPickNativeFolder()
                 } catch (err) {
-                  setError(String(err).replace(/^Error:\s*/i, ''))
+                  setError(formatError(err))
                 }
               }}
               className="gap-1.5"
@@ -106,7 +105,7 @@ export function MusicFoldersModal({
               className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-secondary/70 px-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer disabled:opacity-50"
             >
               <FolderOpen className="h-3.5 w-3.5 text-primary" />
-              <span>+ Link {shortenHome(dir)}</span>
+              <span>+ Link {shortenHomePath(dir, homeDir)}</span>
             </button>
           ))}
         </div>
@@ -187,7 +186,7 @@ export function MusicFoldersModal({
                       )}
                     </div>
                     <p className="truncate font-mono text-[10.5px] text-muted-foreground">
-                      {shortenHome(src.path)}
+                      {shortenHomePath(src.path, homeDir)}
                     </p>
                   </div>
                 </div>

@@ -205,7 +205,7 @@ export const DEFAULT_EQ_SETTINGS: EqSettings = {
   customPresets: [],
 }
 
-const STORAGE_KEY = 'zuno:equalizer:v1'
+export const EQ_STORAGE_KEY = 'zuno:equalizer:v1'
 
 export function clampDb(v: number): number {
   const rounded = Math.round(v / EQ_STEP_DB) * EQ_STEP_DB
@@ -220,7 +220,7 @@ export function formatDb(v: number): string {
 
 export function loadEqSettings(): EqSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(EQ_STORAGE_KEY)
     if (!raw) return DEFAULT_EQ_SETTINGS
     const parsed = JSON.parse(raw)
     const bands =
@@ -267,7 +267,7 @@ export function loadEqSettings(): EqSettings {
 
 export function saveEqSettings(settings: EqSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+    localStorage.setItem(EQ_STORAGE_KEY, JSON.stringify(settings))
   } catch {
     /* ignore */
   }

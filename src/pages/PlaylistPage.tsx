@@ -5,6 +5,7 @@ import { SortControl } from '@/components/SortControl'
 import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { estimateTrackRowHeight } from '@/lib/format'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Playlist, Track } from '@/lib/zunoApi'
@@ -32,11 +33,6 @@ interface PlaylistPageProps {
   onRemoveTrack?: (trackId: string) => void
   onDeleteTrack: (track: Track) => void
   onDeletePlaylist?: () => void
-}
-
-function estimateTrackRowHeight(a: AppearanceSettings): number {
-  const base = a.density === 'compact' ? 50 : a.density === 'spacious' ? 68 : 60
-  return a.showTrackOverline ? base : base - 8
 }
 
 export const PlaylistPage = memo(function PlaylistPage({
@@ -94,7 +90,7 @@ export const PlaylistPage = memo(function PlaylistPage({
     [onCreatePlaylistWithTrack],
   )
 
-  const rowHeight = estimateTrackRowHeight(appearance)
+  const rowHeight = estimateTrackRowHeight(appearance.density, appearance.showTrackOverline)
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">

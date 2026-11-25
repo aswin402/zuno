@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Pipette } from 'lucide-react'
+import { parseHexToRgb, rgbToHex } from '@/lib/color'
 import { cn } from '@/lib/utils'
 
 interface Hsv {
@@ -11,20 +12,8 @@ interface Hsv {
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
 function parseHex(input: string): { r: number; g: number; b: number } | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(input.trim())
-  if (!m) return null
-  let hex = m[1]
-  if (hex.length === 3) hex = [...hex].map((c) => c + c).join('')
-  return {
-    r: parseInt(hex.slice(0, 2), 16),
-    g: parseInt(hex.slice(2, 4), 16),
-    b: parseInt(hex.slice(4, 6), 16),
-  }
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  const p = (n: number) => clamp(Math.round(n), 0, 255).toString(16).padStart(2, '0')
-  return `#${p(r)}${p(g)}${p(b)}`
+  const rgb = parseHexToRgb(input)
+  return rgb ? { r: rgb[0], g: rgb[1], b: rgb[2] } : null
 }
 
 function hsvToRgb({ h, s, v }: Hsv): { r: number; g: number; b: number } {

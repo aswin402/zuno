@@ -25,33 +25,31 @@ export const SORT_OPTIONS: SortOption[] = [
   { field: 'duration', label: 'Duration', defaultDir: 'asc' },
 ]
 
+/** Reusable locale-aware natural collator (avoids O(N log N) options allocations during sort). */
+const NATURAL_COLLATOR = new Intl.Collator(undefined, {
+  sensitivity: 'base',
+  numeric: true,
+})
+
+type TrackComparator = (a: Track, b: Track) => number
+
+const COMPARATORS: Record<Exclude<SortField, 'default'>, TrackComparator> = {
+  name: (a, b) => NATURAL_COLLATOR.compare(a.title, b.title),
+  artist: (a, b) => NATURAL_COLLATOR.compare(a.artist, b.artist),
+  album: (a, b) => NATURAL_COLLATOR.compare(a.album, b.album),
+  time: (a, b) => a.modified_secs - b.modified_secs,
+  size: (a, b) => a.file_size - b.file_size,
+  duration: (a, b) => a.duration_secs - b.duration_secs,
+}
+
 export function sortTracks(tracks: Track[], field: SortField, dir: SortDir): Track[] {
   if (field === 'default') return tracks
   const mult = dir === 'asc' ? 1 : -1
+  const primary = COMPARATORS[field]
 
   return [...tracks].sort((a, b) => {
-    let cmp = 0
-    switch (field) {
-      case 'name':
-        cmp = a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true })
-        break
-      case 'artist':
-        cmp = a.artist.localeCompare(b.artist, undefined, { sensitivity: 'base', numeric: true })
-        break
-      case 'album':
-        cmp = a.album.localeCompare(b.album, undefined, { sensitivity: 'base', numeric: true })
-        break
-      case 'time':
-        cmp = a.modified_secs - b.modified_secs
-        break
-      case 'size':
-        cmp = a.file_size - b.file_size
-        break
-      case 'duration':
-        cmp = a.duration_secs - b.duration_secs
-        break
-    }
+    const cmp = primary(a, b)
     if (cmp !== 0) return cmp * mult
-    return a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true })
+    return NATURAL_COLLATOR.compare(a.title, b.title)
   })
 }

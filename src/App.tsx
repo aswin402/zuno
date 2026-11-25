@@ -26,6 +26,16 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
+  DEFAULT_VOLUME,
+  displayArtist,
+  formatError,
+  freqToDeciMhz,
+  isFavoritesPlaylist,
+  LAST_PLAYED_MAX,
+  MUTE_EPSILON,
+} from '@/lib/format'
+import {
+  APPEARANCE_STORAGE_KEY,
   applyAppearanceToDom,
   clampUiZoom,
   DEFAULT_APPEARANCE,
@@ -35,10 +45,11 @@ import {
   windowRadiusClass,
   type AppearanceSettings,
 } from '@/lib/appearance'
-import { hydrateSavedCustomFonts } from '@/lib/fonts'
+import { CUSTOM_FONT_STORAGE_KEY, hydrateSavedCustomFonts } from '@/lib/fonts'
 import {
   applyEqualizerToAudio,
   EQ_BANDS,
+  EQ_STORAGE_KEY,
   findActivePreset,
   loadEqSettings,
   resumeEqualizerContext,
@@ -176,7 +187,8 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.20')
+  const [homeDir, setHomeDir] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState<string>(__ZUNO_VERSION__)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)
@@ -222,7 +234,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [volume, setVolume] = useState(0.8)
+  const [volume, setVolume] = useState(DEFAULT_VOLUME)
   const [shuffle, setShuffle] = useState(false)
   const [repeat, setRepeat] = useState<RepeatMode>('off')
 
@@ -443,6 +455,7 @@ export default function App() {
       setPlaylists(plRes)
       if (srcRes.length > 0) setSources(srcRes)
       if (infoRes?.suggested_dirs) setSuggestedDirs(infoRes.suggested_dirs)
+      if (infoRes?.home_dir) setHomeDir(infoRes.home_dir)
       if (infoRes?.version) setAppVersion(infoRes.version)
     } catch {
       /* backend offline */
@@ -456,8 +469,9 @@ export default function App() {
     }
     try {
       for (const key of [
-        'zuno:appearance',
-        'zuno:eq',
+        APPEARANCE_STORAGE_KEY,
+        EQ_STORAGE_KEY,
+        CUSTOM_FONT_STORAGE_KEY,
         LAST_PLAYED_KEY,
         SORT_PREF_KEY,
         AUTO_CHECK_UPDATES_KEY,
@@ -498,7 +512,7 @@ export default function App() {
         }
       } catch (err) {
         if (!silent) {
-          setUpdateCheckError(String(err).replace(/^Error:\s*/i, ''))
+          setUpdateCheckError(formatError(err))
         }
       } finally {
         setUpdateChecking(false)
@@ -686,8 +700,7 @@ export default function App() {
         })
         notify(`Tuned ${label ? `${label} (${formatMhz(cleanFreq)})` : formatMhz(cleanFreq)}`)
       } catch (err) {
-        const msg = String(err).replace(/^Error:\s*/i, '')
-        notify(msg || 'No offline FM tuner hardware detected')
+        notify(formatError(err, 'No offline FM tuner hardware detected'))
         refreshFmHardware()
       }
     },
@@ -890,21 +903,32 @@ export default function App() {
     [updateRadioStore, notify],
   )
 
+  const searchReqIdRef = useRef(0)
+
   useEffect(() => {
     const q = searchQuery.trim()
+    const reqId = ++searchReqIdRef.current
     if (!q) {
       setSearchResults(null)
       return
     }
-    const timer = setTimeout(async () => {
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
       try {
         const res = await zunoApi.searchSongs(q)
-        setSearchResults(res.tracks)
+        if (!cancelled && reqId === searchReqIdRef.current) {
+          setSearchResults(res.tracks)
+        }
       } catch {
-        setSearchResults([])
+        if (!cancelled && reqId === searchReqIdRef.current) {
+          setSearchResults([])
+        }
       }
     }, 90)
-    return () => clearTimeout(timer)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [searchQuery])
 
   useEffect(() => {
@@ -951,7 +975,7 @@ export default function App() {
     if (tid && tid !== lastNativeTrackIdRef.current) {
       lastNativeTrackIdRef.current = tid
       setLastPlayedIds((prev) => {
-        const next = [tid, ...prev.filter((x) => x !== tid)].slice(0, 30)
+        const next = [tid, ...prev.filter((x) => x !== tid)].slice(0, LAST_PLAYED_MAX)
         try {
           localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
         } catch {
@@ -986,8 +1010,10 @@ export default function App() {
   // Lightweight in-process status sync while visible in Tauri mode (pauses completely when hidden)
   useEffect(() => {
     if (!nativeAudio) return
+    let cancelled = false
     let timer = 0
     const poll = () => {
+      if (cancelled) return
       if (document.hidden) {
         timer = window.setTimeout(poll, 1200)
         return
@@ -995,15 +1021,20 @@ export default function App() {
       zunoApi
         .getStatus()
         .then((st) => {
+          if (cancelled) return
           applyNativeStatus(st)
           timer = window.setTimeout(poll, st.state === 'playing' ? 350 : 1500)
         })
         .catch(() => {
+          if (cancelled) return
           timer = window.setTimeout(poll, 2000)
         })
     }
     timer = window.setTimeout(poll, isPlaying ? 350 : 1500)
-    return () => window.clearTimeout(timer)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [nativeAudio, isPlaying, applyNativeStatus])
 
   const currentTrack: Track | null = useMemo(() => {
@@ -1017,13 +1048,13 @@ export default function App() {
       lastPlayedIds
         .map((id) => trackById.get(id))
         .filter((t): t is Track => Boolean(t))
-        .slice(0, 30),
+        .slice(0, LAST_PLAYED_MAX),
     [lastPlayedIds, trackById],
   )
 
   const recordPlayed = useCallback((id: string) => {
     setLastPlayedIds((prev) => {
-      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 30)
+      const next = [id, ...prev.filter((x) => x !== id)].slice(0, LAST_PLAYED_MAX)
       try {
         localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(next))
       } catch {
@@ -1034,8 +1065,7 @@ export default function App() {
   }, [])
 
   const favoritesPlaylist = useMemo(
-    () =>
-      playlists.find((p) => p.slug === 'favorites' || p.slug === 'fav') ?? null,
+    () => playlists.find(isFavoritesPlaylist) ?? null,
     [playlists],
   )
 
@@ -1431,10 +1461,7 @@ export default function App() {
     }
     const ms = navigator.mediaSession
     if (currentTrack) {
-      const artist =
-        currentTrack.artist === 'Unknown Artist' && currentTrack.folder
-          ? currentTrack.folder
-          : currentTrack.artist
+      const artist = displayArtist(currentTrack)
       const artwork = currentTrack.has_cover
         ? [{ src: zunoApi.coverUrl(currentTrack.id) }]
         : [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
@@ -1485,7 +1512,40 @@ export default function App() {
     }
   }, [nativeAudio, isPlaying, handleTogglePlay, handlePrev, handleNext, handleSeekCommit])
 
+  // Refs keep playback position/duration/track current inside the global keydown handler
+  // without tearing down and re-registering `window.addEventListener('keydown')` 3–4×/sec.
+  const positionRef = useRef(position)
+  positionRef.current = position
+  const durationRef = useRef(duration)
+  durationRef.current = duration
+  const currentTrackRef = useRef(currentTrack)
+  currentTrackRef.current = currentTrack
+
   useEffect(() => {
+    const stopPlayback = () => {
+      if (nativeAudio) {
+        zunoApi.stop().then(applyNativeStatus).catch(() => {})
+      } else if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+        setIsPlaying(false)
+        setPosition(0)
+      }
+    }
+
+    const mediaKeyActions: Record<string, () => void> = {
+      MediaPlayPause: handleTogglePlay,
+      MediaTrackNext: () => handleNext(false),
+      MediaTrackPrevious: handlePrev,
+      MediaStop: stopPlayback,
+    }
+
+    const singleKeyActions: Record<string, () => void> = {
+      m: () => setVolume((v) => (v > MUTE_EPSILON ? 0 : DEFAULT_VOLUME)),
+      s: handleToggleShuffle,
+      r: handleCycleRepeat,
+    }
+
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
       const tag = target?.tagName
@@ -1497,31 +1557,10 @@ export default function App() {
       const hasModifier = e.ctrlKey || e.altKey || e.metaKey
 
       // Hardware / OS Media Keys forwarded to focused window
-      if (e.key === 'MediaPlayPause' || e.code === 'MediaPlayPause') {
+      const mediaAction = mediaKeyActions[e.key] ?? mediaKeyActions[e.code]
+      if (mediaAction) {
         e.preventDefault()
-        handleTogglePlay()
-        return
-      }
-      if (e.key === 'MediaTrackNext' || e.code === 'MediaTrackNext') {
-        e.preventDefault()
-        handleNext(false)
-        return
-      }
-      if (e.key === 'MediaTrackPrevious' || e.code === 'MediaTrackPrevious') {
-        e.preventDefault()
-        handlePrev()
-        return
-      }
-      if (e.key === 'MediaStop' || e.code === 'MediaStop') {
-        e.preventDefault()
-        if (nativeAudio) {
-          zunoApi.stop().then(applyNativeStatus).catch(() => {})
-        } else if (audioRef.current) {
-          audioRef.current.pause()
-          audioRef.current.currentTime = 0
-          setIsPlaying(false)
-          setPosition(0)
-        }
+        mediaAction()
         return
       }
 
@@ -1539,19 +1578,17 @@ export default function App() {
           return
         }
         // Chrome-style Zoom shortcuts: Ctrl/Cmd + / - / 0
-        if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+        const zoomAction: 'in' | 'out' | 'reset' | null =
+          e.key === '+' || e.key === '=' || e.code === 'NumpadAdd'
+            ? 'in'
+            : e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract'
+              ? 'out'
+              : e.key === '0' || e.code === 'Numpad0'
+                ? 'reset'
+                : null
+        if (zoomAction) {
           e.preventDefault()
-          adjustUiZoom('in')
-          return
-        }
-        if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
-          e.preventDefault()
-          adjustUiZoom('out')
-          return
-        }
-        if (e.key === '0' || e.code === 'Numpad0') {
-          e.preventDefault()
-          adjustUiZoom('reset')
+          adjustUiZoom(zoomAction)
           return
         }
         // Never intercept other system Ctrl/Super combos (Ctrl+C, Super+Space, Ctrl+Alt+T, etc.)
@@ -1581,8 +1618,10 @@ export default function App() {
         if (e.shiftKey) {
           handleNext(false)
         } else {
-          const maxDur = duration > 0 ? duration : (currentTrack?.duration_secs ?? 0)
-          const targetPos = Math.min(maxDur > 0 ? maxDur : position + 5, position + 5)
+          const curPos = positionRef.current
+          const curDur = durationRef.current
+          const maxDur = curDur > 0 ? curDur : (currentTrackRef.current?.duration_secs ?? 0)
+          const targetPos = Math.min(maxDur > 0 ? maxDur : curPos + 5, curPos + 5)
           setPosition(targetPos)
           handleSeekCommit(targetPos)
         }
@@ -1594,7 +1633,7 @@ export default function App() {
         if (e.shiftKey) {
           handlePrev()
         } else {
-          const targetPos = Math.max(0, position - 5)
+          const targetPos = Math.max(0, positionRef.current - 5)
           setPosition(targetPos)
           handleSeekCommit(targetPos)
         }
@@ -1602,16 +1641,10 @@ export default function App() {
       }
 
       if (!e.shiftKey) {
-        const lower = e.key.toLowerCase()
-        if (lower === 'm') {
+        const action = singleKeyActions[e.key.toLowerCase()]
+        if (action) {
           e.preventDefault()
-          setVolume((v) => (v > 0.001 ? 0 : 0.8))
-        } else if (lower === 's') {
-          e.preventDefault()
-          handleToggleShuffle()
-        } else if (lower === 'r') {
-          e.preventDefault()
-          handleCycleRepeat()
+          action()
         }
       }
     }
@@ -1620,9 +1653,6 @@ export default function App() {
   }, [
     nativeAudio,
     applyNativeStatus,
-    currentTrack,
-    duration,
-    position,
     handleTogglePlay,
     handleNext,
     handlePrev,
@@ -1906,6 +1936,11 @@ export default function App() {
     [nativeAudio, applyNativeStatus, queueIds, playTrackById],
   )
 
+  const offlineSignalByFreq = useMemo(
+    () => new Map(radioStore.offline_signals.map((s) => [freqToDeciMhz(s.freq_mhz), s])),
+    [radioStore.offline_signals],
+  )
+
   const stepRadioStation = useCallback(
     (dir: -1 | 1) => {
       if (!activeRadio) return
@@ -1925,15 +1960,14 @@ export default function App() {
         radioStore.band,
       )
       handleChangeDialFreq(nextFreq)
-      const hit = radioStore.offline_signals.find(
-        (s) => Math.abs(s.freq_mhz - nextFreq) < 0.051,
-      )
+      const hit = offlineSignalByFreq.get(freqToDeciMhz(nextFreq))
       handleTuneOfflineSignal(nextFreq, hit?.name, hit?.id)
     },
     [
       activeRadio,
       radioStationPool,
       radioStore,
+      offlineSignalByFreq,
       handlePlayOnlineStation,
       handleChangeDialFreq,
       handleTuneOfflineSignal,
@@ -2028,10 +2062,8 @@ export default function App() {
       return radioStore.marked_online_ids.includes(activeRadio.id)
     }
     const freq = activeRadio.freqMhz ?? radioStore.last_freq_mhz
-    return radioStore.offline_signals.some(
-      (s) => s.marked && Math.abs(s.freq_mhz - freq) < 0.051,
-    )
-  }, [activeRadio, isCurrentFavorite, radioStore])
+    return Boolean(offlineSignalByFreq.get(freqToDeciMhz(freq))?.marked)
+  }, [activeRadio, isCurrentFavorite, radioStore.marked_online_ids, radioStore.last_freq_mhz, offlineSignalByFreq])
 
   const displayToggleFavorite = useCallback(() => {
     if (!activeRadio) {
@@ -2043,9 +2075,7 @@ export default function App() {
       return
     }
     const freq = activeRadio.freqMhz ?? radioStore.last_freq_mhz
-    const existing = radioStore.offline_signals.find(
-      (s) => Math.abs(s.freq_mhz - freq) < 0.051,
-    )
+    const existing = offlineSignalByFreq.get(freqToDeciMhz(freq))
     if (existing) {
       handleToggleMarkOffline(existing.id)
     } else {
@@ -2063,7 +2093,9 @@ export default function App() {
     activeRadio,
     handleToggleFavorite,
     handleToggleMarkOnline,
-    radioStore,
+    radioStore.last_freq_mhz,
+    radioStore.band,
+    offlineSignalByFreq,
     handleToggleMarkOffline,
     handleUpsertOfflineSignal,
   ])
@@ -2203,6 +2235,8 @@ export default function App() {
               if (remaining <= fadeSecs && remaining > 0) {
                 const ratio = Math.max(0, Math.min(1, remaining / fadeSecs))
                 el.volume = volume * Math.sin(ratio * (Math.PI / 2))
+              } else if (el.volume !== volume) {
+                el.volume = volume
               }
             }
             if (Math.abs(t - lastReportedPosRef.current) >= 0.25 || t < 0.05) {
@@ -2826,6 +2860,7 @@ export default function App() {
         open={foldersOpen}
         sources={sources}
         suggestedDirs={suggestedDirs}
+        homeDir={homeDir}
         busy={foldersBusy}
         onClose={() => setFoldersOpen(false)}
         onPickNativeFolder={handlePickNativeFolder}
@@ -2871,6 +2906,7 @@ export default function App() {
       <UpdateDialog
         open={updateDialogOpen}
         appVersion={appVersion}
+        homeDir={homeDir}
         updateInfo={updateInfo}
         checking={updateChecking}
         checkError={updateCheckError}

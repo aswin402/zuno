@@ -1,5 +1,6 @@
 import { useId } from 'react'
 import { flushSync } from 'react-dom'
+import { prefersReducedMotion } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type {
   ThemeMode,
@@ -19,25 +20,22 @@ interface EaseThemeToggleProps {
   className?: string
 }
 
+const ORIGIN_BY_START: Record<Exclude<ThemeTransitionStartId, 'trigger'>, string> = {
+  center: '50% 50%',
+  'top-left': '0% 0%',
+  'top-right': '100% 0%',
+  'bottom-left': '0% 100%',
+  'bottom-right': '100% 100%',
+}
+
 function resolveOriginCss(
   start: ThemeTransitionStartId | undefined,
   triggerOrigin?: { x: number; y: number },
 ): string {
-  switch (start) {
-    case 'center':
-      return '50% 50%'
-    case 'top-left':
-      return '0% 0%'
-    case 'top-right':
-      return '100% 0%'
-    case 'bottom-left':
-      return '0% 100%'
-    case 'bottom-right':
-      return '100% 100%'
-    case 'trigger':
-    default:
-      return triggerOrigin ? `${triggerOrigin.x}px ${triggerOrigin.y}px` : '50% 0%'
+  if (start && start !== 'trigger') {
+    return ORIGIN_BY_START[start] ?? '50% 50%'
   }
+  return triggerOrigin ? `${triggerOrigin.x}px ${triggerOrigin.y}px` : '50% 0%'
 }
 
 /**
@@ -53,9 +51,7 @@ export function runThemeViewTransition(
   },
 ) {
   const variant = options?.variant ?? 'circle-blur'
-  const reducedMotion =
-    typeof window !== 'undefined' &&
-    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  const reducedMotion = prefersReducedMotion()
 
   const doc = document as Document & {
     startViewTransition?: (cb: () => void) => { finished: Promise<void> }
@@ -84,8 +80,8 @@ export function runThemeViewTransition(
 }
 
 /**
- * Animated Sun <-> Moon theme toggle with 6 styles:
- * Eclipse Mask + 5 variants inspired by @skiper-ui/skiper4,
+ * Animated Sun <-> Moon theme toggle with 7 styles:
+ * Eclipse Mask, SmoothUI Kinetic, + 5 variants inspired by @skiper-ui/skiper4,
  * paired with @skiper-ui/skiper26 View Transitions.
  */
 export function EaseThemeToggle({
@@ -98,7 +94,7 @@ export function EaseThemeToggle({
   showLabel = false,
   className,
 }: EaseThemeToggleProps) {
-  const maskId = useId().replace(/:/g, '')
+  const maskId = useId().split(':').join('')
   const isDark = mode === 'dark'
 
   function handleClick(e: React.MouseEvent<HTMLButtonElement>) {

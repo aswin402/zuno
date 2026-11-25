@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use zuno_audio::ZunoService;
 use zuno_audio::ipc_unix;
 use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
-use zuno_core::{Library, RepeatMode, ZunoPaths};
+use zuno_core::{Library, ZunoPaths};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -152,16 +152,37 @@ fn default_web_dir() -> Option<PathBuf> {
     if http::has_embedded_web() {
         return None;
     }
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|v| !v.is_empty())
-                .map(|h| PathBuf::from(h).join(".local").join("share"))
-        })?;
-    let dir = base.join("zuno").join("web");
+    let dir = zuno_core::user_data_local_dir()?.join("zuno").join("web");
     dir.join("index.html").is_file().then_some(dir)
+}
+
+fn command_to_ipc(cmd: Commands) -> Option<IpcRequest> {
+    Some(match cmd {
+        Commands::Status => IpcRequest::GetStatus,
+        Commands::Rescan => IpcRequest::Rescan,
+        Commands::List { folder, limit } => IpcRequest::ListSongs {
+            folder,
+            limit: Some(limit),
+            offset: Some(0),
+        },
+        Commands::Search { query, limit } => IpcRequest::SearchSongs {
+            query,
+            limit: Some(limit),
+        },
+        Commands::Pause => IpcRequest::Pause,
+        Commands::Resume => IpcRequest::Resume,
+        Commands::Stop => IpcRequest::Stop,
+        Commands::Next => IpcRequest::Next,
+        Commands::Prev => IpcRequest::Previous,
+        Commands::Volume { percent } => IpcRequest::SetVolume {
+            volume: (percent.min(100) as f32) / 100.0,
+        },
+        Commands::Playlists => IpcRequest::ListPlaylists,
+        Commands::PlaylistCreate { name, track_ids } => {
+            IpcRequest::CreatePlaylist { name, track_ids }
+        }
+        _ => return None,
+    })
 }
 
 fn main() {
@@ -204,21 +225,6 @@ fn main() {
         }
         Commands::Daemon => run_daemon(paths),
         Commands::Doctor => run_doctor(&paths),
-        Commands::Status => print_response(ZunoClient::new(paths).execute(IpcRequest::GetStatus)),
-        Commands::Rescan => print_response(ZunoClient::new(paths).execute(IpcRequest::Rescan)),
-        Commands::List { folder, limit } => {
-            print_response(ZunoClient::new(paths).execute(IpcRequest::ListSongs {
-                folder,
-                limit: Some(limit),
-                offset: Some(0),
-            }))
-        }
-        Commands::Search { query, limit } => {
-            print_response(ZunoClient::new(paths).execute(IpcRequest::SearchSongs {
-                query,
-                limit: Some(limit),
-            }))
-        }
         Commands::Play {
             query,
             id,
@@ -238,23 +244,10 @@ fn main() {
                 eprintln!("note: started in one-shot CLI mode; run `zuno-mcp daemon` (or open Zuno GUI) for persistent playback.");
             }
         }
-        Commands::Pause => print_response(ZunoClient::new(paths).execute(IpcRequest::Pause)),
-        Commands::Resume => print_response(ZunoClient::new(paths).execute(IpcRequest::Resume)),
-        Commands::Stop => print_response(ZunoClient::new(paths).execute(IpcRequest::Stop)),
-        Commands::Next => print_response(ZunoClient::new(paths).execute(IpcRequest::Next)),
-        Commands::Prev => print_response(ZunoClient::new(paths).execute(IpcRequest::Previous)),
-        Commands::Volume { percent } => {
-            let v = (percent.min(100) as f32) / 100.0;
-            print_response(ZunoClient::new(paths).execute(IpcRequest::SetVolume { volume: v }))
-        }
-        Commands::Playlists => {
-            print_response(ZunoClient::new(paths).execute(IpcRequest::ListPlaylists))
-        }
-        Commands::PlaylistCreate { name, track_ids } => {
-            print_response(ZunoClient::new(paths).execute(IpcRequest::CreatePlaylist {
-                name,
-                track_ids,
-            }))
+        other => {
+            if let Some(req) = command_to_ipc(other) {
+                print_response(ZunoClient::new(paths).execute(req));
+            }
         }
     }
 }
@@ -355,15 +348,5 @@ fn print_response(resp: IpcResponse) {
             eprintln!("error: {message}");
             std::process::exit(1);
         }
-    }
-}
-
-#[allow(dead_code)]
-fn _parse_repeat(s: &str) -> Option<RepeatMode> {
-    match s.to_ascii_lowercase().as_str() {
-        "off" => Some(RepeatMode::Off),
-        "one" => Some(RepeatMode::One),
-        "all" => Some(RepeatMode::All),
-        _ => None,
     }
 }

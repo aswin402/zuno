@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { parseCssColorToRgb, type Rgb } from '@/lib/color'
 import { readSpectrumData } from '@/lib/equalizer'
 import { cn } from '@/lib/utils'
 import { isTauriRuntime, zunoApi, type AudioLevels } from '@/lib/zunoApi'
@@ -23,8 +24,6 @@ interface NowPlayingVisualizerProps {
   className?: string
 }
 
-type Rgb = [number, number, number]
-
 interface PaletteRgb {
   primary: Rgb
   fg: Rgb
@@ -40,36 +39,23 @@ interface Ripple {
 }
 
 const BANDS = 24
+const WEB_FREQ_LEN = 64
+const WEB_BIN_INDICES = Uint8Array.from({ length: BANDS }, (_, i) =>
+  Math.min(
+    WEB_FREQ_LEN - 1,
+    Math.floor(Math.pow(i / (BANDS - 1), 1.45) * (WEB_FREQ_LEN - 2)) + 1,
+  ),
+)
+const FLUID_ENV_SMALL = Float32Array.from({ length: 97 }, (_, i) =>
+  Math.pow(Math.sin((i / 96) * Math.PI), 1.55),
+)
+const FLUID_ENV_LARGE = Float32Array.from({ length: 161 }, (_, i) =>
+  Math.pow(Math.sin((i / 160) * Math.PI), 1.55),
+)
 const INTENSITY_GAIN: Record<VisualizerIntensityId, number> = {
   subtle: 0.68,
   balanced: 1.0,
   dynamic: 1.42,
-}
-
-function parseColorToRgb(raw: string, fallback: Rgb): Rgb {
-  const s = raw.trim()
-  if (s.startsWith('#')) {
-    const hex = s.slice(1)
-    if (hex.length === 3) {
-      return [
-        parseInt(hex[0] + hex[0], 16) || fallback[0],
-        parseInt(hex[1] + hex[1], 16) || fallback[1],
-        parseInt(hex[2] + hex[2], 16) || fallback[2],
-      ]
-    }
-    if (hex.length >= 6) {
-      return [
-        parseInt(hex.slice(0, 2), 16) || 0,
-        parseInt(hex.slice(2, 4), 16) || 0,
-        parseInt(hex.slice(4, 6), 16) || 0,
-      ]
-    }
-  }
-  const m = s.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/)
-  if (m) {
-    return [Number(m[1]), Number(m[2]), Number(m[3])]
-  }
-  return fallback
 }
 
 function rgba(c: Rgb, a: number): string {
@@ -88,8 +74,8 @@ function mixRgb(a: Rgb, b: Rgb, t: number): Rgb {
 function readPalette(colorMode: VisualizerColorId, mode: ThemeMode): PaletteRgb {
   const cs = getComputedStyle(document.documentElement)
   const fallbackFg: Rgb = mode === 'light' ? [15, 15, 18] : [250, 250, 250]
-  const primary = parseColorToRgb(cs.getPropertyValue('--primary'), fallbackFg)
-  const fg = parseColorToRgb(cs.getPropertyValue('--foreground'), fallbackFg)
+  const primary = parseCssColorToRgb(cs.getPropertyValue('--primary'), fallbackFg)
+  const fg = parseCssColorToRgb(cs.getPropertyValue('--foreground'), fallbackFg)
 
   if (colorMode === 'mono') {
     return {
@@ -376,9 +362,9 @@ export function NowPlayingVisualizer({
       }
     }
 
-    const drawWaveBars = () => {
-      const barCount =
-        width < 260 ? 22 : width < 460 ? 32 : width < 700 ? 44 : width < 960 ? 54 : 64
+    const drawWaveBars = (dt: number) => {
+      const rawBars = Math.max(22, Math.min(64, Math.round(width / 15)))
+      const barCount = rawBars & ~1 // always even for symmetrical center mirror
       const half = barCount / 2
       const padX = Math.max(12, width * 0.05)
       const usableW = width - padX * 2
@@ -386,9 +372,23 @@ export function NowPlayingVisualizer({
       const barW = Math.max(2.5, (usableW - gap * (barCount - 1)) / barCount)
       const baselineY = height * 0.7
       const maxH = height * 0.6
-      const peakFall = Math.max(0.85, height * 0.0055)
+      // Frame-rate-independent peak fall (identical visual speed on 60Hz, 120Hz, 144Hz monitors)
+      const peakFall = Math.max(52, height * 0.34) * dt
       const dotGap = Math.max(5, height * 0.025)
       const dotR = Math.max(1.3, Math.min(4.2, barW * 0.34))
+      const presence = 0.42 + activity * 0.58
+
+      // Shared vertical gradients (2 allocations per frame instead of 128!)
+      const barGrad = ctx.createLinearGradient(0, baselineY - maxH, 0, baselineY)
+      barGrad.addColorStop(0, rgba(palette.fg, 0.92 * presence))
+      barGrad.addColorStop(0.42, rgba(palette.bass, 0.85 * presence))
+      barGrad.addColorStop(0.76, rgba(palette.mid, 0.68 * presence))
+      barGrad.addColorStop(1, rgba(palette.treble, 0.25 * presence))
+
+      const refMaxH = Math.max(4, height - baselineY - 4)
+      const refGrad = ctx.createLinearGradient(0, baselineY + 3, 0, baselineY + 3 + refMaxH)
+      refGrad.addColorStop(0, rgba(palette.mid, 0.22 * presence))
+      refGrad.addColorStop(1, rgba(palette.mid, 0))
 
       for (let i = 0; i < barCount; i++) {
         const distFromCenter = Math.abs(i - (half - 0.5)) / half
@@ -412,24 +412,15 @@ export function NowPlayingVisualizer({
         }
 
         const x = padX + i * (barW + gap)
-        const c = mixRgb(palette.bass, palette.treble, distFromCenter)
-        const presence = 0.42 + activity * 0.58
 
-        const grad = ctx.createLinearGradient(x, baselineY - h, x, baselineY)
-        grad.addColorStop(0, rgba(palette.fg, 0.92 * presence))
-        grad.addColorStop(0.38, rgba(c, 0.85 * presence))
-        grad.addColorStop(1, rgba(c, 0.25 * presence))
-        ctx.fillStyle = grad
+        ctx.fillStyle = barGrad
         ctx.beginPath()
         ctx.roundRect(x, baselineY - h, barW, h, barW * 0.5)
         ctx.fill()
 
         // Soft floor reflection
-        const refH = Math.min(height - baselineY - 4, h * 0.34)
+        const refH = Math.min(refMaxH, h * 0.34)
         if (refH > 2) {
-          const refGrad = ctx.createLinearGradient(x, baselineY + 3, x, baselineY + 3 + refH)
-          refGrad.addColorStop(0, rgba(c, 0.2 * presence))
-          refGrad.addColorStop(1, rgba(c, 0))
           ctx.fillStyle = refGrad
           ctx.beginPath()
           ctx.roundRect(x, baselineY + 3, barW, refH, barW * 0.5)
@@ -449,7 +440,8 @@ export function NowPlayingVisualizer({
     const drawFluidWave = (t: number) => {
       const cy = height * 0.52
       const maxAmp = height * 0.36
-      const steps = width > 640 ? 160 : 96
+      const envLut = width > 640 ? FLUID_ENV_LARGE : FLUID_ENV_SMALL
+      const steps = envLut.length - 1
       const presence = 0.45 + activity * 0.55
       const strokeScale = Math.max(1, Math.min(1.65, height / 190))
       const idleScale = Math.max(1, Math.min(2.1, height / 180))
@@ -506,7 +498,7 @@ export function NowPlayingVisualizer({
         for (let i = 0; i <= steps; i++) {
           const u = i / steps
           const x = u * width
-          const env = Math.pow(Math.sin(u * Math.PI), 1.55)
+          const env = envLut[i]
           const bIdx = Math.min(BANDS - 1, Math.floor(u * BANDS))
           const localMod = 0.7 + smoothBands[bIdx] * 0.65 * activity
           const y =
@@ -655,15 +647,18 @@ export function NowPlayingVisualizer({
       }
     }
 
-    const drawScene = (t: number) => {
+    const sceneRenderers: Record<Exclude<VisualizerStyleId, 'none'>, (t: number, dt: number) => void> = {
+      orb: (t) => drawOrb(t),
+      'wave-bars': (_t, dt) => drawWaveBars(dt),
+      'fluid-wave': (t) => drawFluidWave(t),
+      'radial-ring': (t) => drawRadialRing(t),
+      'aurora-pulse': (t) => drawAuroraPulse(t),
+    }
+
+    const drawScene = (t: number, dt = 1 / 60) => {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, width, height)
-
-      if (styleVariant === 'orb') drawOrb(t)
-      else if (styleVariant === 'wave-bars') drawWaveBars()
-      else if (styleVariant === 'fluid-wave') drawFluidWave(t)
-      else if (styleVariant === 'radial-ring') drawRadialRing(t)
-      else if (styleVariant === 'aurora-pulse') drawAuroraPulse(t)
+      sceneRenderers[styleVariant](t, dt)
     }
 
     const resize = () => {
@@ -713,10 +708,7 @@ export function NowPlayingVisualizer({
             let mSum = 0
             let tSum = 0
             for (let i = 0; i < BANDS; i++) {
-              const binIdx = Math.min(
-                webFreqBuf.length - 1,
-                Math.floor(Math.pow(i / (BANDS - 1), 1.45) * (webFreqBuf.length - 2)) + 1,
-              )
+              const binIdx = WEB_BIN_INDICES[i]
               const val = Math.min(1, (webFreqBuf[binIdx] / 255) * (1 + (i / BANDS) * 0.45))
               targetBands[i] = val
               if (i < 5) bSum += val
@@ -790,7 +782,7 @@ export function NowPlayingVisualizer({
         if (ripples[i].alpha <= 0.01) ripples.splice(i, 1)
       }
 
-      drawScene(phase)
+      drawScene(phase, dt)
 
       // Smoothly settle into the calm visible idle frame when paused, then sleep at 0% CPU
       const settledIdle =

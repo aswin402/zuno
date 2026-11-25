@@ -2,6 +2,7 @@
 
 use gio::prelude::*;
 use glib::variant::ObjectPath;
+use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -9,13 +10,16 @@ use std::time::Duration;
 use tauri::AppHandle;
 use zuno_audio::ZunoService;
 use zuno_core::ipc::IpcRequest;
-use zuno_core::{PlayState, PlaybackStatus, RepeatMode, Track};
+use zuno_core::{PlayState, PlaybackStatus, RepeatMode, Track, UNKNOWN_ARTIST, atomic_write};
 
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.zuno";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const ROOT_IFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 const PROPS_IFACE: &str = "org.freedesktop.DBus.Properties";
+const MICROS_PER_SEC: f64 = 1_000_000.0;
+const MICROS_PER_SEC_I64: i64 = 1_000_000;
+const MAX_CACHED_ART_FILES: usize = 4;
 
 const MPRIS_INTROSPECTION_XML: &str = r#"
 <node>
@@ -80,9 +84,7 @@ struct MprisSnapshot {
 }
 
 struct CoverCache {
-    track_id: Option<String>,
-    art_url: Option<String>,
-    last_file: Option<PathBuf>,
+    recent: VecDeque<(String, Option<String>, Option<PathBuf>)>,
 }
 
 struct MprisShared {
@@ -95,18 +97,17 @@ struct MprisShared {
 impl MprisShared {
     fn art_url_for_track(&self, track: &Track) -> Option<String> {
         let mut cache = self.cover_cache.lock().unwrap();
-        if cache.track_id.as_deref() == Some(track.id.as_str()) {
-            return cache.art_url.clone();
-        }
-
-        // Remove previous per-track cover temp file so GNOME Shell refreshes album art cleanly.
-        if let Some(old) = cache.last_file.take() {
-            let _ = fs::remove_file(old);
+        if let Some(pos) = cache.recent.iter().position(|(id, _, _)| id == &track.id) {
+            let item = cache.recent.remove(pos).unwrap();
+            let url = item.1.clone();
+            cache.recent.push_back(item);
+            return url;
         }
 
         let cache_dir = self.service.paths().cache_dir();
         let _ = fs::create_dir_all(&cache_dir);
 
+        let mut owned_file: Option<PathBuf> = None;
         let art_path: Option<PathBuf> = if let Some(art) = self.service.extract_cover(&track.id) {
             let ext = match art.mime_type.as_str() {
                 "image/png" => "png",
@@ -115,8 +116,8 @@ impl MprisShared {
             };
             let safe_id = sanitize_object_segment(&track.id);
             let target = cache_dir.join(format!("mpris-cover-{safe_id}.{ext}"));
-            if fs::write(&target, &art.bytes).is_ok() {
-                cache.last_file = Some(target.clone());
+            if atomic_write(&target, &art.bytes).is_ok() {
+                owned_file = Some(target.clone());
                 Some(target)
             } else {
                 None
@@ -124,7 +125,7 @@ impl MprisShared {
         } else {
             let fallback = cache_dir.join("mpris-default-icon.png");
             if !fallback.exists() {
-                let _ = fs::write(&fallback, include_bytes!("../icons/icon.png"));
+                let _ = atomic_write(&fallback, include_bytes!("../icons/icon.png"));
             }
             fallback.exists().then_some(fallback)
         };
@@ -134,8 +135,12 @@ impl MprisShared {
                 .map(|u| u.to_string())
                 .unwrap_or_else(|_| format!("file://{}", p.display()))
         });
-        cache.track_id = Some(track.id.clone());
-        cache.art_url = url.clone();
+        cache.recent.push_back((track.id.clone(), url.clone(), owned_file));
+        while cache.recent.len() > MAX_CACHED_ART_FILES {
+            if let Some((_, _, Some(stale))) = cache.recent.pop_front() {
+                let _ = fs::remove_file(stale);
+            }
+        }
         url
     }
 
@@ -245,7 +250,7 @@ impl MprisHandle {
 
     pub fn notify_seeked(&self, position_secs: f64) {
         let shared = Arc::clone(&self.shared);
-        let pos_us = (position_secs.max(0.0) * 1_000_000.0).round() as i64;
+        let pos_us = (position_secs.max(0.0) * MICROS_PER_SEC).round() as i64;
         glib::MainContext::default().invoke(move || {
             shared.emit_seeked(pos_us);
         });
@@ -259,20 +264,18 @@ fn build_metadata_variant(track: Option<&Track>, art_url: Option<&str>) -> glib:
         if let Ok(path) = ObjectPath::try_from(obj_path) {
             dict.insert("mpris:trackid", path);
         }
-        let length_us = (track.duration_secs as i64).saturating_mul(1_000_000);
+        let length_us = (track.duration_secs as i64).saturating_mul(MICROS_PER_SEC_I64);
         dict.insert("mpris:length", length_us);
         dict.insert("xesam:title", track.title.as_str());
 
-        let artist = if track.artist.is_empty() || track.artist == "Unknown Artist" {
-            if !track.folder.is_empty() {
-                track.folder.clone()
-            } else {
-                "Unknown Artist".to_string()
-            }
+        let artist = if !track.artist.is_empty() && track.artist != UNKNOWN_ARTIST {
+            track.artist.as_str()
+        } else if !track.folder.is_empty() {
+            track.folder.as_str()
         } else {
-            track.artist.clone()
+            UNKNOWN_ARTIST
         };
-        dict.insert("xesam:artist", vec![artist]);
+        dict.insert("xesam:artist", vec![artist.to_string()]);
 
         if !track.album.is_empty() {
             dict.insert("xesam:album", track.album.as_str());
@@ -317,9 +320,7 @@ where
         connection: Mutex::new(None),
         snapshot: Mutex::new(MprisSnapshot::default()),
         cover_cache: Mutex::new(CoverCache {
-            track_id: None,
-            art_url: None,
-            last_file: None,
+            recent: VecDeque::with_capacity(MAX_CACHED_ART_FILES),
         }),
     });
 
@@ -391,56 +392,39 @@ where
                 MPRIS_OBJECT_PATH,
                 &player_info,
                 move |_conn, _sender, _path, _iface, method, params, invocation| {
-                    match method {
-                        "Play" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::Resume);
-                            shared_call.emit_changes();
-                        }
-                        "Pause" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::Pause);
-                            shared_call.emit_changes();
-                        }
-                        "PlayPause" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::TogglePause);
-                            shared_call.emit_changes();
-                        }
-                        "Stop" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::Stop);
-                            shared_call.emit_changes();
-                        }
-                        "Next" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::Next);
-                            shared_call.emit_changes();
-                        }
-                        "Previous" => {
-                            let _ = shared_call.service.handle_request(IpcRequest::Previous);
-                            shared_call.emit_changes();
-                        }
-                        "Seek" => {
-                            if let Some(offset_us) = params.child_value(0).get::<i64>() {
-                                let cur = shared_call.service.status().position_secs;
-                                let target = (cur + (offset_us as f64) / 1_000_000.0).max(0.0);
-                                let _ = shared_call
-                                    .service
-                                    .handle_request(IpcRequest::Seek { position_secs: target });
-                                shared_call.emit_seeked((target * 1_000_000.0) as i64);
+                    if let Some(req) = transport_ipc_for_method(method) {
+                        let _ = shared_call.service.handle_request(req);
+                        shared_call.emit_changes();
+                    } else {
+                        match method {
+                            "Seek" => {
+                                if let Some(offset_us) = params.child_value(0).get::<i64>() {
+                                    let cur = shared_call.service.status().position_secs;
+                                    let target = (cur + (offset_us as f64) / MICROS_PER_SEC).max(0.0);
+                                    let _ = shared_call
+                                        .service
+                                        .handle_request(IpcRequest::Seek { position_secs: target });
+                                    shared_call.emit_seeked((target * MICROS_PER_SEC) as i64);
+                                }
                             }
-                        }
-                        "SetPosition" => {
-                            if let Some(pos_us) = params.child_value(1).get::<i64>() {
-                                let target = ((pos_us as f64) / 1_000_000.0).max(0.0);
-                                let _ = shared_call
-                                    .service
-                                    .handle_request(IpcRequest::Seek { position_secs: target });
-                                shared_call.emit_seeked(pos_us.max(0));
+                            "SetPosition" => {
+                                if let Some(pos_us) = params.child_value(1).get::<i64>() {
+                                    let target = ((pos_us as f64) / MICROS_PER_SEC).max(0.0);
+                                    let _ = shared_call
+                                        .service
+                                        .handle_request(IpcRequest::Seek { position_secs: target });
+                                    shared_call.emit_seeked(pos_us.max(0));
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                     invocation.return_value(None);
                 },
                 move |_conn, _sender, _path, _iface, prop| {
                     let st = shared_get.service.status();
+                    let has_track = st.current_track.is_some();
+                    let has_queue = st.queue_len > 0;
                     match prop {
                         "PlaybackStatus" => playback_status_str(st.state).to_variant(),
                         "LoopStatus" => loop_status_str(st.repeat).to_variant(),
@@ -448,9 +432,12 @@ where
                         "Shuffle" => st.shuffle.to_variant(),
                         "Metadata" => shared_get.metadata_variant(&st),
                         "Volume" => (st.volume as f64).to_variant(),
-                        "Position" => ((st.position_secs * 1_000_000.0).round() as i64).to_variant(),
-                        "CanGoNext" | "CanGoPrevious" | "CanPlay" | "CanPause" | "CanSeek"
-                        | "CanControl" => true.to_variant(),
+                        "Position" => ((st.position_secs * MICROS_PER_SEC).round() as i64).to_variant(),
+                        "CanGoNext" | "CanGoPrevious" => (st.queue_len > 1 || st.repeat == RepeatMode::All).to_variant(),
+                        "CanPlay" => (has_track || has_queue).to_variant(),
+                        "CanPause" => has_track.to_variant(),
+                        "CanSeek" => (has_track && st.duration_secs > 0.0).to_variant(),
+                        "CanControl" => true.to_variant(),
                         _ => "".to_variant(),
                     }
                 },
@@ -521,6 +508,18 @@ where
     });
 
     MprisHandle { shared }
+}
+
+fn transport_ipc_for_method(method: &str) -> Option<IpcRequest> {
+    match method {
+        "Play" => Some(IpcRequest::Resume),
+        "Pause" => Some(IpcRequest::Pause),
+        "PlayPause" => Some(IpcRequest::TogglePause),
+        "Stop" => Some(IpcRequest::Stop),
+        "Next" => Some(IpcRequest::Next),
+        "Previous" => Some(IpcRequest::Previous),
+        _ => None,
+    }
 }
 
 fn playback_status_str(state: PlayState) -> &'static str {

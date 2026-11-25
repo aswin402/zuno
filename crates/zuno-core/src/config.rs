@@ -1,7 +1,37 @@
 use crate::error::{Result, ZunoError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ATOMIC_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Atomically write `bytes` to `dest` using a PID + sequence-unique temporary sibling file
+/// so concurrent writers never collide on a shared `.tmp` path.
+pub fn atomic_write(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let stem = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("zuno");
+    let seq = ATOMIC_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".{stem}.{}.{seq}.tmp", std::process::id()));
+    fs::write(&tmp, bytes)?;
+    if let Err(err) = fs::rename(&tmp, dest) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(())
+}
+
+pub fn user_home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
+pub fn user_data_local_dir() -> Option<PathBuf> {
+    dirs::data_local_dir()
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SourcesConfig {
@@ -85,7 +115,17 @@ impl ZunoPaths {
                 return PathBuf::from(runtime_dir).join("zuno.sock");
             }
         }
-        std::env::temp_dir().join("zuno.sock")
+        let user_tag = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .ok()
+            .map(|u| {
+                u.chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                    .collect::<String>()
+            })
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| std::process::id().to_string());
+        std::env::temp_dir().join(format!("zuno-{user_tag}.sock"))
     }
 
     /// Ensure `songs/`, `playlists/`, and `.zuno/` exist on disk.
@@ -111,6 +151,8 @@ impl ZunoPaths {
             return Vec::new();
         };
         let default_canon = fs::canonicalize(self.songs_dir()).unwrap_or_else(|_| self.songs_dir());
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        seen.insert(default_canon);
         let mut out: Vec<PathBuf> = Vec::new();
         for item in cfg.extra_dirs {
             let trimmed = item.trim();
@@ -119,13 +161,7 @@ impl ZunoPaths {
             }
             let p = expand_user_dir(trimmed);
             let canon = fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
-            if canon == default_canon {
-                continue;
-            }
-            if !out
-                .iter()
-                .any(|existing| fs::canonicalize(existing).unwrap_or_else(|_| existing.clone()) == canon)
-            {
+            if seen.insert(canon) {
                 out.push(p);
             }
         }
@@ -141,9 +177,7 @@ impl ZunoPaths {
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect(),
         };
-        let tmp = self.cache_dir().join("sources.json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(&cfg)?)?;
-        fs::rename(&tmp, self.sources_path())?;
+        atomic_write(&self.sources_path(), &serde_json::to_vec_pretty(&cfg)?)?;
         Ok(())
     }
 
@@ -223,6 +257,9 @@ impl ZunoPaths {
         if let Some(audio) = dirs::audio_dir() {
             candidates.push(audio);
         }
+        if let Some(downloads) = dirs::download_dir() {
+            candidates.push(downloads);
+        }
         if let Some(home) = dirs::home_dir() {
             candidates.push(home.join("Music"));
             candidates.push(home.join("Downloads"));
@@ -269,7 +306,16 @@ pub fn normalize_rel_path(input: &str) -> Result<String> {
     for comp in path.components() {
         match comp {
             Component::Normal(seg) => {
-                parts.push(seg.to_string_lossy().into_owned());
+                let s = seg.to_string_lossy();
+                // Reject Windows drive-letter prefixes (e.g. `C:\foo`) even on Unix hosts.
+                if parts.is_empty()
+                    && s.len() == 2
+                    && s.as_bytes()[0].is_ascii_alphabetic()
+                    && s.as_bytes()[1] == b':'
+                {
+                    return Err(ZunoError::InvalidPath(input.to_string()));
+                }
+                parts.push(s.into_owned());
             }
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
@@ -325,6 +371,7 @@ mod tests {
         assert_eq!(normalize_rel_path("./track.flac").unwrap(), "track.flac");
         assert!(normalize_rel_path("../secret.mp3").is_err());
         assert!(normalize_rel_path("/etc/passwd").is_err());
+        assert!(normalize_rel_path("C:\\Windows\\track.mp3").is_err());
         assert!(normalize_rel_path("").is_err());
     }
 

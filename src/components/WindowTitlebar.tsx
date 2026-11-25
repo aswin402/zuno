@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Minus, Square, Copy, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoLogo } from '@/components/ZunoLogo'
+import { UNKNOWN_ARTIST } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
   isTauriRuntime,
@@ -83,7 +84,7 @@ export function WindowTitlebar({
     const target = e.target as HTMLElement | null
     if (target?.closest('[data-window-control="true"]')) return
     if (e.detail === 2) {
-      zunoWindow.toggleMaximize().then(setMaximized)
+      handleToggleMaximize()
     } else {
       zunoWindow.startDragging()
     }
@@ -135,7 +136,7 @@ export function WindowTitlebar({
 
   const trackLabel =
     showTrack && currentTrack
-      ? currentTrack.artist && currentTrack.artist !== 'Unknown Artist'
+      ? currentTrack.artist && currentTrack.artist !== UNKNOWN_ARTIST
         ? `${currentTrack.title} · ${currentTrack.artist}`
         : currentTrack.title
       : null
@@ -199,6 +200,31 @@ export function WindowTitlebar({
   )
 }
 
+type ControlKind = 'min' | 'max' | 'close'
+
+const CONTROL_ORDER: Record<TitlebarAlignId, readonly ControlKind[]> = {
+  left: ['close', 'min', 'max'],
+  right: ['min', 'max', 'close'],
+}
+
+const ICON_CONTAINER_STYLES: Record<
+  Exclude<TitlebarStyleId, 'macos' | 'dots'>,
+  { wrapper: string; btn: string }
+> = {
+  geometric: {
+    wrapper: 'flex items-center overflow-hidden rounded-md border border-border bg-background/70 divide-x divide-border',
+    btn: 'h-6 w-7 rounded-none',
+  },
+  pill: {
+    wrapper: 'flex items-center gap-0.5 rounded-full border border-border bg-background/75 px-1 py-0.5',
+    btn: 'h-5 w-6 rounded-full',
+  },
+  minimal: {
+    wrapper: 'flex items-center gap-1',
+    btn: 'h-6 w-6 rounded-full',
+  },
+}
+
 function renderControls({
   styleVariant,
   align,
@@ -214,90 +240,60 @@ function renderControls({
   onToggleMaximize: () => void
   onClose: () => void
 }) {
-  const maxLabel = maximized ? 'Restore' : 'Maximize'
+  const order = CONTROL_ORDER[align]
+  const handlers: Record<ControlKind, () => void> = {
+    min: onMinimize,
+    max: onToggleMaximize,
+    close: onClose,
+  }
+  const labels: Record<ControlKind, string> = {
+    min: 'Minimize',
+    max: maximized ? 'Restore' : 'Maximize',
+    close: 'Close',
+  }
 
   // macOS Traffic Lights or Monochrome Dots
   if (styleVariant === 'macos' || styleVariant === 'dots') {
     const isColor = styleVariant === 'macos'
-    const items =
-      align === 'left'
-        ? [
-            {
-              key: 'close',
-              label: 'Close',
-              onClick: onClose,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#ff5f57] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-destructive',
-              glyph: '×',
-            },
-            {
-              key: 'min',
-              label: 'Minimize',
-              onClick: onMinimize,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#febc2e] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-foreground',
-              glyph: '−',
-            },
-            {
-              key: 'max',
-              label: maxLabel,
-              onClick: onToggleMaximize,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#28c840] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-primary',
-              glyph: maximized ? '⤢' : '+',
-            },
-          ]
-        : [
-            {
-              key: 'min',
-              label: 'Minimize',
-              onClick: onMinimize,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#febc2e] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-foreground',
-              glyph: '−',
-            },
-            {
-              key: 'max',
-              label: maxLabel,
-              onClick: onToggleMaximize,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#28c840] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-primary',
-              glyph: maximized ? '⤢' : '+',
-            },
-            {
-              key: 'close',
-              label: 'Close',
-              onClick: onClose,
-              dotCls: isColor
-                ? 'bg-muted-foreground/35 group-hover/lights:bg-[#ff5f57] hover:brightness-95'
-                : 'bg-muted-foreground/40 hover:bg-destructive',
-              glyph: '×',
-            },
-          ]
+    const dotStyle: Record<ControlKind, { cls: string; glyph: string }> = {
+      close: {
+        cls: isColor
+          ? 'bg-muted-foreground/35 group-hover/lights:bg-[#ff5f57] hover:brightness-95'
+          : 'bg-muted-foreground/40 hover:bg-destructive',
+        glyph: '×',
+      },
+      min: {
+        cls: isColor
+          ? 'bg-muted-foreground/35 group-hover/lights:bg-[#febc2e] hover:brightness-95'
+          : 'bg-muted-foreground/40 hover:bg-foreground',
+        glyph: '−',
+      },
+      max: {
+        cls: isColor
+          ? 'bg-muted-foreground/35 group-hover/lights:bg-[#28c840] hover:brightness-95'
+          : 'bg-muted-foreground/40 hover:bg-primary',
+        glyph: maximized ? '⤢' : '+',
+      },
+    }
 
     return (
       <div
         data-window-control="true"
         className="group/lights flex items-center gap-2 px-0.5"
       >
-        {items.map((item) => (
-          <Tooltip key={item.key} label={item.label} side="bottom">
+        {order.map((kind) => (
+          <Tooltip key={kind} label={labels[kind]} side="bottom">
             <button
               type="button"
               data-window-control="true"
-              onClick={item.onClick}
-              aria-label={item.label}
+              onClick={handlers[kind]}
+              aria-label={labels[kind]}
               className={cn(
                 'flex h-3 w-3 items-center justify-center rounded-full text-[9px] font-bold leading-none text-transparent transition-all duration-150 group-hover/lights:text-black/75 cursor-pointer',
-                item.dotCls,
+                dotStyle[kind].cls,
               )}
             >
-              <span className="translate-y-[-0.5px]">{item.glyph}</span>
+              <span className="translate-y-[-0.5px]">{dotStyle[kind].glyph}</span>
             </button>
           </Tooltip>
         ))}
@@ -305,118 +301,34 @@ function renderControls({
     )
   }
 
-  // Geometric Sharp Studio (bordered square keys)
-  if (styleVariant === 'geometric') {
-    const order = align === 'left' ? (['close', 'min', 'max'] as const) : (['min', 'max', 'close'] as const)
-    return (
-      <div
-        data-window-control="true"
-        className="flex items-center overflow-hidden rounded-md border border-border bg-background/70 divide-x divide-border"
-      >
-        {order.map((kind) => (
-          <WindowIconBtn
-            key={kind}
-            kind={kind}
-            maximized={maximized}
-            onMinimize={onMinimize}
-            onToggleMaximize={onToggleMaximize}
-            onClose={onClose}
-            className="h-6 w-7 rounded-none"
-          />
-        ))}
-      </div>
-    )
+  const style = ICON_CONTAINER_STYLES[styleVariant] ?? ICON_CONTAINER_STYLES.minimal
+  const icons: Record<ControlKind, React.ReactNode> = {
+    min: <Minus className="h-3 w-3" />,
+    max: maximized ? <Copy className="h-2.5 w-2.5" /> : <Square className="h-2.5 w-2.5" />,
+    close: <X className="h-3.5 w-3.5" />,
   }
 
-  // Floating Pill Capsule
-  if (styleVariant === 'pill') {
-    const order = align === 'left' ? (['close', 'min', 'max'] as const) : (['min', 'max', 'close'] as const)
-    return (
-      <div
-        data-window-control="true"
-        className="flex items-center gap-0.5 rounded-full border border-border bg-background/75 px-1 py-0.5"
-      >
-        {order.map((kind) => (
-          <WindowIconBtn
-            key={kind}
-            kind={kind}
-            maximized={maximized}
-            onMinimize={onMinimize}
-            onToggleMaximize={onToggleMaximize}
-            onClose={onClose}
-            className="h-5 w-6 rounded-full"
-          />
-        ))}
-      </div>
-    )
-  }
-
-  // Default: Minimal Mono (clean circular hover buttons)
-  const order = align === 'left' ? (['close', 'min', 'max'] as const) : (['min', 'max', 'close'] as const)
   return (
-    <div data-window-control="true" className="flex items-center gap-1">
+    <div data-window-control="true" className={style.wrapper}>
       {order.map((kind) => (
-        <WindowIconBtn
-          key={kind}
-          kind={kind}
-          maximized={maximized}
-          onMinimize={onMinimize}
-          onToggleMaximize={onToggleMaximize}
-          onClose={onClose}
-          className="h-6 w-6 rounded-full"
-        />
+        <Tooltip key={kind} label={labels[kind]} side="bottom">
+          <button
+            type="button"
+            data-window-control="true"
+            onClick={handlers[kind]}
+            aria-label={labels[kind]}
+            className={cn(
+              'flex items-center justify-center text-muted-foreground transition-colors cursor-pointer',
+              kind === 'close'
+                ? 'hover:bg-destructive/15 hover:text-destructive'
+                : 'hover:bg-secondary hover:text-foreground',
+              style.btn,
+            )}
+          >
+            {icons[kind]}
+          </button>
+        </Tooltip>
       ))}
     </div>
-  )
-}
-
-function WindowIconBtn({
-  kind,
-  maximized,
-  onMinimize,
-  onToggleMaximize,
-  onClose,
-  className,
-}: {
-  kind: 'min' | 'max' | 'close'
-  maximized: boolean
-  onMinimize: () => void
-  onToggleMaximize: () => void
-  onClose: () => void
-  className?: string
-}) {
-  const label =
-    kind === 'min' ? 'Minimize' : kind === 'max' ? (maximized ? 'Restore' : 'Maximize') : 'Close'
-  const onClick =
-    kind === 'min' ? onMinimize : kind === 'max' ? onToggleMaximize : onClose
-
-  return (
-    <Tooltip label={label} side="bottom">
-      <button
-        type="button"
-        data-window-control="true"
-        onClick={onClick}
-        aria-label={label}
-        className={cn(
-          'flex items-center justify-center text-muted-foreground transition-colors cursor-pointer',
-          kind === 'close'
-            ? 'hover:bg-destructive/15 hover:text-destructive'
-            : 'hover:bg-secondary hover:text-foreground',
-          className,
-        )}
-      >
-        {kind === 'min' ? (
-          <Minus className="h-3 w-3" />
-        ) : kind === 'max' ? (
-          maximized ? (
-            <Copy className="h-2.5 w-2.5" />
-          ) : (
-            <Square className="h-2.5 w-2.5" />
-          )
-        ) : (
-          <X className="h-3.5 w-3.5" />
-        )}
-      </button>
-    </Tooltip>
   )
 }

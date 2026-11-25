@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RotateCcw, Search, Type, Upload, X } from 'lucide-react'
 import {
   clearSavedCustomFontFile,
@@ -7,24 +7,149 @@ import {
   registerCustomFontFile,
   sanitizeFontFamilyName,
   UI_FONT_PRESETS,
+  type FontPreset,
 } from '@/lib/fonts'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
+import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
 import { cn } from '@/lib/utils'
-import type { AppearanceSettings } from '@/lib/appearance'
 
 interface CustomFontStudioProps {
   settings: AppearanceSettings
   onChange: (patch: Partial<AppearanceSettings>) => void
 }
 
+interface FontSlotPanelProps {
+  slot: 'ui' | 'mono'
+  title: string
+  subtitle: string
+  presets: readonly FontPreset[]
+  activePresetId: string
+  customValue: string
+  draft: string
+  placeholder: string
+  monoInput?: boolean
+  onDraftChange: (v: string) => void
+  onSelectPreset: (id: string) => void
+  onApplyCustom: (raw: string) => void
+  onUploadFile: (file: File | undefined) => void
+  onOpenSystemFonts: () => void
+}
+
+function FontSlotPanel({
+  slot,
+  title,
+  subtitle,
+  presets,
+  activePresetId,
+  customValue,
+  draft,
+  placeholder,
+  monoInput = false,
+  onDraftChange,
+  onSelectPreset,
+  onApplyCustom,
+  onUploadFile,
+  onOpenSystemFonts,
+}: FontSlotPanelProps) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-background/60 p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-semibold text-foreground">{title}</div>
+          <div className="text-[11px] text-muted-foreground">{subtitle}</div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenSystemFonts}
+            className="h-7 rounded-lg px-2 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+          >
+            OS Fonts
+          </button>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="inline-flex h-7 items-center gap-1 rounded-lg border border-border bg-card px-2 font-mono text-[10.5px] text-foreground transition-colors hover:bg-secondary cursor-pointer"
+          >
+            <Upload className="h-3 w-3" /> Upload
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".woff2,.woff,.ttf,.otf"
+            className="hidden"
+            onChange={(e) => {
+              onUploadFile(e.target.files?.[0])
+              e.target.value = ''
+            }}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {presets.map((preset) => {
+          const active = !customValue && activePresetId === preset.id
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => onSelectPreset(preset.id)}
+              style={{ fontFamily: preset.stack }}
+              className={cn(
+                'cursor-pointer rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors',
+                active
+                  ? 'border-primary bg-secondary font-medium text-foreground'
+                  : 'border-border bg-card text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <input
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onApplyCustom(draft)
+          }}
+          placeholder={placeholder}
+          className={cn(
+            'min-w-0 flex-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none',
+            monoInput ? 'font-mono text-[11.5px]' : 'text-xs',
+          )}
+        />
+        {draft && (
+          <button
+            type="button"
+            onClick={() => onApplyCustom('')}
+            aria-label={`Clear custom ${slot} font`}
+            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onApplyCustom(draft)}
+          className="h-7 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+        >
+          Apply
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Zenko-inspired Custom Font Studio:
- * Pick from 18 self-hosted UI typefaces + 6 Monospace fonts, enter any OS-installed font,
- * browse local system fonts, or upload your own `.woff2` / `.ttf` / `.otf` files.
+ * Pick from self-hosted UI + Monospace fonts, enter any OS-installed font,
+ * browse local system fonts, or upload `.woff2` / `.ttf` / `.otf` files.
  */
 export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) {
-  const uiFileRef = useRef<HTMLInputElement>(null)
-  const monoFileRef = useRef<HTMLInputElement>(null)
   const [uiInput, setUiInput] = useState(settings.customUiFont || '')
   const [monoInput, setMonoInput] = useState(settings.customMonoFont || '')
   const [fontMessage, setFontMessage] = useState('')
@@ -32,6 +157,15 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
   const [systemFontFilter, setSystemFontFilter] = useState('')
   const [systemPickerTarget, setSystemPickerTarget] = useState<'ui' | 'mono' | null>(null)
   const [loadingSystemFonts, setLoadingSystemFonts] = useState(false)
+
+  // Keep draft inputs synced if parent resets appearance settings externally.
+  useEffect(() => {
+    setUiInput(settings.customUiFont || '')
+  }, [settings.customUiFont])
+
+  useEffect(() => {
+    setMonoInput(settings.customMonoFont || '')
+  }, [settings.customMonoFont])
 
   const applyCustomName = (slot: 'ui' | 'mono', raw: string) => {
     const clean = sanitizeFontFamilyName(raw)
@@ -81,11 +215,11 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
     }
   }
 
-  const filteredSystemFonts = systemFontFilter.trim()
-    ? systemFonts.filter((f) =>
-        f.toLowerCase().includes(systemFontFilter.trim().toLowerCase()),
-      )
-    : systemFonts
+  const filteredSystemFonts = useMemo(() => {
+    const q = systemFontFilter.trim().toLowerCase()
+    if (!q) return systemFonts
+    return systemFonts.filter((f) => f.toLowerCase().includes(q))
+  }, [systemFonts, systemFontFilter])
 
   return (
     <div className="z-surface-card flex flex-col gap-5 rounded-2xl border border-border bg-card p-5">
@@ -96,7 +230,7 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
             <span>Custom Font Studio</span>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Choose from 18 curated variable typefaces, pick an OS font, or upload .woff2 / .ttf / .otf files.
+            Choose from {UI_FONT_PRESETS.length} curated UI &amp; {MONO_FONT_PRESETS.length} mono typefaces, pick an OS font, or upload .woff2 / .ttf / .otf files.
           </p>
         </div>
 
@@ -109,8 +243,8 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
             setMonoInput('')
             setFontMessage('')
             onChange({
-              fontFamily: 'geist',
-              monoFont: 'jetbrains',
+              fontFamily: DEFAULT_APPEARANCE.fontFamily,
+              monoFont: DEFAULT_APPEARANCE.monoFont,
               customUiFont: '',
               customMonoFont: '',
             })
@@ -123,191 +257,44 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Interface Font Column */}
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-background/60 p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold text-foreground">Interface Font</div>
-              <div className="text-[11px] text-muted-foreground">
-                Song titles, menus, headings &amp; controls
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => openSystemFonts('ui')}
-                className="h-7 rounded-lg px-2 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-              >
-                OS Fonts
-              </button>
-              <button
-                type="button"
-                onClick={() => uiFileRef.current?.click()}
-                className="inline-flex h-7 items-center gap-1 rounded-lg border border-border bg-card px-2 font-mono text-[10.5px] text-foreground transition-colors hover:bg-secondary cursor-pointer"
-              >
-                <Upload className="h-3 w-3" /> Upload
-              </button>
-              <input
-                ref={uiFileRef}
-                type="file"
-                accept=".woff2,.woff,.ttf,.otf"
-                className="hidden"
-                onChange={(e) => {
-                  handleUpload('ui', e.target.files?.[0])
-                  e.target.value = ''
-                }}
-              />
-            </div>
-          </div>
+        <FontSlotPanel
+          slot="ui"
+          title="Interface Font"
+          subtitle="Song titles, menus, headings & controls"
+          presets={UI_FONT_PRESETS}
+          activePresetId={settings.fontFamily}
+          customValue={settings.customUiFont}
+          draft={uiInput}
+          placeholder="Custom UI font (e.g. SF Pro, Poppins)..."
+          onDraftChange={setUiInput}
+          onSelectPreset={(id) => {
+            setUiInput('')
+            onChange({ fontFamily: id, customUiFont: '' })
+          }}
+          onApplyCustom={(raw) => applyCustomName('ui', raw)}
+          onUploadFile={(f) => handleUpload('ui', f)}
+          onOpenSystemFonts={() => openSystemFonts('ui')}
+        />
 
-          <div className="flex flex-wrap gap-1.5">
-            {UI_FONT_PRESETS.map((preset) => {
-              const active = !settings.customUiFont && settings.fontFamily === preset.id
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => {
-                    setUiInput('')
-                    onChange({ fontFamily: preset.id, customUiFont: '' })
-                  }}
-                  style={{ fontFamily: preset.stack }}
-                  className={cn(
-                    'cursor-pointer rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors',
-                    active
-                      ? 'border-primary bg-secondary font-medium text-foreground'
-                      : 'border-border bg-card text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {preset.label}
-                </button>
-              )
-            })}
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <input
-              value={uiInput}
-              onChange={(e) => setUiInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') applyCustomName('ui', uiInput)
-              }}
-              placeholder="Custom UI font (e.g. SF Pro, Poppins)..."
-              className="min-w-0 flex-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
-            />
-            {uiInput && (
-              <button
-                type="button"
-                onClick={() => applyCustomName('ui', '')}
-                aria-label="Clear custom UI font"
-                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => applyCustomName('ui', uiInput)}
-              className="h-7 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
-            >
-              Apply
-            </button>
-          </div>
-        </div>
-
-        {/* Monospace / Timestamp Font Column */}
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-background/60 p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold text-foreground">
-                Timestamps &amp; Mono Font
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                Durations, EQ readouts, dB values &amp; hex codes
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => openSystemFonts('mono')}
-                className="h-7 rounded-lg px-2 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-              >
-                OS Fonts
-              </button>
-              <button
-                type="button"
-                onClick={() => monoFileRef.current?.click()}
-                className="inline-flex h-7 items-center gap-1 rounded-lg border border-border bg-card px-2 font-mono text-[10.5px] text-foreground transition-colors hover:bg-secondary cursor-pointer"
-              >
-                <Upload className="h-3 w-3" /> Upload
-              </button>
-              <input
-                ref={monoFileRef}
-                type="file"
-                accept=".woff2,.woff,.ttf,.otf"
-                className="hidden"
-                onChange={(e) => {
-                  handleUpload('mono', e.target.files?.[0])
-                  e.target.value = ''
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {MONO_FONT_PRESETS.map((preset) => {
-              const active = !settings.customMonoFont && settings.monoFont === preset.id
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => {
-                    setMonoInput('')
-                    onChange({ monoFont: preset.id, customMonoFont: '' })
-                  }}
-                  style={{ fontFamily: preset.stack }}
-                  className={cn(
-                    'cursor-pointer rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors',
-                    active
-                      ? 'border-primary bg-secondary font-medium text-foreground'
-                      : 'border-border bg-card text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {preset.label}
-                </button>
-              )
-            })}
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <input
-              value={monoInput}
-              onChange={(e) => setMonoInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') applyCustomName('mono', monoInput)
-              }}
-              placeholder="Custom mono font (e.g. Iosevka, Hack)..."
-              className="min-w-0 flex-1 rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[11.5px] text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
-            />
-            {monoInput && (
-              <button
-                type="button"
-                onClick={() => applyCustomName('mono', '')}
-                aria-label="Clear custom mono font"
-                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => applyCustomName('mono', monoInput)}
-              className="h-7 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
-            >
-              Apply
-            </button>
-          </div>
-        </div>
+        <FontSlotPanel
+          slot="mono"
+          title="Timestamps & Mono Font"
+          subtitle="Durations, EQ readouts, dB values & hex codes"
+          presets={MONO_FONT_PRESETS}
+          activePresetId={settings.monoFont}
+          customValue={settings.customMonoFont}
+          draft={monoInput}
+          placeholder="Custom mono font (e.g. Iosevka, Hack)..."
+          monoInput
+          onDraftChange={setMonoInput}
+          onSelectPreset={(id) => {
+            setMonoInput('')
+            onChange({ monoFont: id, customMonoFont: '' })
+          }}
+          onApplyCustom={(raw) => applyCustomName('mono', raw)}
+          onUploadFile={(f) => handleUpload('mono', f)}
+          onOpenSystemFonts={() => openSystemFonts('mono')}
+        />
       </div>
 
       {/* Local OS Font Picker Drawer */}
@@ -358,6 +345,11 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
                   </button>
                 ))}
               </div>
+              {filteredSystemFonts.length > 80 && (
+                <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+                  Showing 80 of {filteredSystemFonts.length} fonts — type above to narrow down.
+                </p>
+              )}
             </CompactScrollArea>
           )}
         </div>

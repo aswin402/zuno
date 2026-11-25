@@ -1,3 +1,5 @@
+import { DEFAULT_FM_FREQ_MHZ } from '@/lib/format'
+import { isHlsStreamUrl, isValidHttpStreamUrl } from '@/lib/radioUrl'
 import {
   CURATED_ONLINE_STATIONS,
   FM_BANDS,
@@ -90,7 +92,7 @@ export const DEFAULT_RADIO_STORE: RadioStoreData = {
   marked_online_ids: [],
   custom_online: [],
   offline_signals: [],
-  last_freq_mhz: 98.3,
+  last_freq_mhz: DEFAULT_FM_FREQ_MHZ,
   band: 'global',
 }
 
@@ -104,7 +106,7 @@ function normalizeStore(raw: Partial<RadioStoreData> | null | undefined): RadioS
   const spec = FM_BANDS[band]
   const rawFreq = typeof raw.last_freq_mhz === 'number' && Number.isFinite(raw.last_freq_mhz)
     ? raw.last_freq_mhz
-    : 98.3
+    : DEFAULT_FM_FREQ_MHZ
   const clampedFreq = Math.round(Math.min(spec.maxMhz, Math.max(spec.minMhz, rawFreq)) * 10) / 10
   return {
     marked_online_ids: Array.isArray(raw.marked_online_ids)
@@ -115,7 +117,7 @@ function normalizeStore(raw: Partial<RadioStoreData> | null | undefined): RadioS
       ? raw.offline_signals.map((s) => ({
           ...s,
           band: normalizeBand(s.band),
-          freq_mhz: Math.round(Number(s.freq_mhz || 98.3) * 10) / 10,
+          freq_mhz: Math.round(Number(s.freq_mhz || DEFAULT_FM_FREQ_MHZ) * 10) / 10,
           marked: s.marked !== false,
         }))
       : [],
@@ -214,7 +216,11 @@ export async function discoverStations(opts: {
   let lastErr = 'Unable to reach Radio Browser directory'
   for (const base of mirrors) {
     try {
-      const res = await fetch(`${base}/json/stations/search?${params.toString()}`)
+      const signal =
+        typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+          ? AbortSignal.timeout(6000)
+          : undefined
+      const res = await fetch(`${base}/json/stations/search?${params.toString()}`, { signal })
       if (!res.ok) continue
       const list = (await res.json()) as Array<Record<string, unknown>>
       const seen = new Set<string>()
@@ -222,7 +228,7 @@ export async function discoverStations(opts: {
       for (const item of list) {
         const url = String(item.url_resolved || item.url || '').trim()
         const name = String(item.name || '').trim()
-        if (!url.startsWith('http') || !name || seen.has(url) || Number(item.lastcheckok) === 0) {
+        if (!isValidHttpStreamUrl(url) || !name || seen.has(url) || Number(item.lastcheckok) === 0) {
           continue
         }
         seen.add(url)
@@ -253,7 +259,7 @@ export async function discoverStations(opts: {
 
 export async function resolveRadioLink(rawUrl: string): Promise<ResolvedStreamInfo> {
   const trimmed = rawUrl.trim()
-  if (!/^https?:\/\/\S+\.\S+/i.test(trimmed)) {
+  if (!isValidHttpStreamUrl(trimmed)) {
     throw new Error('Please paste a valid http:// or https:// radio stream link.')
   }
   if (isTauriRuntime()) {
@@ -266,6 +272,6 @@ export async function resolveRadioLink(rawUrl: string): Promise<ResolvedStreamIn
     genre: null,
     bitrate: null,
     content_type: null,
-    is_hls: /\.m3u8(\?|$)/i.test(trimmed),
+    is_hls: isHlsStreamUrl(trimmed),
   }
 }

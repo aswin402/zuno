@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { X } from 'lucide-react'
+import { prefersReducedMotion } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 interface DialogProps {
@@ -9,13 +10,6 @@ interface DialogProps {
   subtitle?: string
   children: React.ReactNode
   className?: string
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
 }
 
 export function Dialog({

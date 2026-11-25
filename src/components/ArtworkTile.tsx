@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react'
+import { fnv1aHash } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { zunoApi } from '@/lib/zunoApi'
 
@@ -8,15 +9,6 @@ interface ArtworkTileProps {
   seed: string
   variant?: 'arch' | 'card' | 'thumb'
   className?: string
-}
-
-function hashSeed(input: string): number {
-  let h = 2166136261
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return Math.abs(h)
 }
 
 /**
@@ -50,7 +42,7 @@ export const ArtworkTile = memo(function ArtworkTile({
     )
   }
 
-  const h = hashSeed(seed || 'zuno')
+  const h = fnv1aHash(seed || 'zuno')
   const cx = 42 + (h % 17)
   const cy = variant === 'arch' ? 54 + ((h >> 4) % 12) : 46 + ((h >> 4) % 12)
 

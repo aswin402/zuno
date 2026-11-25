@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { prefersReducedMotion } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const EASE_CURVE = 'var(--dropdown-ease, cubic-bezier(0.22, 1, 0.36, 1))'
@@ -45,13 +46,6 @@ function useDropdownMenu(part: string) {
 function enabledItems(list: HTMLElement | null) {
   return Array.from(
     list?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
-  )
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
   )
 }
 

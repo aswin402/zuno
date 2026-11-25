@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { fnv1aHash } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ScrubberKnobStyleId } from '@/lib/appearance'
 
@@ -17,16 +18,12 @@ interface ScrubberProps {
 }
 
 function makeWaveHeights(seed: string, count: number): number[] {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
+  let h = fnv1aHash(seed) | 0
   const bars: number[] = []
   for (let i = 0; i < count; i++) {
     h ^= i * 374761393
     h = Math.imul(h, 668265263)
-    const n = (Math.abs(h) % 100) / 100
+    const n = ((h >>> 0) % 100) / 100
     // Gentle musical envelope (taller in center, organic peaks)
     const env = 0.45 + 0.55 * Math.sin(((i + 1) / (count + 1)) * Math.PI)
     bars.push(Math.round(24 + n * env * 76))
@@ -68,8 +65,8 @@ export function Scrubber({
   const waveCount = compact ? 24 : 44
   const tickCount = compact ? 18 : 34
   const waveBars = useMemo(
-    () => makeWaveHeights(seed, waveCount),
-    [seed, waveCount],
+    () => (styleVariant === 'waveform' ? makeWaveHeights(seed, waveCount) : []),
+    [styleVariant, seed, waveCount],
   )
 
   return (

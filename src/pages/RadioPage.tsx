@@ -32,6 +32,13 @@ import {
 import { Tooltip } from '@/components/ui/tooltip'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { cn } from '@/lib/utils'
+import { DEFAULT_FM_FREQ_MHZ, formatError, freqToDeciMhz } from '@/lib/format'
+import {
+  deriveStationNameFromUrl,
+  inferCodecFromContentType,
+  isPlaylistStreamUrl,
+  isValidHttpStreamUrl,
+} from '@/lib/radioUrl'
 import type { AppearanceSettings } from '@/lib/appearance'
 import {
   DISCOVER_PRESETS,
@@ -55,6 +62,10 @@ import {
 } from '@/lib/radioStore'
 
 type RadioTab = 'online' | 'discover' | 'offline' | 'marked'
+
+const ALL_FM_BANDS = Object.values(FM_BANDS)
+const FM_GLOBAL_MIN_MHZ = Math.min(...ALL_FM_BANDS.map((b) => b.minMhz))
+const FM_GLOBAL_MAX_MHZ = Math.max(...ALL_FM_BANDS.map((b) => b.maxMhz))
 
 interface RadioPageProps {
   store: RadioStoreData
@@ -159,6 +170,7 @@ export function RadioPage({
   const [discoverLoading, setDiscoverLoading] = useState(false)
   const [discoverError, setDiscoverError] = useState<string | null>(null)
   const [discoverTouched, setDiscoverTouched] = useState(false)
+  const discoverReqIdRef = useRef(0)
 
   // ── Offline FM tuner UI state ──
   const [hwGuideOpen, setHwGuideOpen] = useState(false)
@@ -183,7 +195,7 @@ export function RadioPage({
   // ── Mark / Add Offline Signal Dialog state ──
   const [signalModalOpen, setSignalModalOpen] = useState(false)
   const [editingSignalId, setEditingSignalId] = useState<string | undefined>(undefined)
-  const [sigFreq, setSigFreq] = useState('98.3')
+  const [sigFreq, setSigFreq] = useState(DEFAULT_FM_FREQ_MHZ.toFixed(1))
   const [sigName, setSigName] = useState('')
   const [sigRegion, setSigRegion] = useState('')
   const [sigGenre, setSigGenre] = useState('')
@@ -237,23 +249,30 @@ export function RadioPage({
     })
   }, [allOnlineStations, onlineSearch, selectedCategory])
 
-  // ── Discover fetcher ──
+  // ── Discover fetcher (sequence-guarded against stale out-of-order responses) ──
   const runDiscover = useCallback(
     async (opts: { query?: string; tag?: string; country?: string; language?: string }) => {
+      const reqId = ++discoverReqIdRef.current
       setDiscoverTouched(true)
       setDiscoverLoading(true)
       setDiscoverError(null)
       try {
         const res = await discoverStations({ ...opts, limit: 40 })
+        if (reqId !== discoverReqIdRef.current) return
         setDiscoverResults(res)
       } catch (err) {
+        if (reqId !== discoverReqIdRef.current) return
         setDiscoverResults([])
         setDiscoverError(
-          String(err).replace(/^Error:\s*/i, '') ||
+          formatError(
+            err,
             'Unable to reach the online station directory. Check your internet connection.',
+          ),
         )
       } finally {
-        setDiscoverLoading(false)
+        if (reqId === discoverReqIdRef.current) {
+          setDiscoverLoading(false)
+        }
       }
     },
     [],
@@ -293,45 +312,25 @@ export function RadioPage({
       if (info.name && !linkName.trim()) setLinkName(info.name)
       if (info.genre && !linkGenre.trim()) setLinkGenre(info.genre)
       if (info.bitrate) setLinkBitrate(info.bitrate)
-      if (info.is_hls) {
-        setLinkCodec('HLS')
-      } else if (info.content_type) {
-        const ct = info.content_type.toLowerCase()
-        if (ct.includes('aac')) setLinkCodec('AAC')
-        else if (ct.includes('ogg')) setLinkCodec('OGG')
-        else if (ct.includes('mpeg') || ct.includes('mp3')) setLinkCodec('MP3')
-      }
+      const detectedCodec = inferCodecFromContentType(info.content_type, info.is_hls)
+      if (detectedCodec) setLinkCodec(detectedCodec)
     } catch (err) {
-      setLinkError(String(err).replace(/^Error:\s*/i, ''))
+      setLinkError(formatError(err))
     } finally {
       setLinkProbing(false)
     }
   }
 
-  const deriveNameFromUrl = (raw: string): string => {
-    try {
-      const u = new URL(raw)
-      const tail = u.pathname
-        .split('/')
-        .filter(Boolean)
-        .pop()
-        ?.replace(/\.(mp3|aac|ogg|m3u8?|pls)$/i, '')
-      return tail ? `${u.hostname.replace(/^www\./, '')} · ${tail}` : u.hostname
-    } catch {
-      return 'Custom Radio Stream'
-    }
-  }
-
   const handleTestPlayLink = async () => {
     const trimmed = linkUrl.trim()
-    if (!/^https?:\/\/\S+\.\S+/i.test(trimmed)) {
+    if (!isValidHttpStreamUrl(trimmed)) {
       setLinkError('Please enter a valid http:// or https:// stream URL.')
       return
     }
     setLinkError(null)
     let playUrl = trimmed
     let detectedName = linkName.trim()
-    if (/\.(pls|m3u)(\?|$)/i.test(trimmed)) {
+    if (isPlaylistStreamUrl(trimmed)) {
       setLinkProbing(true)
       try {
         const info = await resolveRadioLink(trimmed)
@@ -349,7 +348,7 @@ export function RadioPage({
     }
     const tempStation: OnlineStation = {
       id: `preview-${Date.now()}`,
-      name: detectedName || deriveNameFromUrl(playUrl),
+      name: detectedName || deriveStationNameFromUrl(playUrl),
       url: playUrl,
       category: 'Custom',
       country: linkCountry.trim() || 'Custom Link',
@@ -365,7 +364,7 @@ export function RadioPage({
   const handleSaveCustomLink = async (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = linkUrl.trim()
-    if (!/^https?:\/\/\S+\.\S+/i.test(trimmed)) {
+    if (!isValidHttpStreamUrl(trimmed)) {
       setLinkError('Please paste a valid http:// or https:// stream link.')
       return
     }
@@ -376,7 +375,7 @@ export function RadioPage({
     let finalBitrate = linkBitrate
     let finalCodec = linkCodec
 
-    if (/\.(pls|m3u)(\?|$)/i.test(trimmed)) {
+    if (isPlaylistStreamUrl(trimmed)) {
       setLinkProbing(true)
       try {
         const info = await resolveRadioLink(trimmed)
@@ -384,7 +383,8 @@ export function RadioPage({
         if (!finalName && info.name) finalName = info.name
         if (!finalGenre && info.genre) finalGenre = info.genre
         if (!finalBitrate && info.bitrate) finalBitrate = info.bitrate
-        if (info.is_hls) finalCodec = 'HLS'
+        const detectedCodec = inferCodecFromContentType(info.content_type, info.is_hls)
+        if (detectedCodec) finalCodec = detectedCodec
       } catch {
         /* save raw url */
       } finally {
@@ -394,7 +394,7 @@ export function RadioPage({
 
     const created = onAddCustomOnline(
       {
-        name: finalName || deriveNameFromUrl(finalUrl),
+        name: finalName || deriveStationNameFromUrl(finalUrl),
         url: finalUrl,
         country: linkCountry.trim() || 'Custom Link',
         category: 'Custom',
@@ -411,13 +411,11 @@ export function RadioPage({
   // ── Offline FM Dial & Signal Modal helpers ──
   const bandSpec = FM_BANDS[store.band]
   const currentFreq = clampFreqToBand(store.last_freq_mhz, store.band)
-  const matchedOfflineSignal = useMemo(
-    () =>
-      store.offline_signals.find(
-        (s) => Math.abs(s.freq_mhz - currentFreq) < 0.051,
-      ) ?? null,
-    [store.offline_signals, currentFreq],
+  const offlineSignalByFreq = useMemo(
+    () => new Map(store.offline_signals.map((s) => [freqToDeciMhz(s.freq_mhz), s])),
+    [store.offline_signals],
   )
+  const matchedOfflineSignal = offlineSignalByFreq.get(freqToDeciMhz(currentFreq)) ?? null
 
   const bandSignals = useMemo(
     () =>
@@ -444,7 +442,7 @@ export function RadioPage({
     const next = clampFreqToBand(currentFreq + delta, store.band)
     onChangeDialFreq(next)
     if (activeRadio?.kind === 'offline' && activeRadio.isPlaying && fmHardware?.available) {
-      const hit = store.offline_signals.find((s) => Math.abs(s.freq_mhz - next) < 0.051)
+      const hit = offlineSignalByFreq.get(freqToDeciMhz(next))
       onTuneOfflineSignal(next, hit?.name, hit?.id)
     }
   }
@@ -474,8 +472,10 @@ export function RadioPage({
   const handleSaveOfflineSignal = (e: React.FormEvent) => {
     e.preventDefault()
     const parsed = Number.parseFloat(sigFreq)
-    if (!Number.isFinite(parsed) || parsed < 64.0 || parsed > 108.0) {
-      setSigError('Enter a valid FM frequency between 64.0 and 108.0 MHz.')
+    if (!Number.isFinite(parsed) || parsed < FM_GLOBAL_MIN_MHZ || parsed > FM_GLOBAL_MAX_MHZ) {
+      setSigError(
+        `Enter a valid FM frequency between ${FM_GLOBAL_MIN_MHZ.toFixed(1)} and ${FM_GLOBAL_MAX_MHZ.toFixed(1)} MHz.`,
+      )
       return
     }
     const cleanFreq = Math.round(parsed * 10) / 10
@@ -508,11 +508,15 @@ export function RadioPage({
     return ticks
   }, [bandSpec])
 
+  const currentFreqDeci = freqToDeciMhz(currentFreq)
+  const activeOfflineDeci =
+    activeRadio?.kind === 'offline' && activeRadio.freqMhz !== undefined
+      ? freqToDeciMhz(activeRadio.freqMhz)
+      : null
   const isOfflinePlayingThisFreq =
     activeRadio?.kind === 'offline' &&
     activeRadio.isPlaying &&
-    activeRadio.freqMhz !== undefined &&
-    Math.abs(activeRadio.freqMhz - currentFreq) < 0.051
+    activeOfflineDeci === currentFreqDeci
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
@@ -1549,12 +1553,10 @@ export function RadioPage({
             ) : (
               <div className="space-y-1.5">
                 {sortedOfflineSignals.map((sig) => {
-                  const isActive =
-                    activeRadio?.kind === 'offline' &&
-                    activeRadio.freqMhz !== undefined &&
-                    Math.abs(activeRadio.freqMhz - sig.freq_mhz) < 0.051
-                  const isPlayingThis = isActive && activeRadio.isPlaying
-                  const isDialOnThis = Math.abs(currentFreq - sig.freq_mhz) < 0.051
+                  const sigDeci = freqToDeciMhz(sig.freq_mhz)
+                  const isActive = activeOfflineDeci === sigDeci
+                  const isPlayingThis = isActive && Boolean(activeRadio?.isPlaying)
+                  const isDialOnThis = currentFreqDeci === sigDeci
 
                   return (
                     <div
@@ -1724,10 +1726,7 @@ export function RadioPage({
                     </p>
                     <div className="space-y-1.5">
                       {markedOfflineSignals.map((sig) => {
-                        const isActive =
-                          activeRadio?.kind === 'offline' &&
-                          activeRadio.freqMhz !== undefined &&
-                          Math.abs(activeRadio.freqMhz - sig.freq_mhz) < 0.051
+                        const isActive = activeOfflineDeci === freqToDeciMhz(sig.freq_mhz)
                         return (
                           <div
                             key={sig.id}

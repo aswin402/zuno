@@ -1,4 +1,7 @@
+import { contrastForegroundForHex } from '@/lib/color'
 import { resolveMonoFontStack, resolveUiFontStack } from '@/lib/fonts'
+
+export { contrastForegroundForHex }
 
 export type ThemeId =
   | 'zinc'
@@ -200,7 +203,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   uiZoom: 100,
 }
 
-const STORAGE_KEY = 'zuno:appearance'
+export const APPEARANCE_STORAGE_KEY = 'zuno:appearance'
 
 export interface ModePalette {
   background: string
@@ -570,36 +573,21 @@ const ICON_STROKE_MAP: Record<IconStrokeId, string> = {
   bold: '2.25',
 }
 
-/** Computes crisp readable foreground (#09090b or #ffffff) for any custom hex accent. */
-export function contrastForegroundForHex(hex: string): string {
-  const clean = hex.replace('#', '')
-  if (clean.length !== 6) return '#ffffff'
-  const r = parseInt(clean.slice(0, 2), 16) / 255
-  const g = parseInt(clean.slice(2, 4), 16) / 255
-  const b = parseInt(clean.slice(4, 6), 16) / 255
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
-  return lum > 0.56 ? '#09090b' : '#ffffff'
-}
-
 export function resolveEffectivePalette(s: AppearanceSettings): ModePalette {
   const preset = THEME_PRESETS.find((t) => t.id === s.theme) ?? THEME_PRESETS[0]
   const base = s.mode === 'light' ? preset.light : preset.dark
   const isDark = s.mode === 'dark'
   const accent = ACCENT_PRESETS.find((a) => a.id === s.accent) ?? ACCENT_PRESETS[0]
 
-  let primary =
+  const accentPair =
     accent.id === 'mono'
-      ? base.primary
+      ? { primary: base.primary, fg: base.primaryForeground }
       : isDark
-        ? (accent.darkPrimary ?? base.primary)
-        : (accent.lightPrimary ?? base.primary)
+        ? { primary: accent.darkPrimary ?? base.primary, fg: accent.darkFg ?? base.primaryForeground }
+        : { primary: accent.lightPrimary ?? base.primary, fg: accent.lightFg ?? base.primaryForeground }
 
-  let primaryForeground =
-    accent.id === 'mono'
-      ? base.primaryForeground
-      : isDark
-        ? (accent.darkFg ?? base.primaryForeground)
-        : (accent.lightFg ?? base.primaryForeground)
+  let primary = accentPair.primary
+  let primaryForeground = accentPair.fg
 
   const cc = s.customColors ?? {}
   if (cc.primary) {
@@ -622,45 +610,34 @@ export function resolveEffectivePalette(s: AppearanceSettings): ModePalette {
   }
 }
 
-const VALID_THEME_IDS: ThemeId[] = [
-  'zinc',
-  'oled',
-  'vermilion',
-  'stone',
-  'amber',
-  'crimson',
-  'emerald',
-  'slate',
-]
+const VALID_THEME_SET: ReadonlySet<ThemeId> = new Set(THEME_PRESETS.map((t) => t.id))
+
+const LEGACY_THEME_MIGRATION: Record<string, { theme: ThemeId; mode: ThemeMode }> = {
+  'zinc-dark': { theme: 'zinc', mode: 'dark' },
+  'zinc-light': { theme: 'zinc', mode: 'light' },
+  'oled-black': { theme: 'oled', mode: 'dark' },
+  'stone-dark': { theme: 'stone', mode: 'dark' },
+  'slate-dark': { theme: 'slate', mode: 'dark' },
+}
 
 export function loadAppearance(): AppearanceSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(APPEARANCE_STORAGE_KEY)
     if (!raw) return DEFAULT_APPEARANCE
     const parsed = JSON.parse(raw) as Record<string, unknown>
 
-    let theme = parsed.theme as string | undefined
+    let theme = typeof parsed.theme === 'string' ? parsed.theme : undefined
     let mode = parsed.mode as ThemeMode | undefined
-    if (theme === 'zinc-dark') {
-      theme = 'zinc'
-      mode ??= 'dark'
-    } else if (theme === 'zinc-light') {
-      theme = 'zinc'
-      mode ??= 'light'
-    } else if (theme === 'oled-black') {
-      theme = 'oled'
-      mode ??= 'dark'
-    } else if (theme === 'stone-dark') {
-      theme = 'stone'
-      mode ??= 'dark'
-    } else if (theme === 'slate-dark') {
-      theme = 'slate'
-      mode ??= 'dark'
+    const migrated = theme ? LEGACY_THEME_MIGRATION[theme] : undefined
+    if (migrated) {
+      theme = migrated.theme
+      mode ??= migrated.mode
     }
 
-    const validTheme: ThemeId = VALID_THEME_IDS.includes(theme as ThemeId)
-      ? (theme as ThemeId)
-      : DEFAULT_APPEARANCE.theme
+    const validTheme: ThemeId =
+      theme && VALID_THEME_SET.has(theme as ThemeId)
+        ? (theme as ThemeId)
+        : DEFAULT_APPEARANCE.theme
 
     return {
       ...DEFAULT_APPEARANCE,
@@ -683,7 +660,7 @@ export function loadAppearance(): AppearanceSettings {
 
 export function saveAppearance(settings: AppearanceSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+    localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(settings))
   } catch {
     /* ignore */
   }
@@ -734,38 +711,33 @@ export function applyAppearanceToDom(s: AppearanceSettings): void {
   if (meta) meta.setAttribute('content', palette.background)
 }
 
+const WINDOW_RADIUS_CLASS: Record<WindowRadiusId, string> = {
+  sharp: 'rounded-none',
+  soft: 'rounded-[10px]',
+  curved: 'rounded-[16px]',
+  pill: 'rounded-[22px]',
+}
+
+const ROW_RADIUS_CLASS: Record<RadiusStyleId, string> = {
+  sharp: 'rounded-md',
+  balanced: 'rounded-2xl',
+  round: 'rounded-3xl',
+}
+
+const ROW_PADDING_CLASS: Record<DensityId, string> = {
+  compact: 'py-1.5 px-2.5',
+  comfortable: 'py-2.5 px-3',
+  spacious: 'py-3.5 px-4',
+}
+
 export function windowRadiusClass(radius: WindowRadiusId): string {
-  switch (radius) {
-    case 'sharp':
-      return 'rounded-none'
-    case 'soft':
-      return 'rounded-[10px]'
-    case 'pill':
-      return 'rounded-[22px]'
-    case 'curved':
-    default:
-      return 'rounded-[16px]'
-  }
+  return WINDOW_RADIUS_CLASS[radius] ?? WINDOW_RADIUS_CLASS.curved
 }
 
 export function rowRadiusClass(radius: RadiusStyleId): string {
-  switch (radius) {
-    case 'sharp':
-      return 'rounded-md'
-    case 'round':
-      return 'rounded-3xl'
-    default:
-      return 'rounded-2xl'
-  }
+  return ROW_RADIUS_CLASS[radius] ?? ROW_RADIUS_CLASS.balanced
 }
 
 export function rowPaddingClass(density: DensityId): string {
-  switch (density) {
-    case 'compact':
-      return 'py-1.5 px-2.5'
-    case 'spacious':
-      return 'py-3.5 px-4'
-    default:
-      return 'py-2.5 px-3'
-  }
+  return ROW_PADDING_CLASS[density] ?? ROW_PADDING_CLASS.comfortable
 }

@@ -4,6 +4,7 @@ import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { Tooltip } from '@/components/ui/tooltip'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
 import { ZunoLogo } from '@/components/ZunoLogo'
+import { isFavoritesPlaylist } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type {
   IconPackId,
@@ -132,7 +133,7 @@ export function FloatingNavigation({
 
   const isFav =
     page === 'playlist' &&
-    (activePlaylistSlug === 'favorites' || activePlaylistSlug === 'fav')
+    Boolean(activePlaylistSlug && isFavoritesPlaylist({ slug: activePlaylistSlug }))
 
   const navItems: {
     id: string

@@ -26,23 +26,18 @@ if [ ! -f "dist/index.html" ]; then
   npm run build
 fi
 
-if [ ! -f "$TARGET_DIR/release/zuno" ]; then
-  echo "==> Building native Tauri v2 desktop binary (zuno)..."
-  cargo build --release -p zuno
-fi
-
-if [ ! -f "$TARGET_DIR/release/zuno-mcp" ]; then
-  echo "==> Building CLI & MCP binary (zuno-mcp)..."
-  cargo build --release -p zuno-mcp
+if [ ! -f "$TARGET_DIR/release/zuno" ] || [ ! -f "$TARGET_DIR/release/zuno-mcp" ]; then
+  echo "==> Building native Tauri v2 desktop & CLI/MCP binaries..."
+  cargo build --release -p zuno -p zuno-mcp
 fi
 
 echo "==> Installing native Zuno into $BIN_DIR and $DATA_DIR..."
 mkdir -p "$BIN_DIR" "$APP_DIR" \
   "$ICON_BASE/scalable/apps" \
-  "$ICON_BASE/256x256/apps" \
+  "$ICON_BASE/192x192/apps" \
   "$ICON_BASE/512x512/apps" \
-  "$HOME/zuno/songs" \
-  "$HOME/zuno/playlists"
+  "${ZUNO_DIR:-$HOME/zuno}/songs" \
+  "${ZUNO_DIR:-$HOME/zuno}/playlists"
 
 install -m 755 "$TARGET_DIR/release/zuno" "$BIN_DIR/zuno"
 install -m 755 "$TARGET_DIR/release/zuno-mcp" "$BIN_DIR/zuno-mcp"
@@ -55,7 +50,7 @@ if [ -f "public/icon-512.png" ]; then
   install -m 644 "public/icon-512.png" "$ICON_BASE/512x512/apps/zuno.png"
 fi
 if [ -f "public/icon-192.png" ]; then
-  install -m 644 "public/icon-192.png" "$ICON_BASE/256x256/apps/zuno.png"
+  install -m 644 "public/icon-192.png" "$ICON_BASE/192x192/apps/zuno.png"
 fi
 
 cat > "$APP_DIR/zuno.desktop" <<EOF
@@ -65,7 +60,7 @@ Version=1.0
 Name=Zuno
 GenericName=Music Player
 Comment=Ultra-lightweight, offline-first music player
-Exec=$BIN_DIR/zuno
+Exec="$BIN_DIR/zuno"
 Icon=zuno
 Terminal=false
 Categories=AudioVideo;Audio;Player;Music;

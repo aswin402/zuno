@@ -7,14 +7,8 @@ import {
   useRef,
   useState,
 } from 'react'
+import { prefersReducedMotion } from '@/lib/format'
 import { cn } from '@/lib/utils'
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
 
 /* ── 04 · TextSwap (3-phase blurred vertical text transition — transitions.dev + Music Player Likes) ── */
 

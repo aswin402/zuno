@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_VOLUME: f32 = 0.8;
+pub const UNKNOWN_ARTIST: &str = "Unknown Artist";
+pub const ROOT_FOLDER_LABEL: &str = "(root)";
+
 /// Lightweight metadata record for a single audio track in `zuno/songs/`.
 /// Cover art bytes are intentionally excluded to keep memory footprint minimal.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,7 +32,7 @@ pub struct Track {
 impl Track {
     /// Display string used in `#EXTINF` lines (`Artist - Title` or `Title`).
     pub fn extinf_display(&self) -> String {
-        if self.artist.is_empty() || self.artist == "Unknown Artist" {
+        if self.artist.is_empty() || self.artist == UNKNOWN_ARTIST {
             self.title.clone()
         } else {
             format!("{} - {}", self.artist, self.title)
@@ -118,7 +122,7 @@ impl Default for PlaybackStatus {
             current_track: None,
             position_secs: 0.0,
             duration_secs: 0.0,
-            volume: 0.8,
+            volume: DEFAULT_VOLUME,
             shuffle: false,
             repeat: RepeatMode::Off,
             queue_len: 0,
@@ -145,7 +149,7 @@ impl Default for PersistedState {
         Self {
             last_track_id: None,
             position_secs: 0.0,
-            volume: 0.8,
+            volume: DEFAULT_VOLUME,
             shuffle: false,
             repeat: RepeatMode::Off,
             queue_track_ids: Vec::new(),

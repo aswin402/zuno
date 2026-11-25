@@ -5,6 +5,24 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.21] — 2026-11-26
+
+Full-stack codebase audit, algorithmic upgrades, bug/safety fixes, and structural cleanup across all Rust crates, Tauri backend, build scripts, and React frontend (zero new dependencies).
+
+### Fixed
+- **Backup & Persistence Bugs (`src/App.tsx`, `crates/zuno-core/src/library.rs`, `crates/zuno-core/src/playlist.rs`, `crates/zuno-core/src/config.rs`)**: Fixed UI backup key mismatch (`'zuno:eq'` → `EQ_STORAGE_KEY` + `APPEARANCE_STORAGE_KEY` + `CUSTOM_FONT_STORAGE_KEY`), persisted modified playlists before `rescan()` on song deletion, preserved `.m3u` vs `.m3u8` extensions, fixed UTF-8 BOM/trim ordering, added PID+sequence-unique `atomic_write`, and blocked Windows drive-letter path traversal on Unix.
+- **Polling, Race Conditions & Audio Fixes (`src/App.tsx`, `src/pages/RadioPage.tsx`, `src/pages/EqualizerPage.tsx`, `src/components/UpdateDialog.tsx`, `src/components/WindowTitlebar.tsx`)**: Added cancellation/sequence guards on native status polling, song search, Radio Browser discovery, and update progress polling; restored browser fade-out volume after seeking back; enabled live FFT spectrum polling in native Tauri desktop mode on the Equalizer page; synced titlebar maximize state on double-click; and fixed `#000` color parsing in `src/lib/color.ts`.
+- **Radio, Updater, Cover Cache & Build Script Fixes (`src-tauri/src/radio.rs`, `src-tauri/src/updater.rs`, `src-tauri/src/cover_cache.rs`, `scripts/zuno-build.sh`)**: Fixed `.m3u` URLs with `?key=value` query parameters, final-redirect-only ICY header parsing, `localhost`/IPv6 URL validation, Windows PowerShell single-quote escaping, SemVer 2.0 prerelease ordering, RAII temp-dir cleanup, magic-byte cover MIME sniffing, and `zuno-build.sh` sweep/test coverage (`cargo test --workspace`).
+
+### Improved
+- **Algorithmic & DSP Upgrades (`crates/zuno-core`, `crates/zuno-audio`, `src-tauri/src/cover_cache.rs`, `src-tauri/src/radio.rs`)**:
+  - Upgraded search to Gotoh / Smith-Waterman O(M·N) affine-gap DP fuzzy subsequence scoring with bounded Damerau-Levenshtein typo tolerance (`search.rs`).
+  - Upgraded EQ & FFT spectrum DSP with sample-rate-normalized ramps/smoothing, unity-band bitmask bypass, 50% overlap Hann STFT, precomputed FFT twiddle/bit-reversal tables, monotonic clock, and lock-free `AtomicU64` playback position (`eq.rs`, `spectrum.rs`, `service.rs`).
+  - Replaced random cache eviction & linear scans with deterministic LRU + singleflight dedup + discrete size buckets (`cover_cache.rs`), unbiased rejection-sampled Fisher-Yates & `Vec::splice` (`queue.rs`), O(1) indexed playlist self-healing (`playlist.rs`), and concurrent Radio Browser mirror racing (`radio.rs`).
+- **Frontend Performance & Shared Architecture (`src/lib/color.ts`, `src/lib/format.ts`, `src/lib/radioUrl.ts`, `src/components/NowPlayingVisualizer.tsx`, `src/App.tsx`, `src/pages/CustomizePage.tsx`)**:
+  - Eliminated fragile regexes & duplicated helpers via WCAG 2.1 color math (`color.ts`), WHATWG `URL` radio stream parsing (`radioUrl.ts`), `Intl.Collator` sorting (`sortTracks.ts`), Vite `__ZUNO_VERSION__` injection, and shared `format.ts` utilities.
+  - Optimized Now Playing visualizer (`dt`-scaled peak fall, 2 shared vertical gradients instead of 128/frame, LUTs), eliminated 3–4×/sec global `keydown` listener churn via `positionRef`, moved `PulseBarsLoader` keyframes into static `index.css`, replaced duplicated UI blocks with shared `<FontSlotPanel>` and `<DisplayZoomControls>`, and switched hot membership/frequency checks to `Map`/`Set`.
+
 ## [0.0.20] — 2026-11-25
 
 Chrome-style Display Zoom (50% – 200%) in Customize Studio with native Tauri v2 full-page WebView scaling and keyboard/wheel shortcuts.

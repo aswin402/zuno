@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
 use zuno_audio::ZunoService;
-use zuno_core::ZunoPaths;
+use zuno_core::{ZunoPaths, atomic_write};
 
 const RADIO_BROWSER_MIRRORS: &[&str] = &[
     "https://de1.api.radio-browser.info",
@@ -14,12 +14,36 @@ const RADIO_BROWSER_MIRRORS: &[&str] = &[
     "https://all.api.radio-browser.info",
 ];
 
+const FM_MIN_MHZ: f64 = 64.0;
+const FM_MAX_MHZ: f64 = 108.0;
+const DEFAULT_FM_FREQ_MHZ: f64 = 98.3;
+const RTL_FM_SAMPLE_RATE: u32 = 48_000;
+pub const RADIO_DISCOVER_DEFAULT_LIMIT: usize = 40;
+const RADIO_DISCOVER_MAX_LIMIT: usize = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FmBackend {
+    RtlFm,
+    V4l2,
+    None,
+}
+
+impl FmBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RtlFm => "rtl_fm",
+            Self::V4l2 => "v4l2",
+            Self::None => "none",
+        }
+    }
+}
+
 fn default_band() -> String {
     "global".to_string()
 }
 
 fn default_freq() -> f64 {
-    98.3
+    DEFAULT_FM_FREQ_MHZ
 }
 
 fn default_true() -> bool {
@@ -168,7 +192,7 @@ pub struct FmTunerManager {
 struct FmActiveState {
     child: Option<Child>,
     active_freq_mhz: Option<f64>,
-    active_backend: Option<String>,
+    active_backend: Option<FmBackend>,
 }
 
 impl Default for FmTunerManager {
@@ -225,49 +249,37 @@ impl FmTunerManager {
             devices.push(format!("V4L2 FM Tuner ({dev})"));
         }
 
-        let (available, backend, message) = if rtl_fm_installed && usb_sdr_detected {
-            (
-                true,
-                "rtl_fm".to_string(),
-                "RTL-SDR USB receiver ready for live offline FM radio (87.5–108.0 MHz)."
-                    .to_string(),
-            )
-        } else if !v4l2_devices.is_empty() {
-            (
-                true,
-                "v4l2".to_string(),
+        let (backend, message) = match (rtl_fm_installed, usb_sdr_detected, v4l2_devices.first()) {
+            (true, true, _) => (
+                FmBackend::RtlFm,
                 format!(
-                    "Hardware FM tuner ready on {}.",
-                    v4l2_devices.first().cloned().unwrap_or_default()
+                    "RTL-SDR USB receiver ready for live offline FM radio ({FM_MIN_MHZ:.1}–{FM_MAX_MHZ:.1} MHz)."
                 ),
-            )
-        } else if usb_sdr_detected && !rtl_fm_installed {
-            (
-                false,
-                "none".to_string(),
+            ),
+            (_, _, Some(dev)) => (
+                FmBackend::V4l2,
+                format!("Hardware FM tuner ready on {dev}."),
+            ),
+            (false, true, None) => (
+                FmBackend::None,
                 "RTL-SDR USB dongle detected — install `rtl-sdr` (`rtl_fm`) to play live offline FM audio."
                     .to_string(),
-            )
-        } else if rtl_fm_installed && !cfg!(target_os = "linux") {
-            // On macOS/Windows we don't have Linux sysfs USB inspection, so allow trying `rtl_fm` directly.
-            (
-                true,
-                "rtl_fm".to_string(),
+            ),
+            (true, false, None) if !cfg!(target_os = "linux") => (
+                FmBackend::RtlFm,
                 "`rtl_fm` installed — connect an RTL-SDR USB receiver to tune offline FM."
                     .to_string(),
-            )
-        } else {
-            (
-                false,
-                "none".to_string(),
+            ),
+            _ => (
+                FmBackend::None,
                 "No FM receiver hardware detected. Connect an RTL-SDR USB dongle (`rtl-sdr`) or USB FM tuner (`/dev/radio0`) for live off-air reception — you can still dial & mark local FM frequencies below."
                     .to_string(),
-            )
+            ),
         };
 
         FmHardwareStatus {
-            available,
-            backend,
+            available: backend != FmBackend::None,
+            backend: backend.as_str().to_string(),
             devices,
             rtl_fm_installed,
             usb_sdr_detected,
@@ -282,102 +294,107 @@ impl FmTunerManager {
         validate_fm_frequency(freq_mhz)?;
         self.stop(Some(service));
 
-        let status = self.hardware_status();
+        let mut status = self.hardware_status();
         if !status.available {
             return Err(status.message);
         }
 
-        if status.backend == "rtl_fm" {
-            let freq_hz = (freq_mhz * 1_000_000.0).round() as u64;
-            let mut cmd = Command::new("rtl_fm");
-            cmd.args([
-                "-f",
-                &freq_hz.to_string(),
-                "-M",
-                "wbfm",
-                "-s",
-                "200000",
-                "-r",
-                "48000",
-                "-l",
-                "0",
-                "-E",
-                "deemp",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        let rounded_freq = (freq_mhz * 10.0).round() / 10.0;
+        let backend = match status.backend.as_str() {
+            "rtl_fm" => FmBackend::RtlFm,
+            "v4l2" => FmBackend::V4l2,
+            _ => FmBackend::None,
+        };
 
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
-            }
-
-            let mut child = cmd
-                .spawn()
-                .map_err(|e| format!("failed to launch rtl_fm: {e}"))?;
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| "failed to capture rtl_fm audio stream".to_string())?;
-
-            if let Err(e) = service.play_pcm_stream(Box::new(stdout), 48_000, 1) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("failed to start offline FM audio output: {e}"));
-            }
-
-            if let Ok(mut st) = self.inner.lock() {
-                st.child = Some(child);
-                st.active_freq_mhz = Some((freq_mhz * 10.0).round() / 10.0);
-                st.active_backend = Some("rtl_fm".to_string());
-            }
-            return Ok(self.hardware_status());
-        }
-
-        if status.backend == "v4l2" {
-            let dev = status
-                .v4l2_devices
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "/dev/radio0".to_string());
-            let out = Command::new("v4l2-ctl")
-                .args([
-                    "--device",
-                    &dev,
-                    "--set-freq",
-                    &format!("{freq_mhz:.1}"),
+        match backend {
+            FmBackend::RtlFm => {
+                let freq_hz = (freq_mhz * 1_000_000.0).round() as u64;
+                let rate_str = RTL_FM_SAMPLE_RATE.to_string();
+                let mut cmd = Command::new("rtl_fm");
+                cmd.args([
+                    "-f",
+                    &freq_hz.to_string(),
+                    "-M",
+                    "wbfm",
+                    "-s",
+                    "200000",
+                    "-r",
+                    &rate_str,
+                    "-l",
+                    "0",
+                    "-E",
+                    "deemp",
                 ])
-                .output()
-                .map_err(|e| {
-                    format!(
-                        "failed to run v4l2-ctl for {dev}: {e} (install `v4l-utils` to control V4L2 tuners)"
-                    )
-                })?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                return Err(if stderr.is_empty() {
-                    format!("failed to tune {dev} to {freq_mhz:.1} MHz")
-                } else {
-                    stderr
-                });
-            }
-            if let Ok(mut st) = self.inner.lock() {
-                st.active_freq_mhz = Some((freq_mhz * 10.0).round() / 10.0);
-                st.active_backend = Some("v4l2".to_string());
-            }
-            return Ok(self.hardware_status());
-        }
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+                crate::configure_hidden_command(&mut cmd);
 
-        Err("No compatible offline FM hardware available.".to_string())
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| format!("failed to launch rtl_fm: {e}"))?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| "failed to capture rtl_fm audio stream".to_string())?;
+
+                if let Err(e) = service.play_pcm_stream(Box::new(stdout), RTL_FM_SAMPLE_RATE, 1) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("failed to start offline FM audio output: {e}"));
+                }
+
+                if let Ok(mut st) = self.inner.lock() {
+                    st.child = Some(child);
+                    st.active_freq_mhz = Some(rounded_freq);
+                    st.active_backend = Some(FmBackend::RtlFm);
+                }
+                status.active_freq_mhz = Some(rounded_freq);
+                Ok(status)
+            }
+            FmBackend::V4l2 => {
+                let dev = status
+                    .v4l2_devices
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "/dev/radio0".to_string());
+                let out = Command::new("v4l2-ctl")
+                    .args([
+                        "--device",
+                        &dev,
+                        "--set-freq",
+                        &format!("{freq_mhz:.1}"),
+                    ])
+                    .output()
+                    .map_err(|e| {
+                        format!(
+                            "failed to run v4l2-ctl for {dev}: {e} (install `v4l-utils` to control V4L2 tuners)"
+                        )
+                    })?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    return Err(if stderr.is_empty() {
+                        format!("failed to tune {dev} to {freq_mhz:.1} MHz")
+                    } else {
+                        stderr
+                    });
+                }
+                if let Ok(mut st) = self.inner.lock() {
+                    st.active_freq_mhz = Some(rounded_freq);
+                    st.active_backend = Some(FmBackend::V4l2);
+                }
+                status.active_freq_mhz = Some(rounded_freq);
+                Ok(status)
+            }
+            FmBackend::None => Err("No compatible offline FM hardware available.".to_string()),
+        }
     }
 }
 
 pub fn validate_fm_frequency(freq_mhz: f64) -> Result<(), String> {
-    if !freq_mhz.is_finite() || !(64.0..=108.0).contains(&freq_mhz) {
+    if !freq_mhz.is_finite() || !(FM_MIN_MHZ..=FM_MAX_MHZ).contains(&freq_mhz) {
         return Err(format!(
-            "FM frequency {freq_mhz} MHz is out of supported range (64.0–108.0 MHz)"
+            "FM frequency {freq_mhz} MHz is out of supported range ({FM_MIN_MHZ:.1}–{FM_MAX_MHZ:.1} MHz)"
         ));
     }
     Ok(())
@@ -398,14 +415,61 @@ pub fn save_radio_store(paths: &ZunoPaths, store: &RadioStoreData) -> Result<(),
         .map_err(|e| format!("failed to prepare zuno directory: {e}"))?;
     let bytes = serde_json::to_vec_pretty(store)
         .map_err(|e| format!("failed to serialize radio data: {e}"))?;
-    let tmp = paths.cache_dir().join("radio.json.tmp");
-    fs::write(&tmp, bytes).map_err(|e| format!("failed to write radio data: {e}"))?;
-    fs::rename(&tmp, paths.radio_path())
+    atomic_write(&paths.radio_path(), &bytes)
         .map_err(|e| format!("failed to persist radio.json: {e}"))?;
     Ok(())
 }
 
+fn parse_radio_browser_json(body: &str) -> Result<Vec<DiscoveredStation>, String> {
+    let raw_list = serde_json::from_str::<Vec<RadioBrowserStation>>(body)
+        .map_err(|e| format!("invalid Radio Browser response: {e}"))?;
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(raw_list.len());
+    for st in raw_list {
+        let resolved = if !st.url_resolved.trim().is_empty() {
+            st.url_resolved.trim().to_string()
+        } else {
+            st.url.trim().to_string()
+        };
+        if !is_valid_http_url(&resolved) || st.lastcheckok == 0 {
+            continue;
+        }
+        if !seen.insert(resolved.clone()) {
+            continue;
+        }
+        let name = st.name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let tags: Vec<String> = st
+            .tags
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .take(5)
+            .collect();
+        out.push(DiscoveredStation {
+            id: if st.stationuuid.trim().is_empty() {
+                format!("rb-{}", out.len())
+            } else {
+                format!("rb-{}", st.stationuuid.trim())
+            },
+            name,
+            url: resolved,
+            country: st.country.trim().to_string(),
+            language: st.language.trim().to_string(),
+            tags,
+            bitrate: st.bitrate,
+            codec: st.codec.trim().to_uppercase(),
+            homepage: st.homepage.trim().to_string(),
+            votes: st.votes,
+        });
+    }
+    Ok(out)
+}
+
 /// Search free public internet radio stations via Radio Browser's open directory (45,000+ stations).
+/// Races all configured mirrors concurrently and returns the fastest valid response.
 pub fn discover_online_stations(
     query: Option<&str>,
     tag: Option<&str>,
@@ -413,86 +477,71 @@ pub fn discover_online_stations(
     language: Option<&str>,
     limit: usize,
 ) -> Result<Vec<DiscoveredStation>, String> {
-    let lim = limit.clamp(1, 60);
+    let lim = limit.clamp(1, RADIO_DISCOVER_MAX_LIMIT);
     let mut params = vec![
         "hidebroken=true".to_string(),
         "order=votes".to_string(),
         "reverse=true".to_string(),
         format!("limit={lim}"),
     ];
-    if let Some(q) = query.map(str::trim).filter(|s| !s.is_empty()) {
-        params.push(format!("name={}", percent_encode(q)));
-    }
-    if let Some(t) = tag.map(str::trim).filter(|s| !s.is_empty()) {
-        params.push(format!("tag={}", percent_encode(t)));
-    }
-    if let Some(c) = country.map(str::trim).filter(|s| !s.is_empty()) {
-        params.push(format!("country={}", percent_encode(c)));
-    }
-    if let Some(l) = language.map(str::trim).filter(|s| !s.is_empty()) {
-        params.push(format!("language={}", percent_encode(l)));
+    for (key, val) in [
+        ("name", query),
+        ("tag", tag),
+        ("country", country),
+        ("language", language),
+    ] {
+        if let Some(v) = val.map(str::trim).filter(|s| !s.is_empty()) {
+            params.push(format!("{key}={}", percent_encode(v)));
+        }
     }
 
     let qs = params.join("&");
-    let mut last_err = String::from("Unable to reach Radio Browser directory");
-
-    for mirror in RADIO_BROWSER_MIRRORS {
+    let (tx, rx) = mpsc::channel::<Result<Vec<DiscoveredStation>, String>>();
+    for &mirror in RADIO_BROWSER_MIRRORS {
+        let tx = tx.clone();
         let url = format!("{mirror}/json/stations/search?{qs}");
-        match curl_get_text(&url, 8) {
-            Ok(body) => {
-                if let Ok(raw_list) = serde_json::from_str::<Vec<RadioBrowserStation>>(&body) {
-                    let mut seen = HashSet::new();
-                    let mut out = Vec::with_capacity(raw_list.len());
-                    for st in raw_list {
-                        let resolved = if !st.url_resolved.trim().is_empty() {
-                            st.url_resolved.trim().to_string()
-                        } else {
-                            st.url.trim().to_string()
-                        };
-                        if !is_valid_http_url(&resolved) || st.lastcheckok == 0 {
-                            continue;
-                        }
-                        if !seen.insert(resolved.clone()) {
-                            continue;
-                        }
-                        let name = st.name.trim().to_string();
-                        if name.is_empty() {
-                            continue;
-                        }
-                        let tags: Vec<String> = st
-                            .tags
-                            .split(',')
-                            .map(|t| t.trim().to_string())
-                            .filter(|t| !t.is_empty())
-                            .take(5)
-                            .collect();
-                        out.push(DiscoveredStation {
-                            id: if st.stationuuid.trim().is_empty() {
-                                format!("rb-{}", out.len())
-                            } else {
-                                format!("rb-{}", st.stationuuid.trim())
-                            },
-                            name,
-                            url: resolved,
-                            country: st.country.trim().to_string(),
-                            language: st.language.trim().to_string(),
-                            tags,
-                            bitrate: st.bitrate,
-                            codec: st.codec.trim().to_uppercase(),
-                            homepage: st.homepage.trim().to_string(),
-                            votes: st.votes,
-                        });
-                    }
-                    return Ok(out);
-                }
-            }
-            Err(e) => {
-                last_err = e;
-            }
+        std::thread::spawn(move || {
+            let res = curl_get_text(&url, 6).and_then(|body| parse_radio_browser_json(&body));
+            let _ = tx.send(res);
+        });
+    }
+    drop(tx);
+
+    let mut last_err = String::from("Unable to reach Radio Browser directory");
+    for res in rx {
+        match res {
+            Ok(stations) => return Ok(stations),
+            Err(e) => last_err = e,
         }
     }
 
     Err(last_err)
+}
+
+fn url_path_extension(url: &str) -> Option<&str> {
+    let without_scheme = url.split_once("://")?.1;
+    let path_start = without_scheme.find('/')?;
+    let path_and_more = &without_scheme[path_start..];
+    let path_only = path_and_more.split(['?', '#']).next().unwrap_or(path_and_more);
+    let last_seg = path_only.rsplit('/').next()?;
+    let (_, ext) = last_seg.rsplit_once('.')?;
+    (!ext.is_empty()).then_some(ext)
+}
+
+fn fetch_and_extract_playlist(url: &str, timeout_secs: u64) -> Option<(String, Option<String>, bool)> {
+    let body = curl_get_text(url, timeout_secs).ok()?;
+    if is_hls_manifest(&body) {
+        return Some((url.to_string(), None, true));
+    }
+    let (extracted, title) = parse_playlist_text(&body)?;
+    if is_valid_http_url(&extracted) {
+        let hls = url_path_extension(&extracted)
+            .map(|e| e.eq_ignore_ascii_case("m3u8"))
+            .unwrap_or(false);
+        Some((extracted, title, hls))
+    } else {
+        None
+    }
 }
 
 /// Validate a user-pasted radio link, resolve `.pls`/`.m3u` playlist URLs to direct streams,
@@ -503,69 +552,41 @@ pub fn resolve_stream_url(raw_url: &str) -> Result<ResolvedStreamInfo, String> {
         return Err("Please enter a valid http:// or https:// radio stream link.".to_string());
     }
 
-    let lower = trimmed.to_ascii_lowercase();
-    let looks_pls = lower.ends_with(".pls") || lower.contains(".pls?");
-    let looks_m3u = lower.ends_with(".m3u") || lower.contains(".m3u?");
-    let looks_m3u8 = lower.ends_with(".m3u8") || lower.contains(".m3u8?");
+    let ext = url_path_extension(trimmed).map(str::to_ascii_lowercase);
+    let looks_playlist = matches!(ext.as_deref(), Some("pls" | "m3u"));
+    let mut is_hls = matches!(ext.as_deref(), Some("m3u8"));
 
     let mut resolved = trimmed.to_string();
     let mut name: Option<String> = None;
     let mut genre: Option<String> = None;
     let mut bitrate: Option<u32> = None;
     let mut content_type: Option<String> = None;
-    let mut is_hls = looks_m3u8;
 
     // 1. If the link is a `.pls` or `.m3u` playlist, fetch & extract the direct stream URL.
-    if looks_pls || looks_m3u {
-        if let Ok(body) = curl_get_text(trimmed, 6) {
-            if let Some((extracted, title)) = parse_playlist_text(&body) {
-                if is_valid_http_url(&extracted) {
-                    resolved = extracted;
-                    is_hls = resolved.to_ascii_lowercase().contains(".m3u8");
-                }
-                if name.is_none() {
-                    name = title;
-                }
-            }
+    if looks_playlist {
+        if let Some((next_url, title, hls)) = fetch_and_extract_playlist(trimmed, 6) {
+            resolved = next_url;
+            is_hls = hls;
+            name = name.or(title);
         }
     }
 
     // 2. Probe headers (and check if an extensionless URL actually returned a playlist file).
     if let Ok(headers) = curl_probe_headers(&resolved, 5) {
         let parsed = parse_icy_headers(&headers);
-        if name.is_none() {
-            name = parsed.name;
-        }
+        name = name.or(parsed.name);
         genre = parsed.genre;
         bitrate = parsed.bitrate;
         content_type = parsed.content_type.clone();
 
         if let Some(ct) = parsed.content_type.as_deref() {
             let ct_low = ct.to_ascii_lowercase();
-            if ct_low.contains("mpegurl") && !is_hls {
-                // Could be M3U or HLS — fetch body to inspect.
-                if let Ok(body) = curl_get_text(&resolved, 6) {
-                    if is_hls_manifest(&body) {
-                        is_hls = true;
-                    } else if let Some((extracted, title)) = parse_playlist_text(&body) {
-                        if is_valid_http_url(&extracted) {
-                            resolved = extracted;
-                        }
-                        if name.is_none() {
-                            name = title;
-                        }
-                    }
-                }
-            } else if ct_low.contains("scpls") {
-                if let Ok(body) = curl_get_text(&resolved, 6) {
-                    if let Some((extracted, title)) = parse_playlist_text(&body) {
-                        if is_valid_http_url(&extracted) {
-                            resolved = extracted;
-                        }
-                        if name.is_none() {
-                            name = title;
-                        }
-                    }
+            let is_playlist_ct = (ct_low.contains("mpegurl") && !is_hls) || ct_low.contains("scpls");
+            if is_playlist_ct {
+                if let Some((next_url, title, hls)) = fetch_and_extract_playlist(&resolved, 6) {
+                    resolved = next_url;
+                    is_hls = is_hls || hls;
+                    name = name.or(title);
                 }
             }
         }
@@ -590,9 +611,48 @@ pub fn is_valid_http_url(raw: &str) -> bool {
     if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return false;
     }
-    let lower = trimmed.to_ascii_lowercase();
-    (lower.starts_with("http://") || lower.starts_with("https://"))
-        && trimmed[trimmed.find("://").unwrap_or(0) + 3..].contains('.')
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    // Extract authority (host[:port], stripping optional userinfo@) before path/query/fragment.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    if host_port.is_empty() {
+        return false;
+    }
+    // Handle IPv6 literal `[::1]:8000`
+    if let Some(ipv6_rest) = host_port.strip_prefix('[') {
+        let Some((addr, after)) = ipv6_rest.split_once(']') else {
+            return false;
+        };
+        if addr.is_empty() || !addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
+            return false;
+        }
+        return after.is_empty()
+            || after
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok())
+                .is_some();
+    }
+    let (host, port_opt) = match host_port.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (host_port, None),
+    };
+    if let Some(p) = port_opt {
+        if p.parse::<u16>().is_err() {
+            return false;
+        }
+    }
+    if host.is_empty() || host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return false;
+    }
+    let valid_chars = host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    valid_chars && (host.contains('.') || host.eq_ignore_ascii_case("localhost"))
 }
 
 pub fn is_hls_manifest(body: &str) -> bool {
@@ -601,6 +661,8 @@ pub fn is_hls_manifest(body: &str) -> bool {
         t.starts_with("#EXT-X-STREAM-INF")
             || t.starts_with("#EXT-X-TARGETDURATION")
             || t.starts_with("#EXT-X-MEDIA-SEQUENCE")
+            || t.starts_with("#EXT-X-VERSION")
+            || t.starts_with("#EXT-X-ENDLIST")
     })
 }
 
@@ -610,27 +672,22 @@ pub fn parse_playlist_text(body: &str) -> Option<(String, Option<String>)> {
         return None;
     }
 
-    let mut pls_url: Option<String> = None;
-    let mut pls_title: Option<String> = None;
+    let mut pls_files: HashMap<u32, String> = HashMap::new();
+    let mut pls_titles: HashMap<u32, String> = HashMap::new();
+    let mut first_pls_idx: Option<u32> = None;
     let mut m3u_title: Option<String> = None;
 
-    for raw_line in body.lines().take(128) {
-        let line = raw_line.trim();
+    for raw_line in body.lines().take(256) {
+        let line = raw_line.trim_start_matches('\u{feff}').trim();
         if line.is_empty() {
             continue;
         }
-        // PLS format: File1=https://..., Title1=Station Name
-        if let Some((k, v)) = line.split_once('=') {
-            let key_low = k.trim().to_ascii_lowercase();
-            let val = v.trim();
-            if key_low.starts_with("file") && pls_url.is_none() && is_valid_http_url(val) {
-                pls_url = Some(val.to_string());
-            } else if key_low.starts_with("title") && pls_title.is_none() && !val.is_empty() {
-                pls_title = Some(val.to_string());
-            }
-            continue;
+        // Check plain M3U stream URLs FIRST so URLs with query parameters (`?token=abc`) are never
+        // mistakenly swallowed by PLS `key=value` parsing!
+        if is_valid_http_url(line) {
+            return Some((line.to_string(), m3u_title));
         }
-        // M3U metadata line: #EXTINF:-1,Station Name
+        // M3U metadata line: `#EXTINF:-1,Station Name`
         if let Some(rest) = line.strip_prefix("#EXTINF:") {
             if let Some((_, title)) = rest.split_once(',') {
                 let t = title.trim();
@@ -640,15 +697,34 @@ pub fn parse_playlist_text(body: &str) -> Option<(String, Option<String>)> {
             }
             continue;
         }
-        if line.starts_with('#') {
+        if line.starts_with('#') || line.starts_with('[') {
             continue;
         }
-        if is_valid_http_url(line) {
-            return Some((line.to_string(), m3u_title));
+        // Strict PLS format: `File1=https://...`, `Title1=Station Name`
+        if let Some((k, v)) = line.split_once('=') {
+            let key_low = k.trim().to_ascii_lowercase();
+            let val = v.trim();
+            if let Some(num) = key_low.strip_prefix("file").and_then(|s| s.parse::<u32>().ok()) {
+                if is_valid_http_url(val) {
+                    pls_files.entry(num).or_insert_with(|| val.to_string());
+                    first_pls_idx = Some(first_pls_idx.map_or(num, |cur| cur.min(num)));
+                }
+            } else if let Some(num) = key_low
+                .strip_prefix("title")
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                if !val.is_empty() {
+                    pls_titles.entry(num).or_insert_with(|| val.to_string());
+                }
+            }
         }
     }
 
-    pls_url.map(|u| (u, pls_title))
+    first_pls_idx.and_then(|idx| {
+        let url = pls_files.remove(&idx)?;
+        let title = pls_titles.remove(&idx);
+        Some((url, title))
+    })
 }
 
 #[derive(Default)]
@@ -660,8 +736,16 @@ struct IcyMeta {
 }
 
 fn parse_icy_headers(raw_headers: &str) -> IcyMeta {
+    // When `curl -L -I` follows redirects, it outputs multiple HTTP header blocks separated by
+    // blank lines; inspect only the final response block so earlier redirect headers don't bleed in.
+    let normalized = raw_headers.replace("\r\n", "\n");
+    let final_block = normalized
+        .rsplit("\n\n")
+        .find(|blk| !blk.trim().is_empty())
+        .unwrap_or("");
+
     let mut meta = IcyMeta::default();
-    for line in raw_headers.lines() {
+    for line in final_block.lines() {
         let Some((k, v)) = line.split_once(':') else {
             continue;
         };
@@ -674,7 +758,9 @@ fn parse_icy_headers(raw_headers: &str) -> IcyMeta {
             "icy-name" => meta.name = Some(val.to_string()),
             "icy-genre" => meta.genre = Some(val.to_string()),
             "icy-br" => {
-                if let Ok(br) = val.parse::<u32>() {
+                // Handle formats like "128", "128, 128", or "128kbps".
+                let digits: String = val.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(br) = digits.parse::<u32>() {
                     meta.bitrate = Some(br);
                 }
             }
@@ -692,7 +778,6 @@ fn percent_encode(input: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char);
             }
-            b' ' => out.push_str("%20"),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -713,11 +798,7 @@ fn curl_get_text(url: &str, timeout_secs: u64) -> Result<String, String> {
         &format!("User-Agent: Zuno/{}", env!("CARGO_PKG_VERSION")),
         url,
     ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
+    crate::configure_hidden_command(&mut cmd);
 
     let out = cmd
         .output()
@@ -748,11 +829,7 @@ fn curl_probe_headers(url: &str, timeout_secs: u64) -> Result<String, String> {
         &format!("User-Agent: Zuno/{}", env!("CARGO_PKG_VERSION")),
         url,
     ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
+    crate::configure_hidden_command(&mut cmd);
 
     let out = cmd
         .output()
@@ -868,18 +945,33 @@ mod tests {
         assert_eq!(url2, "https://kexp-mp3-128.streamguys1.com/kexp128.mp3");
         assert_eq!(title2.as_deref(), Some("KEXP 90.3 FM"));
 
+        // M3U URL containing query string `=` must NOT be swallowed by PLS key=value parsing
+        let m3u_query = "#EXTM3U\n#EXTINF:-1,Tokenized Stream\nhttps://radio.example.com/live.mp3?token=abc123&fmt=mp3\n";
+        let (url3, title3) = parse_playlist_text(m3u_query).expect("should parse query m3u");
+        assert_eq!(url3, "https://radio.example.com/live.mp3?token=abc123&fmt=mp3");
+        assert_eq!(title3.as_deref(), Some("Tokenized Stream"));
+
         let hls = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nchunklist.m3u8\n";
         assert!(is_hls_manifest(hls));
         assert!(parse_playlist_text(hls).is_none());
+
+        // Redirected ICY headers: must read final block only and parse "128kbps"
+        let headers = "HTTP/1.1 302 Found\r\nicy-name: Old Redirect\r\n\r\nHTTP/1.1 200 OK\r\nicy-name: Real Station\r\nicy-br: 128kbps\r\ncontent-type: audio/mpeg\r\n";
+        let meta = parse_icy_headers(headers);
+        assert_eq!(meta.name.as_deref(), Some("Real Station"));
+        assert_eq!(meta.bitrate, Some(128));
     }
 
     #[test]
     fn validates_urls_and_fm_frequencies() {
         assert!(is_valid_http_url("https://ice1.somafm.com/lush-128-mp3"));
         assert!(is_valid_http_url("http://stream.radioparadise.com/mp3-128"));
+        assert!(is_valid_http_url("http://localhost:8000/stream"));
+        assert!(is_valid_http_url("http://[::1]:8000/live"));
         assert!(!is_valid_http_url("file:///etc/passwd"));
         assert!(!is_valid_http_url("javascript:alert(1)"));
         assert!(!is_valid_http_url("https://example.com/bad url"));
+        assert!(!is_valid_http_url("https://../bad"));
 
         assert!(validate_fm_frequency(87.5).is_ok());
         assert!(validate_fm_frequency(98.3).is_ok());

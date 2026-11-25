@@ -1,5 +1,3 @@
-import { useId } from 'react'
-
 export interface Loader2Props {
   barCount?: number
   color?: string
@@ -15,6 +13,8 @@ export interface Loader2Props {
 /**
  * Centered vertical pulse-bar audio indicator / loader (Loader2),
  * theme-matched to var(--primary) by default.
+ * Uses the shared `.zuno-loader2-bar` keyframes defined in `src/index.css`
+ * so mounting many rows injects zero runtime `<style>` tags.
  */
 export function Loader2({
   barCount = 5,
@@ -27,9 +27,6 @@ export function Loader2({
   paused = false,
   className = '',
 }: Loader2Props) {
-  const uid = useId().replace(/:/g, '')
-  const barClass = `ak-loader2-${uid}`
-
   return (
     <div
       className={`inline-flex items-center ${className}`}
@@ -37,26 +34,17 @@ export function Loader2({
       role="status"
       aria-label={paused ? 'Paused' : 'Playing'}
     >
-      <style>{`
-        @keyframes ${barClass}-pulse {
-          0%, 100% { transform: scaleY(0.3); }
-          50%      { transform: scaleY(1); }
-        }
-        .${barClass} {
-          animation: ${barClass}-pulse ${speed}s ease-in-out infinite;
-          transform-origin: center;
-        }
-      `}</style>
-      {[...Array(barCount)].map((_, i) => (
+      {Array.from({ length: barCount }, (_, i) => (
         <div
           key={i}
-          className={paused ? '' : barClass}
+          className={paused ? '' : 'zuno-loader2-bar'}
           style={{
             width,
             height: paused ? '35%' : '100%',
             background: color,
             borderRadius: rounded ? 9999 : 2,
-            animationDelay: `${(i / barCount) * speed * 0.6}s`,
+            animationDuration: paused ? undefined : `${speed}s`,
+            animationDelay: paused ? undefined : `${(i / barCount) * speed * 0.6}s`,
           }}
         />
       ))}

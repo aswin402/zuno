@@ -1,6 +1,6 @@
-use crate::config::{ZunoPaths, normalize_rel_path};
+use crate::config::{ZunoPaths, atomic_write, normalize_rel_path};
 use crate::error::Result;
-use crate::models::{CoverArt, Track};
+use crate::models::{CoverArt, Track, UNKNOWN_ARTIST};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::Accessor;
@@ -29,23 +29,29 @@ struct CachedIndex {
 pub fn is_supported_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|ext| {
-            let lower = ext.to_ascii_lowercase();
-            SUPPORTED_EXTENSIONS.contains(&lower.as_str())
-        })
+        .map(|ext| SUPPORTED_EXTENSIONS.iter().any(|s| s.eq_ignore_ascii_case(ext)))
         .unwrap_or(false)
 }
 
 /// Fast partial content hash: BLAKE3(file_size_le || first_64KiB), truncated to 16 hex chars.
-/// Takes <0.1 ms per file and stays identical if the user renames or moves the song.
+/// Loops on `read()` so short OS reads never produce nondeterministic IDs.
 pub fn compute_zuno_id(path: &Path, file_size: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
-    let mut buf = vec![0u8; HASH_SAMPLE_BYTES.min(file_size as usize).max(1)];
-    let n = file.read(&mut buf)?;
+    let target = HASH_SAMPLE_BYTES.min(file_size as usize);
+    let mut buf = vec![0u8; target.max(1)];
+    let mut filled = 0usize;
+    while filled < target {
+        match file.read(&mut buf[filled..target]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(&file_size.to_le_bytes());
-    hasher.update(&buf[..n]);
+    hasher.update(&buf[..filled]);
     let hex = hasher.finalize().to_hex();
     Ok(hex[..16].to_string())
 }
@@ -56,8 +62,10 @@ pub fn scan_songs(paths: &ZunoPaths) -> Result<Vec<Track>> {
     paths.ensure_dirs()?;
 
     // Load prior index cache keyed by `(source_dir, rel_path)` for O(1) incremental skips.
-    let cached_by_key: HashMap<(Option<String>, String), Track> = load_cached_index(paths)
-        .into_iter()
+    let cached_tracks = load_cached_index(paths);
+    let cached_by_key: HashMap<(Option<String>, String), Track> = cached_tracks
+        .iter()
+        .cloned()
         .map(|t| ((t.source_dir.clone(), t.rel_path.clone()), t))
         .collect();
 
@@ -149,15 +157,17 @@ pub fn scan_songs(paths: &ZunoPaths) -> Result<Vec<Track>> {
         }
     }
 
-    tracks.sort_by(|a, b| {
-        a.folder
-            .to_lowercase()
-            .cmp(&b.folder.to_lowercase())
-            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-            .then_with(|| a.rel_path.cmp(&b.rel_path))
+    tracks.sort_by_cached_key(|t| {
+        (
+            t.folder.to_lowercase(),
+            t.title.to_lowercase(),
+            t.rel_path.clone(),
+        )
     });
 
-    let _ = save_cached_index(paths, &tracks);
+    if tracks != cached_tracks {
+        let _ = save_cached_index(paths, &tracks);
+    }
     Ok(tracks)
 }
 
@@ -190,7 +200,7 @@ fn scan_single_file(
     };
 
     let mut title = fallback_title;
-    let mut artist = String::from("Unknown Artist");
+    let mut artist = String::from(UNKNOWN_ARTIST);
     let mut album = String::new();
     let mut genre = None;
     let mut duration_secs = 0u64;
@@ -282,10 +292,8 @@ fn save_cached_index(paths: &ZunoPaths, tracks: &[Track]) -> Result<()> {
         version: INDEX_VERSION,
         tracks: tracks.to_vec(),
     };
-    let tmp = paths.cache_dir().join("index.json.tmp");
     let data = serde_json::to_vec(&payload)?;
-    fs::write(&tmp, data)?;
-    fs::rename(&tmp, paths.index_path())?;
+    atomic_write(&paths.index_path(), &data)?;
     Ok(())
 }
 

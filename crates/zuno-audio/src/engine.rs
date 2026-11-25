@@ -7,7 +7,11 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use zuno_core::{Result, ZunoError};
+use zuno_core::{DEFAULT_VOLUME, Result, ZunoError};
+
+pub const CROSSFADE_MAX_SECS: f32 = 10.0;
+pub const CROSSFADE_MIN_ACTIVE_SECS: f32 = 0.05;
+pub const MIN_SAMPLE_RATE: u32 = 8_000;
 
 /// Platform audio backend abstraction (allows hardware-free unit/integration tests).
 pub trait AudioEngine: Send + 'static {
@@ -62,7 +66,7 @@ impl RodioEngine {
             sink: None,
             fading_out: None,
             fading_in: None,
-            base_volume: 0.8,
+            base_volume: DEFAULT_VOLUME,
             crossfade_secs: 0.0,
             eq: Arc::new(SharedEq::default()),
             spectrum: Arc::new(SharedSpectrum::new()),
@@ -105,7 +109,7 @@ impl PcmI16ReaderSource {
     fn new(reader: Box<dyn Read + Send>, sample_rate: u32, channels: u16) -> Self {
         Self {
             reader: BufReader::with_capacity(16 * 1024, reader),
-            sample_rate: sample_rate.max(8_000),
+            sample_rate: sample_rate.max(MIN_SAMPLE_RATE),
             channels: channels.max(1),
             buf: vec![0u8; 4096],
             pos: 0,
@@ -208,7 +212,7 @@ impl AudioEngine for RodioEngine {
 
         let mut had_active_outgoing = false;
         if let Some(old) = self.sink.take() {
-            if self.crossfade_secs > 0.05 && !old.empty() && !old.is_paused() {
+            if self.crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS && !old.empty() && !old.is_paused() {
                 let start_vol = old.volume().clamp(0.0, 1.0);
                 let dur = Duration::from_secs_f32(self.crossfade_secs);
                 self.fading_out = Some((old, Instant::now(), dur, start_vol));
@@ -231,7 +235,7 @@ impl AudioEngine for RodioEngine {
             Some(Arc::clone(&self.spectrum)),
         );
 
-        if self.crossfade_secs > 0.05 {
+        if self.crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS {
             // Smooth fade-in on incoming track (full crossfade when overlapping, gentle swell from silence)
             let fade_in_secs = if had_active_outgoing {
                 self.crossfade_secs
@@ -305,7 +309,7 @@ impl AudioEngine for RodioEngine {
     }
 
     fn set_crossfade(&mut self, secs: f32) {
-        self.crossfade_secs = secs.clamp(0.0, 10.0);
+        self.crossfade_secs = secs.clamp(0.0, CROSSFADE_MAX_SECS);
     }
 
     fn spectrum(&self) -> Option<Arc<SharedSpectrum>> {
@@ -317,7 +321,7 @@ impl AudioEngine for RodioEngine {
 
         if let Some((ref out_sink, started, dur, start_vol)) = self.fading_out {
             let t = (now.saturating_duration_since(started).as_secs_f32()
-                / dur.as_secs_f32().max(0.05))
+                / dur.as_secs_f32().max(CROSSFADE_MIN_ACTIVE_SECS))
             .clamp(0.0, 1.0);
             if t >= 1.0 || out_sink.empty() {
                 if let Some((s, ..)) = self.fading_out.take() {
@@ -332,7 +336,7 @@ impl AudioEngine for RodioEngine {
 
         if let Some((started, dur)) = self.fading_in {
             let t = (now.saturating_duration_since(started).as_secs_f32()
-                / dur.as_secs_f32().max(0.05))
+                / dur.as_secs_f32().max(CROSSFADE_MIN_ACTIVE_SECS))
             .clamp(0.0, 1.0);
             if let Some(ref sink) = self.sink {
                 if t >= 1.0 {
@@ -376,7 +380,7 @@ pub struct MockAudioEngine {
 impl MockAudioEngine {
     pub fn new() -> Self {
         Self {
-            volume: 0.8,
+            volume: DEFAULT_VOLUME,
             ..Self::default()
         }
     }

@@ -3,9 +3,12 @@ use crate::mcp::handle_jsonrpc_message;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
+
+const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_HEADER_LINES: usize = 128;
 
 mod embedded_web {
     include!(concat!(env!("OUT_DIR"), "/embedded_web.rs"));
@@ -84,15 +87,19 @@ fn handle_http_connection(
         return write_http(&mut stream, 400, "application/json", b"{\"error\":\"bad request\"}");
     }
     let method = parts[0];
-    let path = parts[1].split('?').next().unwrap_or(parts[1]);
+    let raw_path = parts[1].split('?').next().unwrap_or(parts[1]);
+    let decoded_path = percent_decode(raw_path);
+    let path = decoded_path.as_str();
 
     let mut content_length: usize = 0;
     let mut auth_header: Option<String> = None;
     let mut range_header: Option<String> = None;
 
-    loop {
+    for _ in 0..MAX_HEADER_LINES {
         let mut line = String::new();
-        reader.read_line(&mut line)?;
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             break;
@@ -100,12 +107,23 @@ fn handle_http_connection(
         if let Some((k, v)) = trimmed.split_once(':') {
             let key = k.trim().to_ascii_lowercase();
             let val = v.trim();
-            if key == "content-length" {
-                content_length = val.parse().unwrap_or(0);
-            } else if key == "authorization" {
-                auth_header = Some(val.to_string());
-            } else if key == "range" {
-                range_header = Some(val.to_string());
+            match key.as_str() {
+                "content-length" => {
+                    content_length = match val.parse::<usize>() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            return write_http(
+                                &mut stream,
+                                400,
+                                "application/json",
+                                b"{\"error\":\"invalid Content-Length\"}",
+                            );
+                        }
+                    };
+                }
+                "authorization" => auth_header = Some(val.to_string()),
+                "range" => range_header = Some(val.to_string()),
+                _ => {}
             }
         }
     }
@@ -124,8 +142,17 @@ fn handle_http_connection(
     }
 
     if let Some(secret) = expected_token {
-        let expected = format!("Bearer {secret}");
-        if auth_header.as_deref() != Some(expected.as_str()) {
+        let authorized = auth_header
+            .as_deref()
+            .and_then(|h| {
+                let (scheme, tok) = h.split_once(' ')?;
+                scheme
+                    .eq_ignore_ascii_case("bearer")
+                    .then_some(tok.trim())
+            })
+            .map(|tok| constant_time_eq(tok.as_bytes(), secret.as_bytes()))
+            .unwrap_or(false);
+        if !authorized {
             return write_http(
                 &mut stream,
                 401,
@@ -141,6 +168,7 @@ fn handle_http_connection(
             "root_dir": paths.root().display().to_string(),
             "songs_dir": paths.songs_dir().display().to_string(),
             "playlists_dir": paths.playlists_dir().display().to_string(),
+            "home_dir": zuno_core::user_home_dir().map(|h| h.display().to_string()),
             "suggested_dirs": paths.suggested_music_dirs(),
             "mcp_http_url": format!("http://{listen_addr}/mcp"),
             "version": env!("CARGO_PKG_VERSION"),
@@ -181,7 +209,7 @@ fn handle_http_connection(
     }
 
     if method == "POST" && path == "/api" {
-        if content_length > 2 * 1024 * 1024 {
+        if content_length > MAX_BODY_BYTES {
             return write_http(&mut stream, 413, "application/json", b"{\"error\":\"payload too large\"}");
         }
         let mut body = vec![0u8; content_length];
@@ -197,7 +225,7 @@ fn handle_http_connection(
     }
 
     if method == "POST" && path == "/mcp" {
-        if content_length > 2 * 1024 * 1024 {
+        if content_length > MAX_BODY_BYTES {
             return write_http(&mut stream, 413, "application/json", b"{\"error\":\"payload too large\"}");
         }
         let mut body = vec![0u8; content_length];
@@ -230,10 +258,16 @@ fn handle_http_connection(
     )
 }
 
+fn has_parent_traversal(rel: &str) -> bool {
+    Path::new(rel)
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+}
+
 fn serve_embedded_asset(stream: &mut TcpStream, req_path: &str, head_only: bool) -> io::Result<()> {
     let clean = req_path.trim_start_matches('/');
     let rel = if clean.is_empty() { "index.html" } else { clean };
-    if rel.contains("..") {
+    if has_parent_traversal(rel) {
         return write_http_with_body(stream, 400, "text/plain", b"bad path", !head_only);
     }
 
@@ -285,7 +319,7 @@ fn serve_static_file(
 ) -> io::Result<()> {
     let clean = req_path.trim_start_matches('/');
     let rel = if clean.is_empty() { "index.html" } else { clean };
-    if rel.contains("..") {
+    if has_parent_traversal(rel) {
         return write_http_with_body(stream, 400, "text/plain", b"bad path", !head_only);
     }
 
@@ -379,8 +413,17 @@ fn stream_audio_file(
     let total_len = file.metadata()?.len();
     let mime = audio_mime(&rel_path);
 
-    let (start, end, partial) = match range_header.and_then(|r| parse_byte_range(r, total_len)) {
-        Some((s, e)) => (s, e, true),
+    let (start, end, partial) = match range_header {
+        Some(hdr) => match parse_byte_range(hdr, total_len) {
+            Some((s, e)) => (s, e, true),
+            None => {
+                write!(
+                    stream,
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total_len}\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+                )?;
+                return stream.flush();
+            }
+        },
         None => (0, total_len.saturating_sub(1), false),
     };
 
@@ -454,16 +497,52 @@ fn parse_byte_range(header: &str, total_len: u64) -> Option<(u64, u64)> {
 }
 
 fn audio_mime(rel_path: &str) -> &'static str {
-    let ext = rel_path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let ext = Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match ext.as_str() {
         "mp3" => "audio/mpeg",
         "flac" => "audio/flac",
         "wav" => "audio/wav",
+        "aiff" | "aif" => "audio/aiff",
         "ogg" | "opus" => "audio/ogg",
         "m4a" | "aac" | "alac" => "audio/mp4",
         "webm" => "audio/webm",
         _ => "application/octet-stream",
     }
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn write_http(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) -> io::Result<()> {

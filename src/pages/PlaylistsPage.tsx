@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { isFavoritesPlaylist } from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Playlist, Track } from '@/lib/zunoApi'
@@ -28,14 +29,32 @@ export function PlaylistsPage({
 }: PlaylistsPageProps) {
   const iconPack = appearance.iconPack
 
-  const ordered = useMemo(() => {
-    return [...playlists].sort((a, b) => {
-      const aFav = a.slug === 'favorites' || a.slug === 'fav' ? 0 : 1
-      const bFav = b.slug === 'favorites' || b.slug === 'fav' ? 0 : 1
+  const playlistCards = useMemo(() => {
+    const sorted = [...playlists].sort((a, b) => {
+      const aFav = isFavoritesPlaylist(a) ? 0 : 1
+      const bFav = isFavoritesPlaylist(b) ? 0 : 1
       if (aFav !== bFav) return aFav - bFav
       return a.title.localeCompare(b.title)
     })
-  }, [playlists])
+    return sorted.map((pl) => {
+      const resolvedTracks: Track[] = []
+      let totalSecs = 0
+      for (const id of pl.track_ids) {
+        const track = tracksById.get(id)
+        if (track) {
+          resolvedTracks.push(track)
+          totalSecs += track.duration_secs || 0
+        }
+      }
+      return {
+        pl,
+        isFav: isFavoritesPlaylist(pl),
+        resolvedTracks,
+        totalSecs,
+        firstTrack: resolvedTracks[0],
+      }
+    })
+  }, [playlists, tracksById])
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-10 pt-6 sm:px-8">
@@ -48,9 +67,9 @@ export function PlaylistsPage({
             <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[28px]">
               Playlists
             </h1>
-            {ordered.length > 0 && (
+            {playlistCards.length > 0 && (
               <span className="tabular-nums text-xs text-muted-foreground">
-                {ordered.length}
+                {playlistCards.length}
               </span>
             )}
           </div>
@@ -66,7 +85,7 @@ export function PlaylistsPage({
         </button>
       </div>
 
-      {ordered.length === 0 ? (
+      {playlistCards.length === 0 ? (
         <div className="z-surface-card flex flex-col items-center justify-center gap-2.5 rounded-2xl border border-dashed border-border bg-card/40 px-6 py-16 text-center">
           <ZunoIcon
             name="playlist"
@@ -88,18 +107,7 @@ export function PlaylistsPage({
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {ordered.map((pl) => {
-            const isFav = pl.slug === 'favorites' || pl.slug === 'fav'
-            const resolvedTracks = pl.track_ids
-              .map((id) => tracksById.get(id))
-              .filter((t): t is Track => Boolean(t))
-            const totalSecs = resolvedTracks.reduce(
-              (acc, t) => acc + (t.duration_secs || 0),
-              0,
-            )
-            const firstTrack = resolvedTracks[0]
-
-            return (
+          {playlistCards.map(({ pl, isFav, resolvedTracks, totalSecs, firstTrack }) => (
               <div
                 key={pl.slug}
                 role="button"
@@ -170,8 +178,7 @@ export function PlaylistsPage({
                   </button>
                 )}
               </div>
-            )
-          })}
+          ))}
         </div>
       )}
     </div>

@@ -1,3 +1,5 @@
+import { fnv1aHash } from '@/lib/format'
+
 export interface FontPreset {
   id: string
   label: string
@@ -172,22 +174,28 @@ interface SavedFontPayload {
 
 type SavedFontMap = Partial<Record<'ui' | 'mono', SavedFontPayload>>
 
-const loadedFontKeys = new Set<string>()
+const loadedFonts = new Map<string, FontFace>()
 
-/** Safe CSS font family quoting using single-pass character scan. */
+/** Safe CSS font-family sanitizer preserving Unicode/CJK/accented OS font names while blocking CSS escapes. */
 export function sanitizeFontFamilyName(raw: string): string {
   let out = ''
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i]
     const code = raw.charCodeAt(i)
-    const allowed =
-      (code >= 48 && code <= 57) ||
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      ch === ' ' ||
-      ch === '-' ||
-      ch === '_'
-    if (allowed) out += ch
+    if (
+      code < 32 ||
+      code === 127 ||
+      ch === '\'' ||
+      ch === '"' ||
+      ch === '\\' ||
+      ch === ';' ||
+      ch === '{' ||
+      ch === '}' ||
+      ch === ','
+    ) {
+      continue
+    }
+    out += ch
   }
   return out.trim().slice(0, 64)
 }
@@ -222,12 +230,12 @@ function writeSavedFonts(map: SavedFontMap) {
 }
 
 async function injectFontFace(family: string, dataUrl: string): Promise<void> {
-  const key = `${family}::${dataUrl.length}`
-  if (loadedFontKeys.has(key) || typeof FontFace === 'undefined') return
+  const key = `${family}::${fnv1aHash(dataUrl)}::${dataUrl.length}`
+  if (loadedFonts.has(key) || typeof FontFace === 'undefined') return
   const face = new FontFace(family, `url(${dataUrl})`)
   await face.load()
   document.fonts.add(face)
-  loadedFontKeys.add(key)
+  loadedFonts.set(key, face)
 }
 
 export async function hydrateSavedCustomFonts(): Promise<void> {
@@ -274,6 +282,15 @@ export async function registerCustomFontFile(
 
 export function clearSavedCustomFontFile(slot: 'ui' | 'mono') {
   const saved = readSavedFonts()
+  const prev = saved[slot]
+  if (prev?.family && prev?.dataUrl) {
+    const key = `${prev.family}::${fnv1aHash(prev.dataUrl)}::${prev.dataUrl.length}`
+    const face = loadedFonts.get(key)
+    if (face && typeof document !== 'undefined') {
+      document.fonts.delete(face)
+    }
+    loadedFonts.delete(key)
+  }
   delete saved[slot]
   writeSavedFonts(saved)
 }

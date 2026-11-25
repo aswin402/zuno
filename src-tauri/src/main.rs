@@ -20,6 +20,81 @@ use zuno_audio::{AudioLevels, ZunoService, ipc_unix};
 use zuno_core::ZunoPaths;
 use zuno_core::ipc::{IpcRequest, IpcResponse};
 
+const ZOOM_MIN_FACTOR: f64 = 0.5;
+const ZOOM_MAX_FACTOR: f64 = 2.0;
+const FOLDER_PICKER_TITLE: &str = "Select Music Folder for Zuno";
+
+/// Suppress console window flashing when spawning child tools (`curl`, `rtl_fm`, `powershell`) on Windows.
+pub(crate) fn configure_hidden_command(_cmd: &mut std::process::Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        _cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    Show,
+    Toggle,
+    Next,
+    Prev,
+    Quit,
+}
+
+impl TrayAction {
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Toggle => "toggle",
+            Self::Next => "next",
+            Self::Prev => "prev",
+            Self::Quit => "quit",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "show" => Some(Self::Show),
+            "toggle" => Some(Self::Toggle),
+            "next" => Some(Self::Next),
+            "prev" => Some(Self::Prev),
+            "quit" => Some(Self::Quit),
+            _ => None,
+        }
+    }
+}
+
+fn shutdown_app(app: &AppHandle, state: &AppState) {
+    state.quitting.store(true, Ordering::SeqCst);
+    state.fm_tuner.stop(Some(&state.service));
+    let _ = state.service.handle_request(IpcRequest::Stop);
+    state.notify_mpris();
+    app.exit(0);
+}
+
+fn percent_decode_segment(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
 struct AppState {
     service: Arc<ZunoService>,
     fm_tuner: Arc<radio::FmTunerManager>,
@@ -98,10 +173,15 @@ fn zuno_audio_levels(state: tauri::State<'_, AppState>) -> AudioLevels {
 #[tauri::command]
 fn zuno_info(state: tauri::State<'_, AppState>) -> serde_json::Value {
     let paths = state.service.paths();
+    let home_dir = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .filter(|s| !s.trim().is_empty());
     serde_json::json!({
         "root_dir": paths.root().display().to_string(),
         "songs_dir": paths.songs_dir().display().to_string(),
         "playlists_dir": paths.playlists_dir().display().to_string(),
+        "home_dir": home_dir,
         "suggested_dirs": paths.suggested_music_dirs(),
         "mcp_http_url": "",
         "version": env!("CARGO_PKG_VERSION"),
@@ -146,7 +226,7 @@ fn window_toggle_fullscreen(window: WebviewWindow) -> bool {
 #[tauri::command]
 fn window_set_zoom(window: WebviewWindow, factor: f64) -> Result<f64, String> {
     let clamped = if factor.is_finite() {
-        factor.clamp(0.5, 2.0)
+        factor.clamp(ZOOM_MIN_FACTOR, ZOOM_MAX_FACTOR)
     } else {
         1.0
     };
@@ -158,10 +238,7 @@ fn window_set_zoom(window: WebviewWindow, factor: f64) -> Result<f64, String> {
 
 #[tauri::command]
 fn app_quit(app: AppHandle, state: tauri::State<'_, AppState>) {
-    state.quitting.store(true, Ordering::SeqCst);
-    state.fm_tuner.stop(Some(&state.service));
-    let _ = state.service.handle_request(IpcRequest::Stop);
-    app.exit(0);
+    shutdown_app(&app, &state);
 }
 
 #[tauri::command]
@@ -232,12 +309,8 @@ async fn zuno_install_update(
 
 #[tauri::command]
 fn zuno_relaunch_app(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.quitting.store(true, Ordering::SeqCst);
-    state.fm_tuner.stop(Some(&state.service));
-    let _ = state.service.handle_request(IpcRequest::Stop);
-    state.notify_mpris();
     updater::spawn_relaunched_app()?;
-    app.exit(0);
+    shutdown_app(&app, &state);
     Ok(())
 }
 
@@ -268,7 +341,7 @@ async fn zuno_radio_discover(
             tag.as_deref(),
             country.as_deref(),
             language.as_deref(),
-            limit.unwrap_or(40),
+            limit.unwrap_or(radio::RADIO_DISCOVER_DEFAULT_LIMIT),
         )
     })
     .await
@@ -305,98 +378,63 @@ fn zuno_fm_stop(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
     state.fm_tuner.hardware_status()
 }
 
+fn run_picker_cmd(cmd: &mut std::process::Command) -> std::io::Result<Option<String>> {
+    configure_hidden_command(cmd);
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((!s.is_empty()).then_some(s))
+}
+
 #[tauri::command]
 async fn pick_music_folder() -> Option<String> {
     tauri::async_runtime::spawn_blocking(|| {
         #[cfg(target_os = "macos")]
         {
-            if let Ok(out) = std::process::Command::new("osascript")
-                .args([
-                    "-e",
-                    r#"POSIX path of (choose folder with prompt "Select Music Folder for Zuno")"#,
-                ])
-                .output()
-            {
-                if out.status.success() {
-                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !s.is_empty() {
-                        return Some(s);
-                    }
-                }
-            }
-            return None;
+            let mut cmd = std::process::Command::new("osascript");
+            cmd.args([
+                "-e",
+                &format!(r#"POSIX path of (choose folder with prompt "{FOLDER_PICKER_TITLE}")"#),
+            ]);
+            return run_picker_cmd(&mut cmd).ok().flatten();
         }
 
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
-            let script = concat!(
-                "Add-Type -AssemblyName System.Windows.Forms; ",
-                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; ",
-                "$d.Description = 'Select Music Folder for Zuno'; ",
-                "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }"
+            let script = format!(
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+                 $d.Description = '{FOLDER_PICKER_TITLE}'; \
+                 if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.SelectedPath }}"
             );
             let mut cmd = std::process::Command::new("powershell");
-            cmd.args(["-NoProfile", "-STA", "-Command", script]);
-            cmd.creation_flags(0x08000000);
-            if let Ok(out) = cmd.output() {
-                if out.status.success() {
-                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !s.is_empty() {
-                        return Some(s);
-                    }
-                }
-            }
-            return None;
+            cmd.args(["-NoProfile", "-STA", "-Command", &script]);
+            return run_picker_cmd(&mut cmd).ok().flatten();
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let default_dir = {
-                let m = std::path::PathBuf::from(&home).join("Music");
-                if m.is_dir() {
-                    format!("{}/", m.display())
-                } else {
-                    format!("{home}/")
-                }
-            };
+            let default_dir = ZunoPaths::resolve_default()
+                .suggested_music_dirs()
+                .into_iter()
+                .next()
+                .or_else(|| std::env::var("HOME").ok())
+                .map(|d| format!("{}/", d.trim_end_matches('/')))
+                .unwrap_or_else(|| "./".to_string());
 
-            if let Ok(out) = std::process::Command::new("zenity")
-                .args([
-                    "--file-selection",
-                    "--directory",
-                    "--title=Select Music Folder for Zuno",
-                    &format!("--filename={default_dir}"),
-                ])
-                .output()
-            {
-                if out.status.success() {
-                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !s.is_empty() {
-                        return Some(s);
-                    }
-                }
-                return None;
+            let zenity_title = format!("--title={FOLDER_PICKER_TITLE}");
+            let zenity_file = format!("--filename={default_dir}");
+            let mut zenity = std::process::Command::new("zenity");
+            zenity.args(["--file-selection", "--directory", &zenity_title, &zenity_file]);
+            if let Ok(result) = run_picker_cmd(&mut zenity) {
+                return result;
             }
 
-            if let Ok(out) = std::process::Command::new("kdialog")
-                .args([
-                    "--getexistingdirectory",
-                    &default_dir,
-                    "--title",
-                    "Select Music Folder for Zuno",
-                ])
-                .output()
-            {
-                if out.status.success() {
-                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !s.is_empty() {
-                        return Some(s);
-                    }
-                }
-            }
-            None
+            let mut kdialog = std::process::Command::new("kdialog");
+            kdialog.args(["--getexistingdirectory", &default_dir, "--title", FOLDER_PICKER_TITLE]);
+            run_picker_cmd(&mut kdialog).ok().flatten()
         }
     })
     .await
@@ -463,14 +501,15 @@ fn main() {
         .register_asynchronous_uri_scheme_protocol("zuno", move |_ctx, request, responder| {
             let uri = request.uri();
             let path = uri.path();
-            if let Some(track_id) = path.strip_prefix("/cover/") {
+            if let Some(raw_track_id) = path.strip_prefix("/cover/") {
+                let track_id = percent_decode_segment(raw_track_id.trim_end_matches('/'));
                 let thumb_size = uri.query().and_then(|q| {
                     q.split('&').find_map(|pair| {
                         let (k, v) = pair.split_once('=')?;
                         (k == "s").then(|| v.parse::<u32>().ok()).flatten()
                     })
                 });
-                cover_server.enqueue(track_id.to_string(), thumb_size, responder);
+                cover_server.enqueue(track_id, thumb_size, responder);
                 return;
             }
             responder.respond(
@@ -520,23 +559,19 @@ fn main() {
                     |handle| show_or_create_main_window(handle),
                     |handle| {
                         let st = handle.state::<AppState>();
-                        st.quitting.store(true, Ordering::SeqCst);
-                        st.fm_tuner.stop(Some(&st.service));
-                        let _ = st.service.handle_request(IpcRequest::Stop);
-                        st.notify_mpris();
-                        handle.exit(0);
+                        shutdown_app(handle, &st);
                     },
                 );
                 let _ = st.mpris.set(handle);
             }
 
             // Minimalist B&W Zuno system tray icon with Play/Pause/Next/Prev & Destroy-WebView support
-            let show_i = MenuItem::with_id(app, "show", "Show Zuno", true, None::<&str>)?;
-            let toggle_i = MenuItem::with_id(app, "toggle", "Play / Pause", true, None::<&str>)?;
-            let next_i = MenuItem::with_id(app, "next", "Next Track", true, None::<&str>)?;
-            let prev_i = MenuItem::with_id(app, "prev", "Previous Track", true, None::<&str>)?;
+            let show_i = MenuItem::with_id(app, TrayAction::Show.id(), "Show Zuno", true, None::<&str>)?;
+            let toggle_i = MenuItem::with_id(app, TrayAction::Toggle.id(), "Play / Pause", true, None::<&str>)?;
+            let next_i = MenuItem::with_id(app, TrayAction::Next.id(), "Next Track", true, None::<&str>)?;
+            let prev_i = MenuItem::with_id(app, TrayAction::Prev.id(), "Previous Track", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quit Zuno", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, TrayAction::Quit.id(), "Quit Zuno", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 app,
@@ -551,28 +586,22 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     let state = app.state::<AppState>();
-                    match event.id.as_ref() {
-                        "show" => show_or_create_main_window(app),
-                        "toggle" => {
+                    match TrayAction::from_id(event.id.as_ref()) {
+                        Some(TrayAction::Show) => show_or_create_main_window(app),
+                        Some(TrayAction::Toggle) => {
                             let _ = state.service.handle_request(IpcRequest::TogglePause);
                             state.notify_mpris();
                         }
-                        "next" => {
+                        Some(TrayAction::Next) => {
                             let _ = state.service.handle_request(IpcRequest::Next);
                             state.notify_mpris();
                         }
-                        "prev" => {
+                        Some(TrayAction::Prev) => {
                             let _ = state.service.handle_request(IpcRequest::Previous);
                             state.notify_mpris();
                         }
-                        "quit" => {
-                            state.quitting.store(true, Ordering::SeqCst);
-                            state.fm_tuner.stop(Some(&state.service));
-                            let _ = state.service.handle_request(IpcRequest::Stop);
-                            state.notify_mpris();
-                            app.exit(0);
-                        }
-                        _ => {}
+                        Some(TrayAction::Quit) => shutdown_app(app, &state),
+                        None => {}
                     }
                 })
                 .on_tray_icon_event(|tray, event| {

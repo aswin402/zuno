@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use zuno_core::RepeatMode;
-use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
+use zuno_core::ipc::{IpcRequest, IpcResponse};
 
 const PROTOCOL_VERSION: &str = "2025-03-26";
 
@@ -194,16 +194,16 @@ fn call_tool(name: &str, args: &Value, client: &ZunoClient) -> Value {
         },
         "set_mode" => {
             let shuffle = args.get("shuffle").and_then(Value::as_bool);
-            let repeat = match args.get("repeat").and_then(Value::as_str) {
-                Some("off") => Some(RepeatMode::Off),
-                Some("one") => Some(RepeatMode::One),
-                Some("all") => Some(RepeatMode::All),
-                Some(other) => {
-                    return tool_err(&format!(
-                        "invalid repeat mode '{other}' (expected off, one, or all)"
-                    ));
-                }
-                None => None,
+            let repeat = match args.get("repeat") {
+                Some(v) if !v.is_null() => match serde_json::from_value::<RepeatMode>(v.clone()) {
+                    Ok(mode) => Some(mode),
+                    Err(_) => {
+                        return tool_err(
+                            "invalid repeat mode (expected 'off', 'one', or 'all')",
+                        );
+                    }
+                },
+                _ => None,
             };
             Ok(IpcRequest::SetMode { shuffle, repeat })
         }
@@ -510,9 +510,6 @@ fn tool_err(message: &str) -> Value {
         "isError": true
     })
 }
-
-#[allow(dead_code)]
-fn _assert_ipc_data(_: &IpcData) {}
 
 #[cfg(test)]
 mod tests {

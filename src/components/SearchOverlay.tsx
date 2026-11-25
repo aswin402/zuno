@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search } from '@/components/Search'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { displayArtist, prefersReducedMotion } from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Track } from '@/lib/zunoApi'
@@ -54,10 +55,7 @@ export function SearchOverlay({
     }
     if (!mounted) return
     setPhase('closing')
-    const reduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const timer = window.setTimeout(() => setMounted(false), reduced ? 0 : 165)
+    const timer = window.setTimeout(() => setMounted(false), prefersReducedMotion() ? 0 : 165)
     return () => window.clearTimeout(timer)
   }, [open, mounted])
 
@@ -169,10 +167,7 @@ export function SearchOverlay({
               {displayed.map((track, idx) => {
                 const active = track.id === currentTrackId
                 const highlighted = idx === highlightIdx
-                const subtitle =
-                  track.artist === 'Unknown Artist' && track.folder
-                    ? track.folder
-                    : track.artist
+                const subtitle = displayArtist(track)
                 return (
                   <button
                     key={track.id}

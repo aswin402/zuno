@@ -9,7 +9,14 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+CARGO_CACHE_DIR="${CARGO_HOME:-$HOME/.cargo}"
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 MAX_TARGET_SIZE="${ZUNO_TARGET_MAXSIZE:-600MB}"
+
+OFFLINE_FLAG=()
+if [ "${ZUNO_OFFLINE:-0}" = "1" ]; then
+  OFFLINE_FLAG=(--offline)
+fi
 
 # Disable incremental compilation caches during script-driven builds
 # (saves 100-400 MB of `target/*/incremental` cache per profile).
@@ -24,13 +31,13 @@ print_size() {
   fi
   echo ""
   echo "==> Installed Binaries"
-  ls -lh "${XDG_BIN_HOME:-$HOME/.local/bin}/zuno" "${XDG_BIN_HOME:-$HOME/.local/bin}/zuno-mcp" 2>/dev/null || echo "  (not installed yet)"
+  ls -lh "$BIN_DIR/zuno" "$BIN_DIR/zuno-mcp" 2>/dev/null || echo "  (not installed yet)"
   echo ""
-  echo "==> Global Cargo Cache (~/.cargo)"
-  du -sh "$HOME/.cargo/registry" "$HOME/.cargo/git" 2>/dev/null || true
+  echo "==> Global Cargo Cache ($CARGO_CACHE_DIR)"
+  du -sh "$CARGO_CACHE_DIR/registry" "$CARGO_CACHE_DIR/git" 2>/dev/null || true
   echo ""
   echo "==> Disk Free Space"
-  df -h "$ROOT_DIR" | awk 'NR==1 || NR==2'
+  df -Ph "$ROOT_DIR" | awk 'NR==1 || NR==2'
 }
 
 stamp_before_build() {
@@ -69,7 +76,8 @@ sweep_stale() {
     cargo sweep --installed >/dev/null 2>&1 || true
     cargo sweep --maxsize "$MAX_TARGET_SIZE" >/dev/null 2>&1 || true
   else
-    find "$TARGET_DIR" -maxdepth 3 -type f \( -name 'libzuno_*' -o -name 'zuno-*' \) -mmin +15 -delete 2>/dev/null || true
+    # Only sweep stale intermediate files inside `*/deps` — never delete compiled binaries in profile roots!
+    find "$TARGET_DIR"/*/deps -maxdepth 1 -type f \( -name 'libzuno_*' -o -name 'zuno-*' \) -mmin +15 -delete 2>/dev/null || true
   fi
 
   rm -f sweep.timestamp
@@ -96,15 +104,10 @@ build_frontend() {
 }
 
 build_release() {
-  local offline_flag=()
-  if [ "${ZUNO_OFFLINE:-0}" = "1" ]; then
-    offline_flag=(--offline)
-  fi
-
   build_frontend
   stamp_before_build
   echo "==> Building native Zuno & zuno-mcp (release, lto=thin, CARGO_INCREMENTAL=0)..."
-  cargo build --release "${offline_flag[@]}" -p zuno -p zuno-mcp
+  cargo build --release "${OFFLINE_FLAG[@]}" -p zuno -p zuno-mcp
   sweep_after_stamp
 
   rm -rf "$TARGET_DIR/release/incremental"
@@ -114,15 +117,10 @@ build_release() {
 }
 
 build_fast() {
-  local offline_flag=()
-  if [ "${ZUNO_OFFLINE:-0}" = "1" ]; then
-    offline_flag=(--offline)
-  fi
-
   build_frontend
   stamp_before_build
   echo "==> Building fast local binaries (profile: release-fast, no LTO bloat)..."
-  cargo build --profile release-fast "${offline_flag[@]}" -p zuno -p zuno-mcp
+  cargo build --profile release-fast "${OFFLINE_FLAG[@]}" -p zuno -p zuno-mcp
   sweep_after_stamp
 
   rm -rf "$TARGET_DIR/release-fast/incremental"
@@ -131,16 +129,11 @@ build_fast() {
 }
 
 run_tests() {
-  local offline_flag=()
-  if [ "${ZUNO_OFFLINE:-0}" = "1" ]; then
-    offline_flag=(--offline)
-  fi
-
   echo "==> Typechecking frontend (tsc --noEmit)..."
   npx tsc --noEmit
   stamp_before_build
-  echo "==> Running Rust test suite (CARGO_INCREMENTAL=0, deps debug=0)..."
-  cargo test "${offline_flag[@]}" -p zuno-core -p zuno-audio -p zuno-mcp
+  echo "==> Running full workspace Rust test suite (including src-tauri)..."
+  cargo test "${OFFLINE_FLAG[@]}" --workspace
   sweep_after_stamp
   rm -rf "$TARGET_DIR/debug/incremental"
 }

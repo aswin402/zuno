@@ -11,6 +11,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { displayArtist } from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import {
   DEFAULT_APPEARANCE,
@@ -54,10 +55,7 @@ export const TrackRow = memo(function TrackRow({
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuView, setMenuView] = useState<'main' | 'playlists'>('main')
 
-  const overline =
-    track.artist === 'Unknown Artist' && track.folder
-      ? track.folder
-      : track.artist
+  const overline = displayArtist(track)
 
   const iconPack = appearance.iconPack
   const iconStyle = appearance.trackIconStyle

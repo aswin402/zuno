@@ -46,15 +46,14 @@ impl QueueManager {
         if self.shuffle {
             if let Some(id) = start_track_id {
                 if let Some(pos) = self.order.iter().position(|t| t == id) {
-                    let current = self.order.remove(pos);
-                    self.fisher_yates_shuffle();
-                    self.order.insert(0, current);
+                    self.order.swap(0, pos);
+                    self.fisher_yates_shuffle_from(1);
                 } else {
-                    self.fisher_yates_shuffle();
+                    self.fisher_yates_shuffle_from(0);
                 }
             } else {
                 // No explicit starting track (e.g. Shuffle All): randomize the entire order.
-                self.fisher_yates_shuffle();
+                self.fisher_yates_shuffle_from(0);
             }
             self.current_index = Some(0);
         } else {
@@ -124,14 +123,13 @@ impl QueueManager {
             self.order = self.original_order.clone();
             if let Some(ref cur) = current {
                 if let Some(pos) = self.order.iter().position(|id| id == cur) {
-                    let item = self.order.remove(pos);
-                    self.fisher_yates_shuffle();
-                    self.order.insert(0, item);
+                    self.order.swap(0, pos);
+                    self.fisher_yates_shuffle_from(1);
                     self.current_index = Some(0);
                     return;
                 }
             }
-            self.fisher_yates_shuffle();
+            self.fisher_yates_shuffle_from(0);
             self.current_index = if self.order.is_empty() { None } else { Some(0) };
         } else {
             self.order = self.original_order.clone();
@@ -159,10 +157,9 @@ impl QueueManager {
                 .current_index
                 .map(|i| (i + 1).min(self.order.len()))
                 .unwrap_or(0);
-            for (offset, id) in ids.iter().enumerate() {
-                self.order.insert(insert_at + offset, id.clone());
-                self.original_order.push(id.clone());
-            }
+            self.order
+                .splice(insert_at..insert_at, ids.iter().cloned());
+            self.original_order.extend(ids);
         } else {
             self.order.extend(ids.iter().cloned());
             self.original_order.extend(ids);
@@ -197,7 +194,7 @@ impl QueueManager {
             RepeatMode::All => {
                 if self.shuffle && self.order.len() > 1 {
                     let prev_last = self.order.last().cloned();
-                    self.fisher_yates_shuffle();
+                    self.fisher_yates_shuffle_from(0);
                     if prev_last.as_deref() == self.order.first().map(String::as_str) {
                         let last = self.order.len() - 1;
                         self.order.swap(0, last);
@@ -245,20 +242,39 @@ impl QueueManager {
             .or_else(|| if self.order.is_empty() { None } else { Some(0) });
     }
 
-    fn fisher_yates_shuffle(&mut self) {
+    fn fisher_yates_shuffle_from(&mut self, start: usize) {
         let len = self.order.len();
-        if len <= 1 {
+        if len <= start + 1 {
             return;
         }
-        for i in (1..len).rev() {
-            let j = (self.next_u64() as usize) % (i + 1);
+        for i in (start + 1..len).rev() {
+            let span = (i - start + 1) as u64;
+            let j = start + self.next_bounded(span) as usize;
             self.order.swap(i, j);
         }
     }
 
+    /// Unbiased uniform integer in `0..bound` via rejection sampling (eliminates modulo bias).
+    fn next_bounded(&mut self, bound: u64) -> u64 {
+        if bound <= 1 {
+            return 0;
+        }
+        let threshold = (u64::MAX - bound + 1) % bound;
+        loop {
+            let r = self.next_u64();
+            if r >= threshold {
+                return r % bound;
+            }
+        }
+    }
+
     fn next_u64(&mut self) -> u64 {
-        // xorshift64* (zero external RNG crate needed)
-        let mut x = self.rng_state;
+        // xorshift64* (zero external RNG crate needed); guard against zero-state from `Default`.
+        let mut x = if self.rng_state == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            self.rng_state
+        };
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;

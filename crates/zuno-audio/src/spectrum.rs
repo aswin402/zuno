@@ -1,12 +1,17 @@
+use crate::engine::MIN_SAMPLE_RATE;
 use serde::Serialize;
 use std::f32::consts::PI;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 pub const SPECTRUM_BANDS: usize = 24;
 const FFT_N: usize = 1024;
+const FFT_HOP: usize = FFT_N / 2; // 50% overlap Hann STFT for crisp transient response
 /// Active window after the last UI poll; past this duration the audio thread skips all FFT work (0% idle CPU).
 const ACTIVE_TTL_MS: u64 = 650;
+const ATTACK_TAU_SECS: f32 = 0.024;
+const RELEASE_TAU_SECS: f32 = 0.092;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioLevels {
@@ -29,12 +34,12 @@ impl Default for AudioLevels {
     }
 }
 
+/// Monotonic millisecond clock (1-based so `0` unambiguously means "never polled").
 #[inline]
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+fn monotonic_ms() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let start = EPOCH.get_or_init(Instant::now);
+    start.elapsed().as_millis() as u64 + 1
 }
 
 /// Lock-free, zero-allocation shared real-time audio spectrum telemetry.
@@ -74,7 +79,7 @@ impl SharedSpectrum {
         if last == 0 {
             return false;
         }
-        now_ms().saturating_sub(last) <= ACTIVE_TTL_MS
+        monotonic_ms().saturating_sub(last) <= ACTIVE_TTL_MS
     }
 
     pub fn publish(&self, levels: &AudioLevels) {
@@ -84,7 +89,7 @@ impl SharedSpectrum {
         self.bass.store(levels.bass.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
         self.mid.store(levels.mid.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
         self.treble.store(levels.treble.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
-        self.energy.store(levels.energy.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.energy.store(levels.energy.clamp(0.0, 1.0).to_bits(), Ordering::Release);
     }
 
     pub fn clear(&self) {
@@ -94,12 +99,13 @@ impl SharedSpectrum {
         self.bass.store(0, Ordering::Relaxed);
         self.mid.store(0, Ordering::Relaxed);
         self.treble.store(0, Ordering::Relaxed);
-        self.energy.store(0, Ordering::Relaxed);
+        self.energy.store(0, Ordering::Release);
     }
 
     /// Reads the latest levels and refreshes the active TTL so the audio thread feeds the visualizer.
     pub fn snapshot(&self) -> AudioLevels {
-        self.last_poll_ms.store(now_ms(), Ordering::Relaxed);
+        self.last_poll_ms.store(monotonic_ms(), Ordering::Relaxed);
+        let energy = f32::from_bits(self.energy.load(Ordering::Acquire));
         let mut bands = [0.0f32; SPECTRUM_BANDS];
         for (dst, src) in bands.iter_mut().zip(self.bands.iter()) {
             *dst = f32::from_bits(src.load(Ordering::Relaxed));
@@ -109,34 +115,57 @@ impl SharedSpectrum {
             bass: f32::from_bits(self.bass.load(Ordering::Relaxed)),
             mid: f32::from_bits(self.mid.load(Ordering::Relaxed)),
             treble: f32::from_bits(self.treble.load(Ordering::Relaxed)),
-            energy: f32::from_bits(self.energy.load(Ordering::Relaxed)),
+            energy,
         }
     }
 }
 
-/// Zero-allocation stack-resident 1024-point radix-2 FFT analyzer embedded in `EqSource`.
+/// Zero-allocation stack-resident 1024-point radix-2 STFT analyzer (50% Hann overlap,
+/// precomputed bit-reversal & twiddle tables, sample-rate-normalized attack/release smoothing).
 pub struct SpectrumAnalyzer {
-    sample_rate: f32,
-    buf: [f32; FFT_N],
+    ring: [f32; FFT_N],
+    ring_pos: usize,
+    hop_count: usize,
     re: [f32; FFT_N],
     im: [f32; FFT_N],
     hann: [f32; FFT_N],
+    bit_rev: [usize; FFT_N],
+    tw_re: [f32; FFT_N / 2],
+    tw_im: [f32; FFT_N / 2],
     band_edges: [usize; SPECTRUM_BANDS + 1],
+    attack_alpha: f32,
+    release_alpha: f32,
+    idle_skip_interval: u32,
     smoothed: AudioLevels,
-    pos: usize,
     idle_skip_counter: u32,
     cached_active: bool,
 }
 
 impl SpectrumAnalyzer {
     pub fn new(sample_rate: f32) -> Self {
-        let fs = sample_rate.max(8000.0);
+        let fs = sample_rate.max(MIN_SAMPLE_RATE as f32);
         let mut hann = [0.0f32; FFT_N];
         for (i, slot) in hann.iter_mut().enumerate() {
             *slot = 0.5 * (1.0 - (2.0 * PI * i as f32 / (FFT_N - 1) as f32).cos());
         }
 
-        // 24 logarithmically spaced frequency bands from 35 Hz to min(15 kHz, Nyquist * 0.92)
+        // Precompute bit-reversal indices once (0 bit-twiddling work per FFT frame).
+        let bits = FFT_N.trailing_zeros();
+        let mut bit_rev = [0usize; FFT_N];
+        for (i, slot) in bit_rev.iter_mut().enumerate() {
+            *slot = i.reverse_bits() >> (usize::BITS - bits);
+        }
+
+        // Precompute exact twiddle factors `exp(-2pi*i*k/N)` once (eliminates trig & drift).
+        let mut tw_re = [0.0f32; FFT_N / 2];
+        let mut tw_im = [0.0f32; FFT_N / 2];
+        for k in 0..(FFT_N / 2) {
+            let ang = -2.0 * PI * k as f32 / FFT_N as f32;
+            tw_re[k] = ang.cos();
+            tw_im[k] = ang.sin();
+        }
+
+        // Logarithmically spaced frequency bands from 35 Hz to min(15 kHz, Nyquist * 0.92).
         let f_min = 35.0f32;
         let f_max = (fs * 0.46).min(15_000.0).max(2000.0);
         let bin_hz = fs / FFT_N as f32;
@@ -152,33 +181,46 @@ impl SpectrumAnalyzer {
             band_edges[b] = bin;
         }
 
+        let hop_secs = FFT_HOP as f32 / fs;
+        let attack_alpha = (1.0 - (-hop_secs / ATTACK_TAU_SECS).exp()).clamp(0.1, 0.95);
+        let release_alpha = (1.0 - (-hop_secs / RELEASE_TAU_SECS).exp()).clamp(0.04, 0.85);
+        let idle_skip_interval = ((fs * 0.005).round() as u32).clamp(64, 1024);
+
         Self {
-            sample_rate: fs,
-            buf: [0.0; FFT_N],
+            ring: [0.0; FFT_N],
+            ring_pos: 0,
+            hop_count: 0,
             re: [0.0; FFT_N],
             im: [0.0; FFT_N],
             hann,
+            bit_rev,
+            tw_re,
+            tw_im,
             band_edges,
+            attack_alpha,
+            release_alpha,
+            idle_skip_interval,
             smoothed: AudioLevels::default(),
-            pos: 0,
             idle_skip_counter: 0,
             cached_active: false,
         }
     }
 
     pub fn reset(&mut self) {
-        self.pos = 0;
+        self.ring.fill(0.0);
+        self.ring_pos = 0;
+        self.hop_count = 0;
         self.smoothed = AudioLevels::default();
     }
 
-    /// Feed one mono audio frame. Checks active TTL once every 256 frames (~5ms) so idle cost is ~0.
+    /// Feed one mono audio frame. Checks active TTL once every ~5ms so idle cost is ~0.
     #[inline]
     pub fn push_mono(&mut self, sample: f32, target: &SharedSpectrum) {
         if self.idle_skip_counter == 0 {
             self.cached_active = target.is_active();
-            self.idle_skip_counter = 256;
+            self.idle_skip_counter = self.idle_skip_interval;
             if !self.cached_active {
-                self.pos = 0;
+                self.hop_count = 0;
             }
         }
         self.idle_skip_counter -= 1;
@@ -186,10 +228,11 @@ impl SpectrumAnalyzer {
             return;
         }
 
-        self.buf[self.pos] = sample;
-        self.pos += 1;
-        if self.pos >= FFT_N {
-            self.pos = 0;
+        self.ring[self.ring_pos] = sample;
+        self.ring_pos = (self.ring_pos + 1) & (FFT_N - 1);
+        self.hop_count += 1;
+        if self.hop_count >= FFT_HOP {
+            self.hop_count = 0;
             self.compute_and_publish(target);
         }
     }
@@ -197,18 +240,18 @@ impl SpectrumAnalyzer {
     fn compute_and_publish(&mut self, target: &SharedSpectrum) {
         let mut sum_sq = 0.0f32;
         for i in 0..FFT_N {
-            let s = self.buf[i];
+            let s = self.ring[(self.ring_pos + i) & (FFT_N - 1)];
             sum_sq += s * s;
-            self.re[i] = s * self.hann[i];
-            self.im[i] = 0.0;
+            let dst = self.bit_rev[i];
+            self.re[dst] = s * self.hann[i];
+            self.im[dst] = 0.0;
         }
         let rms = (sum_sq / FFT_N as f32).sqrt();
         let raw_energy = (rms * 3.8).tanh().clamp(0.0, 1.0);
 
-        fft_radix2_in_place(&mut self.re, &mut self.im);
+        fft_radix2_precomputed(&mut self.re, &mut self.im, &self.tw_re, &self.tw_im);
 
         let inv_n = 2.0 / FFT_N as f32;
-        let _ = self.sample_rate;
         let mut raw_bands = [0.0f32; SPECTRUM_BANDS];
 
         for b in 0..SPECTRUM_BANDS {
@@ -245,13 +288,17 @@ impl SpectrumAnalyzer {
             (mean * 0.55 + peak * 0.45).clamp(0.0, 1.0)
         };
 
-        let raw_bass = avg_range(0, 5);
-        let raw_mid = avg_range(5, 15);
-        let raw_treble = avg_range(15, SPECTRUM_BANDS);
+        let bass_end = (SPECTRUM_BANDS * 5 / 24).clamp(1, SPECTRUM_BANDS);
+        let mid_end = (SPECTRUM_BANDS * 15 / 24).clamp(bass_end + 1, SPECTRUM_BANDS);
+        let raw_bass = avg_range(0, bass_end);
+        let raw_mid = avg_range(bass_end, mid_end);
+        let raw_treble = avg_range(mid_end, SPECTRUM_BANDS);
 
-        // Musical attack/release smoothing: fast punchy attack, organic release
+        // Sample-rate-normalized attack/release envelope smoothing
+        let atk = self.attack_alpha;
+        let rel = self.release_alpha;
         let smooth = |cur: f32, next: f32| -> f32 {
-            let alpha = if next > cur { 0.62 } else { 0.22 };
+            let alpha = if next > cur { atk } else { rel };
             cur + (next - cur) * alpha
         };
 
@@ -267,34 +314,26 @@ impl SpectrumAnalyzer {
     }
 }
 
-/// Pure-Rust zero-allocation iterative Cooley-Tukey radix-2 FFT.
-fn fft_radix2_in_place(re: &mut [f32; FFT_N], im: &mut [f32; FFT_N]) {
-    let mut j = 0usize;
-    for i in 1..FFT_N {
-        let mut bit = FFT_N >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j ^= bit;
-        if i < j {
-            re.swap(i, j);
-            im.swap(i, j);
-        }
-    }
-
+/// Pure-Rust zero-allocation iterative Cooley-Tukey radix-2 FFT using precomputed twiddle tables.
+/// Expects input already placed in bit-reversed order.
+fn fft_radix2_precomputed(
+    re: &mut [f32; FFT_N],
+    im: &mut [f32; FFT_N],
+    tw_re: &[f32; FFT_N / 2],
+    tw_im: &[f32; FFT_N / 2],
+) {
     let mut len = 2usize;
     while len <= FFT_N {
         let half = len >> 1;
-        let ang = -2.0 * PI / len as f32;
-        let wlen_re = ang.cos();
-        let wlen_im = ang.sin();
+        let step = FFT_N / len;
 
         let mut i = 0;
         while i < FFT_N {
-            let mut w_re = 1.0f32;
-            let mut w_im = 0.0f32;
             for k in 0..half {
+                let tw_idx = k * step;
+                let w_re = tw_re[tw_idx];
+                let w_im = tw_im[tw_idx];
+
                 let u_re = re[i + k];
                 let u_im = im[i + k];
                 let v_re = re[i + k + half] * w_re - im[i + k + half] * w_im;
@@ -304,10 +343,6 @@ fn fft_radix2_in_place(re: &mut [f32; FFT_N], im: &mut [f32; FFT_N]) {
                 im[i + k] = u_im + v_im;
                 re[i + k + half] = u_re - v_re;
                 im[i + k + half] = u_im - v_im;
-
-                let next_w_re = w_re * wlen_re - w_im * wlen_im;
-                w_im = w_re * wlen_im + w_im * wlen_re;
-                w_re = next_w_re;
             }
             i += len;
         }

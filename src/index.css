@@ -1028,6 +1028,18 @@ html[data-zuno-vt="blinds"]::view-transition-new(root) {
   animation: zuno-drawer-down 200ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
+/* ── Shared Pulse Bars Audio Indicator (PulseBarsLoader) ── */
+@keyframes zuno-loader2-pulse {
+  0%, 100% { transform: scaleY(0.3); }
+  50%      { transform: scaleY(1); }
+}
+.zuno-loader2-bar {
+  animation-name: zuno-loader2-pulse;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  transform-origin: center;
+}
+
 /* Pause all CSS animations when window/tab is hidden (0% idle GPU/CPU) */
 .zuno-hidden *,
 .zuno-hidden *::before,

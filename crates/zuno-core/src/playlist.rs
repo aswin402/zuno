@@ -1,4 +1,4 @@
-use crate::config::{ZunoPaths, normalize_rel_path, slugify_playlist_name};
+use crate::config::{ZunoPaths, atomic_write, normalize_rel_path, slugify_playlist_name};
 use crate::error::{Result, ZunoError};
 use crate::models::{Playlist, Track};
 use std::collections::HashMap;
@@ -9,6 +9,61 @@ const M3U8_HEADER: &str = "#EXTM3U";
 const PLAYLIST_PREFIX: &str = "#PLAYLIST:";
 const EXTINF_PREFIX: &str = "#EXTINF:";
 const ZUNO_ID_PREFIX: &str = "#EXTZUNO-ID:";
+
+struct PlaylistIndexes<'a> {
+    by_path: HashMap<String, &'a Track>,
+    by_id: HashMap<&'a str, &'a Track>,
+    by_base_id: HashMap<&'a str, Vec<&'a Track>>,
+    by_display: HashMap<String, Vec<&'a Track>>,
+    by_title: HashMap<String, Vec<&'a Track>>,
+    by_filename: HashMap<String, Vec<&'a Track>>,
+}
+
+impl<'a> PlaylistIndexes<'a> {
+    fn build(tracks: &'a [Track]) -> Self {
+        let mut by_path = HashMap::with_capacity(tracks.len());
+        let mut by_id = HashMap::with_capacity(tracks.len());
+        let mut by_base_id: HashMap<&'a str, Vec<&'a Track>> = HashMap::new();
+        let mut by_display: HashMap<String, Vec<&'a Track>> = HashMap::with_capacity(tracks.len());
+        let mut by_title: HashMap<String, Vec<&'a Track>> = HashMap::with_capacity(tracks.len());
+        let mut by_filename: HashMap<String, Vec<&'a Track>> = HashMap::with_capacity(tracks.len());
+
+        for t in tracks {
+            if let Some(ref root) = t.source_dir {
+                let full = format!("{}/{}", root.trim_end_matches('/'), t.rel_path);
+                by_path.insert(full, t);
+            } else {
+                by_path.insert(t.rel_path.clone(), t);
+            }
+            by_id.insert(t.id.as_str(), t);
+            let base = t.id.split('-').next().unwrap_or(t.id.as_str());
+            by_base_id.entry(base).or_default().push(t);
+            by_display
+                .entry(t.extinf_display().to_lowercase())
+                .or_default()
+                .push(t);
+            by_title.entry(t.title.to_lowercase()).or_default().push(t);
+            if let Some(fname) = Path::new(&t.rel_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
+                by_filename
+                    .entry(fname.to_ascii_lowercase())
+                    .or_default()
+                    .push(t);
+            }
+        }
+
+        Self {
+            by_path,
+            by_id,
+            by_base_id,
+            by_display,
+            by_title,
+            by_filename,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct RawEntry {
@@ -23,22 +78,7 @@ struct RawEntry {
 pub fn load_all_playlists(paths: &ZunoPaths, tracks: &[Track]) -> Result<Vec<Playlist>> {
     paths.ensure_dirs()?;
     let dir = paths.playlists_dir();
-
-    let mut by_path: HashMap<String, &Track> = HashMap::with_capacity(tracks.len());
-    let mut by_id: HashMap<&str, &Track> = HashMap::with_capacity(tracks.len());
-    let mut by_base_id: HashMap<&str, Vec<&Track>> = HashMap::new();
-
-    for t in tracks {
-        if let Some(ref root) = t.source_dir {
-            let full = format!("{}/{}", root.trim_end_matches('/'), t.rel_path);
-            by_path.insert(full, t);
-        } else {
-            by_path.insert(t.rel_path.clone(), t);
-        }
-        by_id.insert(t.id.as_str(), t);
-        let base = t.id.split('-').next().unwrap_or(t.id.as_str());
-        by_base_id.entry(base).or_default().push(t);
-    }
+    let idx = PlaylistIndexes::build(tracks);
 
     let mut playlists = Vec::new();
     for entry in fs::read_dir(&dir)? {
@@ -54,22 +94,16 @@ pub fn load_all_playlists(paths: &ZunoPaths, tracks: &[Track]) -> Result<Vec<Pla
             continue;
         }
 
-        if let Ok(pl) = load_single_playlist(&path, tracks, &by_path, &by_id, &by_base_id) {
+        if let Ok(pl) = load_single_playlist(&path, &idx) {
             playlists.push(pl);
         }
     }
 
-    playlists.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    playlists.sort_by_cached_key(|p| p.title.to_lowercase());
     Ok(playlists)
 }
 
-fn load_single_playlist(
-    file_path: &Path,
-    all_tracks: &[Track],
-    by_path: &HashMap<String, &Track>,
-    by_id: &HashMap<&str, &Track>,
-    by_base_id: &HashMap<&str, Vec<&Track>>,
-) -> Result<Playlist> {
+fn load_single_playlist(file_path: &Path, idx: &PlaylistIndexes<'_>) -> Result<Playlist> {
     let raw = fs::read_to_string(file_path)?;
     let file_name = file_path
         .file_name()
@@ -88,7 +122,7 @@ fn load_single_playlist(
     let mut pending_disp: Option<String> = None;
 
     for raw_line in raw.lines() {
-        let line = raw_line.trim().trim_start_matches('\u{feff}');
+        let line = raw_line.trim_start_matches('\u{feff}').trim();
         if line.is_empty() {
             continue;
         }
@@ -105,7 +139,12 @@ fn load_single_playlist(
                 }
             } else if let Some(rest) = line.strip_prefix(EXTINF_PREFIX) {
                 if let Some((dur_part, disp_part)) = rest.split_once(',') {
-                    pending_dur = dur_part.trim().parse::<i64>().ok();
+                    // Handle extended M3U attributes like `#EXTINF:180 tvg-id="x",Title`.
+                    pending_dur = dur_part
+                        .trim()
+                        .split_whitespace()
+                        .next()
+                        .and_then(|tok| tok.parse::<i64>().ok());
                     let disp = disp_part.trim();
                     if !disp.is_empty() {
                         pending_disp = Some(disp.to_string());
@@ -135,9 +174,10 @@ fn load_single_playlist(
         let canonical_rel = strip_songs_prefix(&entry.raw_path);
 
         // Tier 1: Direct relative path match inside zuno/songs/ or exact external absolute path
-        let direct_match = by_path
+        let direct_match = idx
+            .by_path
             .get(&unified_raw)
-            .or_else(|| canonical_rel.as_ref().and_then(|rel| by_path.get(rel.as_str())));
+            .or_else(|| canonical_rel.as_ref().and_then(|rel| idx.by_path.get(rel.as_str())));
         if let Some(track) = direct_match {
             track_ids.push(track.id.clone());
             resolved_tracks.push(*track);
@@ -151,52 +191,48 @@ fn load_single_playlist(
         // Tier 2: Self-heal via `#EXTZUNO-ID` (exact content fingerprint match after rename/move)
         let mut healed: Option<&Track> = None;
         if let Some(ref z_id) = entry.zuno_id {
-            if let Some(track) = by_id.get(z_id.as_str()) {
+            if let Some(track) = idx.by_id.get(z_id.as_str()) {
                 healed = Some(*track);
             } else {
                 let base = z_id.split('-').next().unwrap_or(z_id.as_str());
-                if let Some(candidates) = by_base_id.get(base) {
+                if let Some(candidates) = idx.by_base_id.get(base) {
                     healed = candidates.first().copied();
                 }
             }
         }
 
-        // Tier 3: Self-heal via `#EXTINF` (display string + optional duration within ±2s)
+        // Tier 3: O(1) indexed self-heal via `#EXTINF` (display/title + optional duration ±2s)
         if healed.is_none() {
             if let Some(ref disp) = entry.extinf_display {
                 let needle = disp.to_lowercase();
-                healed = all_tracks.iter().find(|t| {
-                    let extinf_match = t.extinf_display().to_lowercase() == needle
-                        || t.title.to_lowercase() == needle;
-                    let dur_ok = match entry.extinf_duration {
-                        Some(d) if d > 0 && t.duration_secs > 0 => {
-                            (d - t.duration_secs as i64).abs() <= 2
-                        }
-                        _ => true,
-                    };
-                    extinf_match && dur_ok
-                });
+                let dur_ok = |t: &&Track| match entry.extinf_duration {
+                    Some(d) if d > 0 && t.duration_secs > 0 => {
+                        (d - t.duration_secs as i64).abs() <= 2
+                    }
+                    _ => true,
+                };
+                healed = idx
+                    .by_display
+                    .get(&needle)
+                    .and_then(|list| list.iter().copied().find(dur_ok))
+                    .or_else(|| {
+                        idx.by_title
+                            .get(&needle)
+                            .and_then(|list| list.iter().copied().find(dur_ok))
+                    });
             }
         }
 
-        // Tier 4: Unique filename fallback (if a file moved to another subfolder keeping its name)
+        // Tier 4: O(1) indexed unique filename fallback (moved to another subfolder keeping filename)
         if healed.is_none() {
             if let Some(file_only) = Path::new(&entry.raw_path.replace('\\', "/"))
                 .file_name()
                 .and_then(|s| s.to_str())
             {
-                let matches: Vec<&Track> = all_tracks
-                    .iter()
-                    .filter(|t| {
-                        Path::new(&t.rel_path)
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .map(|n| n.eq_ignore_ascii_case(file_only))
-                            .unwrap_or(false)
-                    })
-                    .collect();
-                if matches.len() == 1 {
-                    healed = Some(matches[0]);
+                if let Some(matches) = idx.by_filename.get(&file_only.to_ascii_lowercase()) {
+                    if matches.len() == 1 {
+                        healed = Some(matches[0]);
+                    }
                 }
             }
         }
@@ -252,14 +288,15 @@ pub fn create_playlist(
     })
 }
 
-/// Save/overwrite an existing playlist `.m3u8` file atomically.
+/// Save/overwrite an existing playlist file atomically (preserves `.m3u` if it exists).
 pub fn save_playlist(
     paths: &ZunoPaths,
     playlist: &Playlist,
     resolved_tracks: &[&Track],
 ) -> Result<()> {
     paths.ensure_dirs()?;
-    let file_path = playlist_file_path(paths, &playlist.slug);
+    let file_path = existing_playlist_file_path(paths, &playlist.slug)
+        .unwrap_or_else(|| playlist_file_path(paths, &playlist.slug));
     write_m3u8_atomic(
         &file_path,
         &playlist.title,
@@ -270,12 +307,21 @@ pub fn save_playlist(
 
 pub fn delete_playlist(paths: &ZunoPaths, name_or_slug: &str) -> Result<String> {
     let slug = slugify_playlist_name(name_or_slug)?;
-    let file_path = playlist_file_path(paths, &slug);
-    if !file_path.exists() {
+    let Some(file_path) = existing_playlist_file_path(paths, &slug) else {
         return Err(ZunoError::PlaylistNotFound(name_or_slug.to_string()));
-    }
+    };
     fs::remove_file(file_path)?;
     Ok(slug)
+}
+
+fn existing_playlist_file_path(paths: &ZunoPaths, slug: &str) -> Option<PathBuf> {
+    for ext in ["m3u8", "m3u"] {
+        let p = paths.playlists_dir().join(format!("{slug}.{ext}"));
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 pub fn playlist_file_path(paths: &ZunoPaths, slug: &str) -> PathBuf {
@@ -315,9 +361,7 @@ fn write_m3u8_atomic(
         out.push('\n');
     }
 
-    let tmp_path = file_path.with_extension("m3u8.tmp");
-    fs::write(&tmp_path, out.as_bytes())?;
-    fs::rename(&tmp_path, file_path)?;
+    atomic_write(file_path, out.as_bytes())?;
     Ok(())
 }
 

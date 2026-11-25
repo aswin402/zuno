@@ -1,10 +1,12 @@
-use crate::config::{ZunoPaths, slugify_playlist_name};
+use crate::config::{ZunoPaths, atomic_write, slugify_playlist_name};
 use crate::error::{Result, ZunoError};
-use crate::models::{CoverArt, FolderSummary, MusicSource, PersistedState, Playlist, Track};
+use crate::models::{
+    CoverArt, FolderSummary, MusicSource, PersistedState, Playlist, ROOT_FOLDER_LABEL, Track,
+};
 use crate::playlist;
 use crate::scanner;
 use crate::search;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -57,17 +59,20 @@ impl Library {
         self.by_id.get(id).and_then(|&i| self.tracks.get(i))
     }
 
+    pub fn has_track(&self, id: &str) -> bool {
+        self.by_id.contains_key(id)
+    }
+
     pub fn tracks_in_folder(&self, folder: &str) -> Vec<&Track> {
-        let clean = folder.trim().trim_matches('/').replace('\\', "/");
+        let normalized = folder.trim().replace('\\', "/");
+        let clean = normalized.trim_matches('/');
+        if clean.is_empty() {
+            return self.tracks.iter().collect();
+        }
+        let prefix = format!("{clean}/");
         self.tracks
             .iter()
-            .filter(|t| {
-                if clean.is_empty() {
-                    true
-                } else {
-                    t.folder == clean || t.folder.starts_with(&format!("{}/", clean))
-                }
-            })
+            .filter(|t| t.folder == clean || t.folder.starts_with(&prefix))
             .collect()
     }
 
@@ -75,7 +80,7 @@ impl Library {
         let mut map: BTreeMap<String, (usize, u64)> = BTreeMap::new();
         for t in &self.tracks {
             let key = if t.folder.is_empty() {
-                "(root)".to_string()
+                ROOT_FOLDER_LABEL.to_string()
             } else {
                 t.folder.clone()
             };
@@ -163,13 +168,8 @@ impl Library {
     }
 
     pub fn find_playlist(&self, name_or_slug: &str) -> Option<&Playlist> {
-        let needle = name_or_slug.trim().to_lowercase();
-        let slug = slugify_playlist_name(name_or_slug).ok();
-        self.playlists.iter().find(|p| {
-            p.slug.to_lowercase() == needle
-                || p.title.to_lowercase() == needle
-                || slug.as_deref() == Some(p.slug.as_str())
-        })
+        self.find_playlist_index(name_or_slug)
+            .map(|idx| &self.playlists[idx])
     }
 
     pub fn playlist_tracks(&self, name_or_slug: &str) -> Result<(Playlist, Vec<Track>)> {
@@ -189,8 +189,7 @@ impl Library {
         let resolved = self.resolve_track_refs(track_ids)?;
         let pl = playlist::create_playlist(&self.paths, name, &resolved)?;
         self.playlists.push(pl.clone());
-        self.playlists
-            .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        self.playlists.sort_by_cached_key(|p| p.title.to_lowercase());
         Ok(pl)
     }
 
@@ -217,8 +216,9 @@ impl Library {
         }
 
         let pl = &mut self.playlists[idx];
+        let mut existing: HashSet<String> = pl.track_ids.iter().cloned().collect();
         for id in track_ids {
-            if !pl.track_ids.contains(id) {
+            if existing.insert(id.clone()) {
                 pl.track_ids.push(id.clone());
             }
         }
@@ -254,11 +254,22 @@ impl Library {
         if abs.exists() {
             fs::remove_file(&abs)?;
         }
-        // Clean references from any playlists holding this track
+        // Clean references from any playlists holding this track and persist on disk before rescan.
+        let mut dirty_playlists: Vec<Playlist> = Vec::new();
         for pl in &mut self.playlists {
-            if pl.track_ids.contains(&track.id) {
-                pl.track_ids.retain(|id| id != &track.id);
+            let before = pl.track_ids.len();
+            pl.track_ids.retain(|id| id != &track.id);
+            if pl.track_ids.len() != before {
+                dirty_playlists.push(pl.clone());
             }
+        }
+        for pl in &dirty_playlists {
+            let resolved: Vec<&Track> = pl
+                .track_ids
+                .iter()
+                .filter_map(|id| self.track_by_id(id))
+                .collect();
+            let _ = playlist::save_playlist(&self.paths, pl, &resolved);
         }
         self.rescan()?;
         Ok(track.title)
@@ -273,9 +284,7 @@ impl Library {
 
     pub fn save_state(&self, state: &PersistedState) -> Result<()> {
         self.paths.ensure_dirs()?;
-        let tmp = self.paths.cache_dir().join("state.json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(state)?)?;
-        fs::rename(&tmp, self.paths.state_path())?;
+        atomic_write(&self.paths.state_path(), &serde_json::to_vec_pretty(state)?)?;
         Ok(())
     }
 

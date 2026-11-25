@@ -3,6 +3,7 @@ import { TrackRow } from '@/components/TrackRow'
 import { SortControl } from '@/components/SortControl'
 import { VirtualTrackList } from '@/components/VirtualTrackList'
 import { ZunoIcon } from '@/components/ZunoIcon'
+import { estimateTrackRowHeight } from '@/lib/format'
 import { sortTracks, type SortDir, type SortField } from '@/lib/sortTracks'
 import type { AppearanceSettings } from '@/lib/appearance'
 import type { Playlist, Track } from '@/lib/zunoApi'
@@ -23,11 +24,6 @@ interface HomePageProps {
   onDeleteTrack: (track: Track) => void
   onCreatePlaylist: (initialTrackId?: string) => void
   onAddToPlaylist: (slug: string, trackId: string) => void
-}
-
-function estimateTrackRowHeight(a: AppearanceSettings): number {
-  const base = a.density === 'compact' ? 50 : a.density === 'spacious' ? 68 : 60
-  return a.showTrackOverline ? base : base - 8
 }
 
 export const HomePage = memo(function HomePage({
@@ -67,7 +63,7 @@ export const HomePage = memo(function HomePage({
     [onCreatePlaylist],
   )
 
-  const rowHeight = estimateTrackRowHeight(appearance)
+  const rowHeight = estimateTrackRowHeight(appearance.density, appearance.showTrackOverline)
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
