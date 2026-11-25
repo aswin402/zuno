@@ -3,7 +3,7 @@ use crate::eq::EqConfig;
 use crate::spectrum::{AudioLevels, SharedSpectrum};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
 use zuno_core::{
     CoverArt, Library, PersistedState, PlayState, PlaybackStatus, QueueManager, Result, Track,
@@ -92,21 +92,23 @@ impl ZunoService {
 
         // Single dedicated audio thread: owns OutputStream/Sink safely.
         // Blocks with zero CPU wakeups while idle/paused, ticks at 25ms during active crossfades,
-        // and polls at 250ms while playing to trigger early crossfades & auto-advance.
+        // and uses an absolute `next_tick` deadline (200ms) while playing so frequent `GetPosition`
+        // status polls from UI / MPRIS can NEVER starve auto-advance or crossfade envelopes.
         std::thread::Builder::new()
             .name("zuno-audio".into())
             .spawn(move || {
                 let mut active = false;
                 let mut crossfade_secs: f32 = 0.0;
                 let mut fading = false;
+                let mut next_tick = Instant::now() + Duration::from_millis(200);
                 loop {
-                    let msg = if fading {
-                        rx.recv_timeout(Duration::from_millis(25))
-                    } else if active {
-                        rx.recv_timeout(Duration::from_millis(250))
+                    let msg = if fading || active {
+                        let wait = next_tick.saturating_duration_since(Instant::now());
+                        rx.recv_timeout(wait)
                     } else {
                         rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
                     };
+                    let mut timed_out = false;
                     match msg {
                         Ok(AudioCmd::LoadAndPlay {
                             path,
@@ -116,6 +118,8 @@ impl ZunoService {
                             let res = engine.load_and_play(&path, volume);
                             active = res.is_ok();
                             fading = engine.tick_transition();
+                            next_tick = Instant::now()
+                                + Duration::from_millis(if fading { 25 } else { 200 });
                             let _ = reply.send(res);
                         }
                         Ok(AudioCmd::Pause) => {
@@ -126,6 +130,7 @@ impl ZunoService {
                         Ok(AudioCmd::Resume) => {
                             engine.resume();
                             active = true;
+                            next_tick = Instant::now() + Duration::from_millis(200);
                         }
                         Ok(AudioCmd::Stop) => {
                             engine.stop();
@@ -149,69 +154,81 @@ impl ZunoService {
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            fading = engine.tick_transition();
+                            timed_out = true;
+                        }
+                    }
 
-                            // Check if current track is approaching end for early overlapping crossfade,
-                            // or has finished playing normally.
-                            let early_crossfade = if crossfade_secs > 0.05 && !fading && active {
-                                let cur_dur = thread_inner
-                                    .lock()
-                                    .ok()
-                                    .and_then(|s| {
-                                        if s.play_state != PlayState::Playing {
-                                            return None;
-                                        }
-                                        let tid = s.queue.current_track_id()?;
-                                        Some(s.library.track_by_id(tid)?.duration_secs as f64)
-                                    })
-                                    .unwrap_or(0.0);
-                                let pos = engine.position_secs();
-                                cur_dur > (crossfade_secs as f64) + 1.5
-                                    && pos >= cur_dur - (crossfade_secs as f64)
-                            } else {
-                                false
-                            };
+                    if (active || fading) && (timed_out || Instant::now() >= next_tick) {
+                        fading = engine.tick_transition();
 
-                            if early_crossfade || engine.is_finished() {
-                                let should_advance = thread_inner
-                                    .lock()
-                                    .map(|s| s.play_state == PlayState::Playing)
-                                    .unwrap_or(false);
-                                if should_advance {
-                                    if let Some(svc) = weak_service.upgrade() {
-                                        let next_path = svc.advance_internal(true);
-                                        match next_path {
+                        // Check if current track is approaching end for early overlapping crossfade,
+                        // or has finished playing normally.
+                        let early_crossfade = if crossfade_secs > 0.05 && !fading && active {
+                            let cur_dur = thread_inner
+                                .lock()
+                                .ok()
+                                .and_then(|s| {
+                                    if s.play_state != PlayState::Playing {
+                                        return None;
+                                    }
+                                    let tid = s.queue.current_track_id()?;
+                                    Some(s.library.track_by_id(tid)?.duration_secs as f64)
+                                })
+                                .unwrap_or(0.0);
+                            let pos = engine.position_secs();
+                            cur_dur > (crossfade_secs as f64) + 1.5
+                                && pos >= cur_dur - (crossfade_secs as f64)
+                        } else {
+                            false
+                        };
+
+                        if active && (early_crossfade || engine.is_finished()) {
+                            let should_advance = thread_inner
+                                .lock()
+                                .map(|s| s.play_state == PlayState::Playing)
+                                .unwrap_or(false);
+                            if should_advance {
+                                if let Some(svc) = weak_service.upgrade() {
+                                    let mut advanced = false;
+                                    let mut hit_end = false;
+                                    for _ in 0..5 {
+                                        match svc.advance_internal(true) {
                                             Some((path, vol)) => {
-                                                if engine.load_and_play(&path, vol).is_err() {
-                                                    active = false;
-                                                    fading = false;
-                                                    if let Ok(mut st) = thread_inner.lock() {
-                                                        st.play_state = PlayState::Stopped;
-                                                    }
-                                                } else {
+                                                if engine.load_and_play(&path, vol).is_ok() {
                                                     fading = engine.tick_transition();
+                                                    advanced = true;
+                                                    if let Ok(st) = thread_inner.lock() {
+                                                        Self::persist_locked(&st, 0.0);
+                                                    }
+                                                    break;
                                                 }
                                             }
                                             None => {
-                                                // If early crossfade fired on the last track with repeat off,
-                                                // let the final track finish cleanly instead of cutting it off early!
-                                                if engine.is_finished() {
-                                                    engine.stop();
-                                                    active = false;
-                                                    fading = false;
-                                                    if let Ok(mut st) = thread_inner.lock() {
-                                                        st.play_state = PlayState::Stopped;
-                                                    }
-                                                }
+                                                hit_end = true;
+                                                break;
                                             }
                                         }
                                     }
-                                } else {
-                                    active = false;
-                                    fading = false;
+                                    if !advanced && (!hit_end || engine.is_finished()) {
+                                        // If early crossfade fired on the last track with repeat off,
+                                        // let the final track finish cleanly instead of cutting it off early!
+                                        engine.stop();
+                                        active = false;
+                                        fading = false;
+                                        if let Ok(mut st) = thread_inner.lock() {
+                                            st.play_state = PlayState::Stopped;
+                                            Self::persist_locked(&st, 0.0);
+                                        }
+                                    }
                                 }
+                            } else if engine.is_finished() {
+                                active = false;
+                                fading = false;
                             }
                         }
+
+                        next_tick = Instant::now()
+                            + Duration::from_millis(if fading { 25 } else { 200 });
                     }
                 }
             })
@@ -931,5 +948,109 @@ mod tests {
             panic!("expected volume status");
         };
         assert!((st3.volume - 0.42).abs() < 0.001);
+    }
+
+    /// Mock engine that finishes a track on demand to test real-time auto-advance under
+    /// continuous `status()` / `GetPosition` polling (which previously starved `recv_timeout`).
+    struct FinishingMockEngine {
+        finished: Arc<std::sync::atomic::AtomicBool>,
+        load_count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AudioEngine for FinishingMockEngine {
+        fn load_and_play(&mut self, _path: &std::path::Path, _volume: f32) -> Result<()> {
+            self.finished.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn pause(&mut self) {}
+        fn resume(&mut self) {}
+        fn stop(&mut self) {}
+        fn seek(&mut self, _pos: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _volume: f32) {}
+        fn position_secs(&self) -> f64 {
+            0.0
+        }
+        fn is_finished(&self) -> bool {
+            self.finished.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn auto_advances_in_order_and_shuffle_under_frequent_status_polling() {
+        let tmp = tempdir().unwrap();
+        let paths = ZunoPaths::new(tmp.path());
+        paths.ensure_dirs().unwrap();
+        fs::write(paths.songs_dir().join("01.mp3"), b"track-one").unwrap();
+        fs::write(paths.songs_dir().join("02.mp3"), b"track-two").unwrap();
+        fs::write(paths.songs_dir().join("03.mp3"), b"track-three").unwrap();
+
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let load_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let engine = FinishingMockEngine {
+            finished: Arc::clone(&finished),
+            load_count: Arc::clone(&load_count),
+        };
+        let svc = ZunoService::open_with_engine(paths, engine).unwrap();
+
+        let IpcResponse::Ok {
+            data: IpcData::Tracks { tracks, .. },
+        } = svc.handle_request(IpcRequest::ListSongs {
+            folder: None,
+            limit: None,
+            offset: None,
+        })
+        else {
+            panic!("expected tracks");
+        };
+        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+
+        // 1. Start in ordered mode, simulate track finishing while polling status() every 20ms
+        let _ = svc.handle_request(IpcRequest::SetQueue {
+            track_ids: ids.clone(),
+            start_id: Some(ids[0].clone()),
+            label: Some("Songs".into()),
+            shuffle: Some(false),
+        });
+        assert_eq!(svc.status().queue_index, Some(0));
+
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if svc.status().queue_index == Some(1) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            svc.status().queue_index,
+            Some(1),
+            "ordered auto-advance must not be starved by frequent status() polling"
+        );
+        assert_eq!(svc.status().state, PlayState::Playing);
+
+        // 2. Enable shuffle, simulate track finishing while polling status() every 20ms
+        let _ = svc.handle_request(IpcRequest::SetMode {
+            shuffle: Some(true),
+            repeat: None,
+        });
+        assert_eq!(svc.status().queue_index, Some(0));
+
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if svc.status().queue_index == Some(1) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            svc.status().queue_index,
+            Some(1),
+            "shuffled auto-advance must not be starved by frequent status() polling"
+        );
+        assert_eq!(svc.status().state, PlayState::Playing);
     }
 }

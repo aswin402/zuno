@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.16] — 2026-11-25
+
+Fixed automatic next-track playback (both ordered and shuffled) and true random starting track selection in shuffle mode.
+
+### Fixed
+- **Auto-Advance Timeout Starvation (`crates/zuno-audio/src/service.rs`)**: Replaced relative `rx.recv_timeout(250ms)` (which was continually reset by concurrent 350ms UI + 350ms MPRIS `GetPosition` status polls, starving `engine.is_finished()` and crossfade ticks) with an absolute wall-clock `next_tick` deadline (`200ms` playing / `25ms` fading). Persists `state.json` on automatic advances, skips unreadable tracks cleanly, and adds a 20ms-polling regression test for both ordered and shuffled auto-advance.
+- **Shuffle Queue Start & Cycle Re-Shuffle (`crates/zuno-core/src/queue.rs`, `src/App.tsx`)**: Clicking **Shuffle** or **Play all** with Shuffle enabled now starts on a random track (`start_id: null`) instead of pinning song #1 first, and re-shuffles without repeating the last track when `Repeat: All` wraps around.
+
 ## [0.0.15] — 2026-11-25
 
 Automated cross-platform GitHub Releases (Linux, macOS, Windows), Zuno-themed animated single-binary CLI installers (`install.sh` + `install.ps1`), and an in-app self-updater with notification dialog and automatic zero-copy data backup.

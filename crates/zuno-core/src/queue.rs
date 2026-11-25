@@ -42,16 +42,25 @@ impl QueueManager {
         }
 
         self.order = self.original_order.clone();
-        let target_idx = start_track_id
-            .and_then(|id| self.order.iter().position(|t| t == id))
-            .unwrap_or(0);
 
         if self.shuffle {
-            let current = self.order.remove(target_idx);
-            self.fisher_yates_shuffle();
-            self.order.insert(0, current);
+            if let Some(id) = start_track_id {
+                if let Some(pos) = self.order.iter().position(|t| t == id) {
+                    let current = self.order.remove(pos);
+                    self.fisher_yates_shuffle();
+                    self.order.insert(0, current);
+                } else {
+                    self.fisher_yates_shuffle();
+                }
+            } else {
+                // No explicit starting track (e.g. Shuffle All): randomize the entire order.
+                self.fisher_yates_shuffle();
+            }
             self.current_index = Some(0);
         } else {
+            let target_idx = start_track_id
+                .and_then(|id| self.order.iter().position(|t| t == id))
+                .unwrap_or(0);
             self.current_index = Some(target_idx);
         }
 
@@ -186,6 +195,14 @@ impl QueueManager {
 
         match self.repeat {
             RepeatMode::All => {
+                if self.shuffle && self.order.len() > 1 {
+                    let prev_last = self.order.last().cloned();
+                    self.fisher_yates_shuffle();
+                    if prev_last.as_deref() == self.order.first().map(String::as_str) {
+                        let last = self.order.len() - 1;
+                        self.order.swap(0, last);
+                    }
+                }
                 self.current_index = Some(0);
                 self.order.first().cloned()
             }

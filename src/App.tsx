@@ -154,7 +154,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.15')
+  const [appVersion, setAppVersion] = useState<string>('0.0.16')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)
@@ -698,7 +698,7 @@ export default function App() {
         zunoApi
           .setQueue({
             track_ids: ids,
-            start_id: startId ?? ids[0],
+            start_id: startId ?? (useShuffle ? null : ids[0]),
             label,
             shuffle: forceShuffle ?? null,
           })
@@ -1378,13 +1378,13 @@ export default function App() {
       const list = subset ?? tracks
       startQueue(
         list.map((t) => t.id),
-        list[0]?.id,
+        shuffle ? undefined : list[0]?.id,
         'Songs',
         undefined,
         'songs',
       )
     },
-    [tracks, startQueue],
+    [tracks, shuffle, startQueue],
   )
 
   const handleOpenCreatePlaylist = useCallback((tid?: string) => {
