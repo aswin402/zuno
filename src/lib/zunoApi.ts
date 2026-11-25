@@ -553,6 +553,21 @@ export const zunoWindow = {
       return false
     }
   },
+  setZoom: async (percent: number): Promise<void> => {
+    const clamped = Math.round(Math.min(200, Math.max(50, percent)))
+    const factor = clamped / 100
+    const tauri = getTauriInternals()
+    if (tauri) {
+      if (typeof document !== 'undefined') {
+        document.documentElement.style.zoom = ''
+      }
+      await tauri.invoke('window_set_zoom', { factor }).catch(() => {})
+      return
+    }
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.zoom = clamped === 100 ? '' : `${clamped}%`
+    }
+  },
   quit: async () => {
     const tauri = getTauriInternals()
     if (tauri) await tauri.invoke('app_quit').catch(() => {})

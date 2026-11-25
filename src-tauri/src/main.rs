@@ -144,6 +144,19 @@ fn window_toggle_fullscreen(window: WebviewWindow) -> bool {
 }
 
 #[tauri::command]
+fn window_set_zoom(window: WebviewWindow, factor: f64) -> Result<f64, String> {
+    let clamped = if factor.is_finite() {
+        factor.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    window
+        .set_zoom(clamped)
+        .map_err(|e| format!("failed to set window zoom: {e}"))?;
+    Ok(clamped)
+}
+
+#[tauri::command]
 fn app_quit(app: AppHandle, state: tauri::State<'_, AppState>) {
     state.quitting.store(true, Ordering::SeqCst);
     state.fm_tuner.stop(Some(&state.service));
@@ -488,6 +501,7 @@ fn main() {
             window_toggle_maximize,
             window_is_maximized,
             window_toggle_fullscreen,
+            window_set_zoom,
             window_close,
             window_start_dragging,
             app_quit,

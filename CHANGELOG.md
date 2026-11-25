@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.20] — 2026-11-25
+
+Chrome-style Display Zoom (50% – 200%) in Customize Studio with native Tauri v2 full-page WebView scaling and keyboard/wheel shortcuts.
+
+### Added
+- **Native Full-Page Display Zoom (`src-tauri/src/main.rs`, `src/lib/zunoApi.ts`, `src/lib/appearance.ts`)**: Added `window_set_zoom` calling Tauri v2 `WebviewWindow::set_zoom(factor)` across Linux (WebKitGTK), macOS (WKWebView), and Windows (WebView2) with automatic CSS `zoom` fallback in web mode, persisted cleanly as `uiZoom` (`50% – 200%`, default `100%`).
+- **Customize Studio Zoom Controls & Live Shortcuts (`src/pages/CustomizePage.tsx`, `src/App.tsx`)**: Added a dedicated **Display Zoom** page under **Window, Chrome & Nav** plus an inline zoom control inside **Layout & Geometry** featuring `−` / `+` (`10%` steps), smooth `50%–200%` slider, Chrome-style presets (`75%`, `80%`, `90%`, `100%`, `110%`, `125%`, `150%`, `175%`, `200%`), **Reset 100%**, and live `Ctrl +` / `Ctrl −` / `Ctrl 0` / `Ctrl + Scroll` shortcuts.
+
 ## [0.0.19] — 2026-11-25
 
 FM Radio playing animation contrast fix, Connect/Reconnect/Disconnect live controls, and unified mobile + desktop Now Playing layout.

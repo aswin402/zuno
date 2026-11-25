@@ -15,11 +15,13 @@ import {
   Layers,
   LayoutGrid,
   Maximize2,
+  Minus,
   Music2,
   Paintbrush,
   Palette,
   PanelTop,
   Play,
+  Plus,
   RectangleHorizontal,
   RotateCcw,
   Search,
@@ -28,6 +30,8 @@ import {
   Type,
   Wand2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import { ColorPicker } from '@/components/ColorPicker'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
@@ -74,10 +78,15 @@ import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
 import {
   ACCENT_PRESETS,
+  clampUiZoom,
   DEFAULT_APPEARANCE,
   ICON_PACK_OPTIONS,
   resolveEffectivePalette,
   THEME_PRESETS,
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  UI_ZOOM_PRESETS,
+  UI_ZOOM_STEP,
   windowRadiusClass,
   type AppearanceSettings,
   type BgPatternId,
@@ -122,6 +131,7 @@ type StudioPageId =
   | 'window_corners'
   | 'top_titlebar'
   | 'desktop_nav'
+  | 'display_zoom'
   | 'surface_materials'
   | 'canvas_background'
   | 'scroll_progress'
@@ -223,6 +233,15 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
         keywords: 'navigation sidebar floating navbar dock menu capsule smoothui great-ui pill',
         icon: Compass,
       },
+      {
+        id: 'display_zoom',
+        categoryId: 'window_chrome_nav',
+        label: 'Display Zoom',
+        description:
+          'Zoom the entire Zuno interface in or out (50% – 200%, Chrome-style 100%, 110%, 125%...) with live keyboard shortcuts.',
+        keywords: 'zoom scale magnify shrink size chrome 100 110 125 90 80 75 150 200 layout dpi',
+        icon: ZoomIn,
+      },
     ],
   },
   {
@@ -290,8 +309,8 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
         categoryId: 'surfaces_scroll_motion',
         label: 'Layout & Geometry',
         description:
-          'Fine-tune global song row corner roundness and vertical list spacing across your library.',
-        keywords: 'layout geometry corner radius sharp balanced round density compact comfortable spacious',
+          'Fine-tune interface zoom (50%–200%), song row corner roundness, and vertical list spacing across your library.',
+        keywords: 'layout geometry zoom scale 100 110 corner radius sharp balanced round density compact comfortable spacious',
         icon: Box,
       },
     ],
@@ -1862,6 +1881,137 @@ export function CustomizePage({
             </div>
           )}
 
+          {activePage === 'display_zoom' && (
+            <div className="space-y-6">
+              <div className="overflow-hidden rounded-2xl border border-border bg-card p-5 sm:p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                      INTERFACE ZOOM · CHROME-STYLE SCALING
+                    </p>
+                    <div className="mt-1.5 flex items-baseline gap-2.5">
+                      <span className="font-mono text-4xl font-bold tracking-tight tabular-nums text-foreground">
+                        {settings.uiZoom}%
+                      </span>
+                      <span className="rounded-full border border-border bg-secondary px-2.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">
+                        {(settings.uiZoom / 100).toFixed(2)}×{' '}
+                        {settings.uiZoom === 100
+                          ? 'Default'
+                          : settings.uiZoom > 100
+                            ? 'Zoomed In'
+                            : 'Zoomed Out'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Tooltip label={`Zoom out (-${UI_ZOOM_STEP}%) · Ctrl -`} side="top">
+                      <button
+                        type="button"
+                        disabled={settings.uiZoom <= UI_ZOOM_MIN}
+                        onClick={() =>
+                          onChange({ uiZoom: clampUiZoom(settings.uiZoom - UI_ZOOM_STEP) })
+                        }
+                        aria-label="Zoom out"
+                        className="t-press flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground transition-colors hover:bg-secondary disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <ZoomOut className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+
+                    <Tooltip label={`Zoom in (+${UI_ZOOM_STEP}%) · Ctrl +`} side="top">
+                      <button
+                        type="button"
+                        disabled={settings.uiZoom >= UI_ZOOM_MAX}
+                        onClick={() =>
+                          onChange({ uiZoom: clampUiZoom(settings.uiZoom + UI_ZOOM_STEP) })
+                        }
+                        aria-label="Zoom in"
+                        className="t-press flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <ZoomIn className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+
+                    <button
+                      type="button"
+                      disabled={settings.uiZoom === 100}
+                      onClick={() => onChange({ uiZoom: 100 })}
+                      className="t-press inline-flex h-10 items-center gap-1.5 rounded-full border border-border bg-background px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Reset 100%</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Smooth Zoom Slider */}
+                <div className="mt-5 space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {UI_ZOOM_MIN}%
+                    </span>
+                    <input
+                      type="range"
+                      aria-label="Display zoom percentage"
+                      min={UI_ZOOM_MIN}
+                      max={UI_ZOOM_MAX}
+                      step={5}
+                      value={settings.uiZoom}
+                      onChange={(e) => onChange({ uiZoom: clampUiZoom(Number(e.target.value)) })}
+                      className="h-1.5 flex-1 cursor-pointer accent-primary"
+                    />
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {UI_ZOOM_MAX}%
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Shortcuts: <kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-foreground">Ctrl +</kbd> zoom in ·{' '}
+                    <kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-foreground">Ctrl -</kbd> zoom out ·{' '}
+                    <kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-foreground">Ctrl 0</kbd> reset ·{' '}
+                    <kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-foreground">Ctrl + Scroll</kbd>
+                  </p>
+                </div>
+              </div>
+
+              <Group
+                title="Chrome-Style Zoom Presets"
+                description="Jump instantly to standard browser zoom levels — scales text, icons, docks, and visualizers crisply."
+              >
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                  {UI_ZOOM_PRESETS.map((pct) => {
+                    const active = settings.uiZoom === pct
+                    return (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => onChange({ uiZoom: pct })}
+                        className={cn(
+                          't-press flex h-11 flex-col items-center justify-center rounded-xl border font-mono text-xs font-semibold tabular-nums transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-primary text-primary-foreground shadow-xs'
+                            : 'border-border bg-card text-foreground hover:bg-secondary',
+                        )}
+                      >
+                        <span>{pct}%</span>
+                        {pct === 100 && (
+                          <span
+                            className={cn(
+                              'text-[9px] font-sans font-normal',
+                              active ? 'text-primary-foreground/80' : 'text-muted-foreground',
+                            )}
+                          >
+                            Default
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+            </div>
+          )}
+
           {activePage === 'layout_geometry' && (
             <div className="space-y-6">
               <LivePreviewStage
@@ -1874,6 +2024,83 @@ export function CustomizePage({
               >
                 <LayoutGeometryPreview settings={settings} />
               </LivePreviewStage>
+
+              {/* Inline Zoom & Scale Control directly inside Layout & Geometry */}
+              <Group
+                title="Display Zoom (Chrome-Style)"
+                description="Scale the entire layout in or out (50% – 200%) like Chrome page zoom, or use Ctrl + / Ctrl - / Ctrl 0."
+              >
+                <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={settings.uiZoom <= UI_ZOOM_MIN}
+                        onClick={() =>
+                          onChange({ uiZoom: clampUiZoom(settings.uiZoom - UI_ZOOM_STEP) })
+                        }
+                        aria-label="Zoom out"
+                        className="t-press flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-foreground hover:bg-secondary disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <Minus className="h-4 w-4" />
+                      </button>
+
+                      <span className="min-w-[64px] text-center font-mono text-base font-bold tabular-nums text-foreground">
+                        {settings.uiZoom}%
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled={settings.uiZoom >= UI_ZOOM_MAX}
+                        onClick={() =>
+                          onChange({ uiZoom: clampUiZoom(settings.uiZoom + UI_ZOOM_STEP) })
+                        }
+                        aria-label="Zoom in"
+                        className="t-press flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[80, 90, 100, 110, 125, 150].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => onChange({ uiZoom: pct })}
+                          className={cn(
+                            'rounded-full border px-2.5 py-1 font-mono text-[11px] font-medium tabular-nums transition-colors cursor-pointer',
+                            settings.uiZoom === pct
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-background text-muted-foreground hover:bg-secondary hover:text-foreground',
+                          )}
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[10.5px] tabular-nums text-muted-foreground">
+                      {UI_ZOOM_MIN}%
+                    </span>
+                    <input
+                      type="range"
+                      aria-label="Layout zoom percentage"
+                      min={UI_ZOOM_MIN}
+                      max={UI_ZOOM_MAX}
+                      step={5}
+                      value={settings.uiZoom}
+                      onChange={(e) => onChange({ uiZoom: clampUiZoom(Number(e.target.value)) })}
+                      className="h-1.5 flex-1 cursor-pointer accent-primary"
+                    />
+                    <span className="font-mono text-[10.5px] tabular-nums text-muted-foreground">
+                      {UI_ZOOM_MAX}%
+                    </span>
+                  </div>
+                </div>
+              </Group>
 
               <div className="grid gap-6 sm:grid-cols-2">
                 <Group title="Corner Radius" description="Roundness across song rows, tiles, and cards.">

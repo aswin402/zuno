@@ -141,6 +141,18 @@ export interface AppearanceSettings {
   dockGradualBlur: boolean
   /** Audio transition / crossfade & fade-in duration in seconds (0 = off, up to 10s). */
   crossfadeSecs: number
+  /** Chrome-style full-interface display zoom percentage (50–200, default 100). */
+  uiZoom: number
+}
+
+export const UI_ZOOM_MIN = 50
+export const UI_ZOOM_MAX = 200
+export const UI_ZOOM_STEP = 10
+export const UI_ZOOM_PRESETS = [75, 80, 90, 100, 110, 125, 150, 175, 200] as const
+
+export function clampUiZoom(pct: number): number {
+  if (!Number.isFinite(pct)) return 100
+  return Math.round(Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, pct)))
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -185,6 +197,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   showTrackDuration: true,
   dockGradualBlur: true,
   crossfadeSecs: 0,
+  uiZoom: 100,
 }
 
 const STORAGE_KEY = 'zuno:appearance'
@@ -658,6 +671,10 @@ export function loadAppearance(): AppearanceSettings {
         parsed.customColors && typeof parsed.customColors === 'object'
           ? (parsed.customColors as CustomColorOverrides)
           : {},
+      uiZoom:
+        typeof parsed.uiZoom === 'number'
+          ? clampUiZoom(parsed.uiZoom)
+          : DEFAULT_APPEARANCE.uiZoom,
     }
   } catch {
     return DEFAULT_APPEARANCE

@@ -27,9 +27,11 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   applyAppearanceToDom,
+  clampUiZoom,
   DEFAULT_APPEARANCE,
   loadAppearance,
   saveAppearance,
+  UI_ZOOM_STEP,
   windowRadiusClass,
   type AppearanceSettings,
 } from '@/lib/appearance'
@@ -174,7 +176,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.19')
+  const [appVersion, setAppVersion] = useState<string>('0.0.20')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)
@@ -246,6 +248,41 @@ export default function App() {
     applyAppearanceToDom(appearance)
     saveAppearance(appearance)
   }, [appearance])
+
+  const uiZoomRef = useRef<number>(appearance.uiZoom)
+  uiZoomRef.current = appearance.uiZoom
+
+  // Apply Chrome-style display zoom via native Tauri WebviewWindow::set_zoom (or CSS zoom in web mode)
+  useEffect(() => {
+    zunoWindow.setZoom(appearance.uiZoom)
+  }, [appearance.uiZoom])
+
+  const adjustUiZoom = useCallback(
+    (action: 'in' | 'out' | 'reset') => {
+      const current = uiZoomRef.current ?? 100
+      const next =
+        action === 'reset'
+          ? 100
+          : clampUiZoom(current + (action === 'in' ? UI_ZOOM_STEP : -UI_ZOOM_STEP))
+      if (next !== current) {
+        setAppearance((prev) => ({ ...prev, uiZoom: next }))
+      }
+      notify(`Zoom: ${next}%`)
+    },
+    [notify],
+  )
+
+  // Chrome-style Ctrl + Mouse Wheel zoom in native desktop mode
+  useEffect(() => {
+    if (!nativeAudio) return
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.deltaY === 0) return
+      e.preventDefault()
+      adjustUiZoom(e.deltaY < 0 ? 'in' : 'out')
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    return () => window.removeEventListener('wheel', onWheel)
+  }, [nativeAudio, adjustUiZoom])
 
   // Hydrate any user-uploaded custom font files once on startup
   useEffect(() => {
@@ -1501,6 +1538,22 @@ export default function App() {
           zunoWindow.quit()
           return
         }
+        // Chrome-style Zoom shortcuts: Ctrl/Cmd + / - / 0
+        if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+          e.preventDefault()
+          adjustUiZoom('in')
+          return
+        }
+        if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+          e.preventDefault()
+          adjustUiZoom('out')
+          return
+        }
+        if (e.key === '0' || e.code === 'Numpad0') {
+          e.preventDefault()
+          adjustUiZoom('reset')
+          return
+        }
         // Never intercept other system Ctrl/Super combos (Ctrl+C, Super+Space, Ctrl+Alt+T, etc.)
         return
       }
@@ -1576,6 +1629,7 @@ export default function App() {
     handleSeekCommit,
     handleToggleShuffle,
     handleCycleRepeat,
+    adjustUiZoom,
   ])
 
   async function handleConfirmDeleteSong() {
