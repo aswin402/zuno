@@ -19,6 +19,7 @@ export type AppPage =
   | 'recent'
   | 'playlists'
   | 'playlist'
+  | 'radio'
   | 'equalizer'
   | 'customize'
   | 'playing'
@@ -32,6 +33,7 @@ interface DesktopSidebarProps {
   recentCount: number
   sourceCount: number
   eqEnabled: boolean
+  radioActive?: boolean
   mode: ThemeMode
   themeTransition: ThemeTransitionId
   themeTransitionStart: ThemeTransitionStartId
@@ -40,6 +42,7 @@ interface DesktopSidebarProps {
   onToggleMode: () => void
   onGoHome: () => void
   onGoRecent: () => void
+  onGoRadio: () => void
   onOpenSearch: () => void
   onOpenFavorites: () => void
   onOpenPlaylist: (slug: string) => void
@@ -66,6 +69,7 @@ export function DesktopSidebar({
   recentCount,
   sourceCount,
   eqEnabled,
+  radioActive = false,
   mode,
   themeTransition,
   themeTransitionStart,
@@ -74,6 +78,7 @@ export function DesktopSidebar({
   onToggleMode,
   onGoHome,
   onGoRecent,
+  onGoRadio,
   onOpenSearch,
   onOpenFavorites,
   onOpenPlaylist,
@@ -175,6 +180,14 @@ export function DesktopSidebar({
             label="Favorites"
             active={isFav && !searchOpen}
             onClick={onOpenFavorites}
+          />
+          <RailItem
+            icon="radio"
+            pack={iconPack}
+            label="FM Radio"
+            dot={radioActive}
+            active={page === 'radio' && !searchOpen}
+            onClick={onGoRadio}
           />
           <RailItem
             icon="equalizer"

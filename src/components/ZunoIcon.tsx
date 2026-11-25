@@ -9,6 +9,7 @@ import {
   Pause,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   Repeat,
   Repeat1,
@@ -48,6 +49,7 @@ export type ZunoIconName =
   | 'moon'
   | 'folder'
   | 'trash'
+  | 'radio'
 
 interface ZunoIconProps {
   name: ZunoIconName
@@ -79,6 +81,7 @@ const LUCIDE_MAP: Record<ZunoIconName, typeof Music> = {
   moon: Moon,
   folder: Folder,
   trash: Trash2,
+  radio: Radio,
 }
 
 /**
@@ -483,6 +486,23 @@ function renderCustomPath(
             fill={duotone ? 'currentColor' : 'none'}
             fillOpacity={duotone ? 0.14 : 0}
           />
+        </>
+      )
+
+    case 'radio':
+      return (
+        <>
+          <circle
+            cx="12"
+            cy="12"
+            r="2"
+            fill={duotone || filled ? 'currentColor' : 'none'}
+            fillOpacity={duotone && !filled ? 0.25 : 1}
+          />
+          <path d="M16.2 7.8a6 6 0 010 8.4" />
+          <path d="M7.8 16.2a6 6 0 010-8.4" />
+          <path d="M19.1 4.9a10 10 0 010 14.2" />
+          <path d="M4.9 19.1a10 10 0 010-14.2" />
         </>
       )
   }

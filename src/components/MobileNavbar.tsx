@@ -22,6 +22,7 @@ interface MobileNavbarProps {
   sourceCount: number
   eqEnabled: boolean
   eqLabel: string
+  radioActive?: boolean
   mode: ThemeMode
   themeTransition: ThemeTransitionId
   themeTransitionStart: ThemeTransitionStartId
@@ -29,6 +30,7 @@ interface MobileNavbarProps {
   iconPack: IconPackId
   onToggleMode: () => void
   onGoHome: () => void
+  onGoRadio: () => void
   onOpenSearch: () => void
   onGoEqualizer: () => void
   onGoCustomize: () => void
@@ -54,6 +56,7 @@ export function MobileNavbar({
   sourceCount,
   eqEnabled,
   eqLabel,
+  radioActive = false,
   mode,
   themeTransition,
   themeTransitionStart,
@@ -61,6 +64,7 @@ export function MobileNavbar({
   iconPack,
   onToggleMode,
   onGoHome,
+  onGoRadio,
   onOpenSearch,
   onGoEqualizer,
   onGoCustomize,
@@ -178,6 +182,16 @@ export function MobileNavbar({
                 <p className="mb-1.5 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
                   Studio &amp; Audio
                 </p>
+
+                <DrawerItem
+                  icon="radio"
+                  pack={iconPack}
+                  label="FM Radio"
+                  badge={radioActive ? 'LIVE' : undefined}
+                  badgeActive={radioActive}
+                  active={page === 'radio'}
+                  onClick={() => closeAnd(onGoRadio)}
+                />
 
                 <DrawerItem
                   icon="equalizer"

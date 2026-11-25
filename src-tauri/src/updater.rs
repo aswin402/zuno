@@ -245,11 +245,12 @@ pub fn backup_user_data(
         }
     }
 
-    // 2. Copy core Zuno JSON metadata files (`sources.json`, `state.json`, `index.json`)
+    // 2. Copy core Zuno JSON metadata files (`sources.json`, `state.json`, `index.json`, `radio.json`)
     for (src, name) in [
         (paths.sources_path(), "sources.json"),
         (paths.state_path(), "state.json"),
         (paths.index_path(), "index.json"),
+        (paths.radio_path(), "radio.json"),
     ] {
         if src.is_file() && fs::copy(&src, backup_dir.join(name)).is_ok() {
             files_count += 1;

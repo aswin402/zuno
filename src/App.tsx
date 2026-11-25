@@ -10,6 +10,7 @@ import { PlaylistsPage } from '@/pages/PlaylistsPage'
 import { PlaylistPage } from '@/pages/PlaylistPage'
 import { EqualizerPage } from '@/pages/EqualizerPage'
 import { CustomizePage } from '@/pages/CustomizePage'
+import { RadioPage } from '@/pages/RadioPage'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { AutoNextBanner } from '@/components/AutoNextBanner'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
@@ -45,6 +46,25 @@ import {
   type EqSettings,
 } from '@/lib/equalizer'
 import type { SortDir, SortField } from '@/lib/sortTracks'
+import {
+  CURATED_ONLINE_STATIONS,
+  FM_BANDS,
+  type FmBandId,
+  type OnlineStation,
+} from '@/lib/radioStations'
+import {
+  clampFreqToBand,
+  DEFAULT_RADIO_STORE,
+  formatMhz,
+  loadRadioStore,
+  mergeOnlineStations,
+  saveRadioStore,
+  type ActiveRadioPlayback,
+  type DiscoveredStation,
+  type FmHardwareStatus,
+  type OfflineSignalStation,
+  type RadioStoreData,
+} from '@/lib/radioStore'
 import {
   isTauriRuntime,
   zunoApi,
@@ -154,7 +174,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.17')
+  const [appVersion, setAppVersion] = useState<string>('0.0.18')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)
@@ -187,7 +207,12 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<Track | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const radioAudioRef = useRef<HTMLAudioElement | null>(null)
   const lastReportedPosRef = useRef<number>(-1)
+  const [radioStore, setRadioStore] = useState<RadioStoreData>(DEFAULT_RADIO_STORE)
+  const [fmHardware, setFmHardware] = useState<FmHardwareStatus | null>(null)
+  const [activeRadio, setActiveRadio] = useState<ActiveRadioPlayback | null>(null)
+  const [radioStationPool, setRadioStationPool] = useState<OnlineStation[]>(CURATED_ONLINE_STATIONS)
   const [queueIds, setQueueIds] = useState<string[]>([])
   const [baseQueueIds, setBaseQueueIds] = useState<string[]>([])
   const [queueIndex, setQueueIndex] = useState<number | null>(null)
@@ -480,6 +505,354 @@ export default function App() {
     refreshLibrary()
   }, [refreshLibrary])
 
+  // Load persisted FM Radio bookmarks (offline signal frequencies + online station marks & custom links)
+  useEffect(() => {
+    loadRadioStore()
+      .then(setRadioStore)
+      .catch(() => {})
+  }, [])
+
+  const updateRadioStore = useCallback(
+    (updater: (prev: RadioStoreData) => RadioStoreData) => {
+      setRadioStore((prev) => {
+        const next = updater(prev)
+        saveRadioStore(next).catch(() => {})
+        return next
+      })
+    },
+    [],
+  )
+
+  const refreshFmHardware = useCallback(() => {
+    zunoApi
+      .fmHardwareStatus()
+      .then(setFmHardware)
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (page === 'radio') {
+      refreshFmHardware()
+    }
+  }, [page, refreshFmHardware])
+
+  const stopRadioPlayback = useCallback(
+    (clearState = true) => {
+      const el = radioAudioRef.current
+      if (el) {
+        el.pause()
+        el.removeAttribute('src')
+        el.load()
+      }
+      if (nativeAudio) {
+        zunoApi
+          .fmStop()
+          .then((st) => {
+            if (st) setFmHardware(st)
+          })
+          .catch(() => {})
+      }
+      if (clearState) {
+        setActiveRadio(null)
+      }
+    },
+    [nativeAudio],
+  )
+
+  const pauseLocalSongs = useCallback(() => {
+    if (nativeAudio) {
+      zunoApi
+        .pause()
+        .then(() => setIsPlaying(false))
+        .catch(() => {})
+    } else if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause()
+      suspendEqualizerContext(audioRef.current)
+      setIsPlaying(false)
+    }
+  }, [nativeAudio])
+
+  const handlePlayOnlineStation = useCallback(
+    (station: OnlineStation, pool: OnlineStation[]) => {
+      pauseLocalSongs()
+      if (nativeAudio) {
+        zunoApi
+          .fmStop()
+          .then((st) => {
+            if (st) setFmHardware(st)
+          })
+          .catch(() => {})
+      }
+      if (pool.length > 0) {
+        setRadioStationPool(pool)
+      }
+      const subtitle = [
+        station.category,
+        station.country,
+        station.bitrate > 0 ? `${station.bitrate}k` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+
+      setActiveRadio({
+        kind: 'online',
+        id: station.id,
+        name: station.name,
+        subtitle: subtitle || 'Online FM Stream',
+        url: station.url,
+        isPlaying: false,
+        isBuffering: true,
+        error: null,
+      })
+
+      const el = radioAudioRef.current
+      if (el) {
+        el.pause()
+        el.src = station.url
+        el.volume = volume
+        el.load()
+        el.play().catch(() => {
+          setActiveRadio((cur) =>
+            cur && cur.id === station.id
+              ? { ...cur, isPlaying: false, isBuffering: false, error: 'Stream failed to start' }
+              : cur,
+          )
+          notify(`Unable to connect to ${station.name}`)
+        })
+      }
+    },
+    [pauseLocalSongs, nativeAudio, volume, notify],
+  )
+
+  const handleTuneOfflineSignal = useCallback(
+    async (freqMhz: number, label?: string, signalId?: string) => {
+      const cleanFreq = Math.round(freqMhz * 10) / 10
+      pauseLocalSongs()
+      const el = radioAudioRef.current
+      if (el) {
+        el.pause()
+        el.removeAttribute('src')
+        el.load()
+      }
+      try {
+        const hw = await zunoApi.fmTune(cleanFreq)
+        setFmHardware(hw)
+        setActiveRadio({
+          kind: 'offline',
+          id: signalId ?? `freq-${cleanFreq.toFixed(1)}`,
+          name: label || formatMhz(cleanFreq),
+          subtitle: `${formatMhz(cleanFreq)} · Offline FM Signal`,
+          freqMhz: cleanFreq,
+          isPlaying: true,
+          isBuffering: false,
+          error: null,
+        })
+        notify(`Tuned ${label ? `${label} (${formatMhz(cleanFreq)})` : formatMhz(cleanFreq)}`)
+      } catch (err) {
+        const msg = String(err).replace(/^Error:\s*/i, '')
+        notify(msg || 'No offline FM tuner hardware detected')
+        refreshFmHardware()
+      }
+    },
+    [pauseLocalSongs, notify, refreshFmHardware],
+  )
+
+  const handleToggleMarkOnline = useCallback(
+    (stationId: string) => {
+      updateRadioStore((prev) => {
+        const exists = prev.marked_online_ids.includes(stationId)
+        notify(exists ? 'Removed online station mark' : 'Marked online station')
+        return {
+          ...prev,
+          marked_online_ids: exists
+            ? prev.marked_online_ids.filter((id) => id !== stationId)
+            : [stationId, ...prev.marked_online_ids],
+        }
+      })
+    },
+    [updateRadioStore, notify],
+  )
+
+  const handleAddCustomOnline = useCallback(
+    (
+      station: {
+        name: string
+        url: string
+        country: string
+        category: string
+        tags: string[]
+        bitrate: number
+        codec: string
+      },
+      markImmediately: boolean,
+    ): OnlineStation => {
+      const id = `custom-${Date.now()}`
+      const record = {
+        id,
+        name: station.name,
+        url: station.url,
+        category: station.category || 'Custom',
+        country: station.country || 'Custom Link',
+        language: '',
+        tags: station.tags,
+        bitrate: station.bitrate,
+        codec: station.codec || 'STREAM',
+        homepage: '',
+        added_at: Math.floor(Date.now() / 1000),
+      }
+      updateRadioStore((prev) => ({
+        ...prev,
+        custom_online: [record, ...prev.custom_online],
+        marked_online_ids:
+          markImmediately && !prev.marked_online_ids.includes(id)
+            ? [id, ...prev.marked_online_ids]
+            : prev.marked_online_ids,
+      }))
+      notify(`Saved "${station.name}"`)
+      return {
+        id,
+        name: record.name,
+        url: record.url,
+        category: 'Custom',
+        country: record.country,
+        language: record.language,
+        tags: record.tags,
+        bitrate: record.bitrate,
+        codec: record.codec,
+        isCustom: true,
+        addedAt: record.added_at,
+      }
+    },
+    [updateRadioStore, notify],
+  )
+
+  const handleDeleteCustomOnline = useCallback(
+    (stationId: string) => {
+      if (activeRadio?.kind === 'online' && activeRadio.id === stationId) {
+        stopRadioPlayback()
+      }
+      updateRadioStore((prev) => ({
+        ...prev,
+        custom_online: prev.custom_online.filter((s) => s.id !== stationId),
+        marked_online_ids: prev.marked_online_ids.filter((id) => id !== stationId),
+      }))
+      notify('Removed custom station link')
+    },
+    [activeRadio, stopRadioPlayback, updateRadioStore, notify],
+  )
+
+  const handleSaveDiscoveredStation = useCallback(
+    (st: DiscoveredStation) => {
+      const record = {
+        id: st.id,
+        name: st.name,
+        url: st.url,
+        category: 'Custom',
+        country: st.country || 'Global',
+        language: st.language,
+        tags: st.tags,
+        bitrate: st.bitrate,
+        codec: st.codec || 'STREAM',
+        homepage: st.homepage,
+        added_at: Math.floor(Date.now() / 1000),
+      }
+      updateRadioStore((prev) => {
+        const exists = prev.custom_online.some(
+          (c) => c.id === st.id || c.url.trim().toLowerCase() === st.url.trim().toLowerCase(),
+        )
+        return {
+          ...prev,
+          custom_online: exists ? prev.custom_online : [record, ...prev.custom_online],
+          marked_online_ids: prev.marked_online_ids.includes(st.id)
+            ? prev.marked_online_ids
+            : [st.id, ...prev.marked_online_ids],
+        }
+      })
+      notify(`Saved & marked "${st.name}"`)
+    },
+    [updateRadioStore, notify],
+  )
+
+  const handleChangeBand = useCallback(
+    (band: FmBandId) => {
+      updateRadioStore((prev) => ({
+        ...prev,
+        band,
+        last_freq_mhz: clampFreqToBand(prev.last_freq_mhz, band),
+      }))
+    },
+    [updateRadioStore],
+  )
+
+  const handleChangeDialFreq = useCallback(
+    (freqMhz: number) => {
+      updateRadioStore((prev) => ({
+        ...prev,
+        last_freq_mhz: clampFreqToBand(freqMhz, prev.band),
+      }))
+    },
+    [updateRadioStore],
+  )
+
+  const handleUpsertOfflineSignal = useCallback(
+    (signal: Omit<OfflineSignalStation, 'id' | 'created_at'>, existingId?: string) => {
+      updateRadioStore((prev) => {
+        if (existingId) {
+          return {
+            ...prev,
+            offline_signals: prev.offline_signals.map((s) =>
+              s.id === existingId ? { ...s, ...signal } : s,
+            ),
+          }
+        }
+        const created: OfflineSignalStation = {
+          ...signal,
+          id: `sig-${Date.now()}`,
+          created_at: Math.floor(Date.now() / 1000),
+        }
+        return {
+          ...prev,
+          offline_signals: [...prev.offline_signals, created],
+        }
+      })
+      notify(
+        existingId
+          ? `Updated ${signal.name} (${formatMhz(signal.freq_mhz)})`
+          : `Marked ${signal.name} (${formatMhz(signal.freq_mhz)})`,
+      )
+    },
+    [updateRadioStore, notify],
+  )
+
+  const handleToggleMarkOffline = useCallback(
+    (signalId: string) => {
+      updateRadioStore((prev) => {
+        const target = prev.offline_signals.find((s) => s.id === signalId)
+        if (target) {
+          notify(target.marked ? 'Removed signal mark' : 'Marked offline signal')
+        }
+        return {
+          ...prev,
+          offline_signals: prev.offline_signals.map((s) =>
+            s.id === signalId ? { ...s, marked: !s.marked } : s,
+          ),
+        }
+      })
+    },
+    [updateRadioStore, notify],
+  )
+
+  const handleDeleteOfflineSignal = useCallback(
+    (signalId: string) => {
+      updateRadioStore((prev) => ({
+        ...prev,
+        offline_signals: prev.offline_signals.filter((s) => s.id !== signalId),
+      }))
+      notify('Removed offline FM frequency')
+    },
+    [updateRadioStore, notify],
+  )
+
   useEffect(() => {
     const q = searchQuery.trim()
     if (!q) {
@@ -502,6 +875,9 @@ export default function App() {
       zunoApi.setVolume(volume).catch(() => {})
     } else if (audioRef.current) {
       audioRef.current.volume = volume
+    }
+    if (radioAudioRef.current) {
+      radioAudioRef.current.volume = volume
     }
   }, [volume, nativeAudio])
 
@@ -689,6 +1065,7 @@ export default function App() {
       _sourceKey = 'songs',
     ) => {
       if (ids.length === 0) return
+      stopRadioPlayback()
       const useShuffle = forceShuffle ?? shuffle
       if (forceShuffle !== undefined) setShuffle(forceShuffle)
       if (nativeAudio) {
@@ -719,10 +1096,50 @@ export default function App() {
       setPosition(0)
       playTrackById(ordered[idx])
     },
-    [shuffle, playTrackById, nativeAudio, applyNativeStatus],
+    [shuffle, playTrackById, nativeAudio, applyNativeStatus, stopRadioPlayback],
   )
 
   const handleTogglePlay = useCallback(() => {
+    if (activeRadio) {
+      if (activeRadio.kind === 'online') {
+        const el = radioAudioRef.current
+        if (!el) return
+        if (activeRadio.isPlaying || activeRadio.isBuffering) {
+          el.pause()
+          el.removeAttribute('src')
+          el.load()
+          setActiveRadio((cur) =>
+            cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
+          )
+        } else if (activeRadio.url) {
+          setActiveRadio((cur) => (cur ? { ...cur, isBuffering: true, error: null } : null))
+          el.src = activeRadio.url
+          el.volume = volume
+          el.load()
+          el.play().catch(() => {
+            setActiveRadio((cur) =>
+              cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
+            )
+            notify(`Unable to reconnect to ${activeRadio.name}`)
+          })
+        }
+        return
+      }
+      if (activeRadio.kind === 'offline') {
+        if (activeRadio.isPlaying) {
+          zunoApi
+            .fmStop()
+            .then((st) => {
+              if (st) setFmHardware(st)
+            })
+            .catch(() => {})
+          setActiveRadio((cur) => (cur ? { ...cur, isPlaying: false } : null))
+        } else if (activeRadio.freqMhz !== undefined) {
+          handleTuneOfflineSignal(activeRadio.freqMhz, activeRadio.name, activeRadio.id)
+        }
+        return
+      }
+    }
     if (nativeAudio) {
       if (!currentTrack && queueIds.length === 0) {
         if (tracks.length > 0) {
@@ -770,6 +1187,10 @@ export default function App() {
       setIsPlaying(false)
     }
   }, [
+    activeRadio,
+    volume,
+    notify,
+    handleTuneOfflineSignal,
     nativeAudio,
     currentTrack,
     queueIds.length,
@@ -781,10 +1202,11 @@ export default function App() {
 
   const selectOrToggleTrack = useCallback(
     (track: Track, subset: Track[], label: string, sourceKey: string) => {
-      if (currentTrack?.id === track.id) {
+      if (!activeRadio && currentTrack?.id === track.id) {
         handleTogglePlay()
         return
       }
+      stopRadioPlayback()
       startQueue(
         subset.map((x) => x.id),
         track.id,
@@ -793,7 +1215,7 @@ export default function App() {
         sourceKey,
       )
     },
-    [currentTrack, handleTogglePlay, startQueue],
+    [activeRadio, currentTrack, handleTogglePlay, stopRadioPlayback, startQueue],
   )
 
   const triggerAutoNextFuse = useCallback((title: string, prevIndex: number) => {
@@ -1430,13 +1852,141 @@ export default function App() {
     [nativeAudio, applyNativeStatus, queueIds, playTrackById],
   )
 
+  const stepRadioStation = useCallback(
+    (dir: -1 | 1) => {
+      if (!activeRadio) return
+      if (activeRadio.kind === 'online') {
+        const pool =
+          radioStationPool.length > 0 ? radioStationPool : mergeOnlineStations(radioStore)
+        if (pool.length === 0) return
+        const curIdx = pool.findIndex((s) => s.id === activeRadio.id)
+        const nextIdx =
+          curIdx === -1 ? 0 : (curIdx + dir + pool.length) % pool.length
+        handlePlayOnlineStation(pool[nextIdx], pool)
+        return
+      }
+      const spec = FM_BANDS[radioStore.band]
+      const nextFreq = clampFreqToBand(
+        (activeRadio.freqMhz ?? radioStore.last_freq_mhz) + dir * spec.stepMhz,
+        radioStore.band,
+      )
+      handleChangeDialFreq(nextFreq)
+      const hit = radioStore.offline_signals.find(
+        (s) => Math.abs(s.freq_mhz - nextFreq) < 0.051,
+      )
+      handleTuneOfflineSignal(nextFreq, hit?.name, hit?.id)
+    },
+    [
+      activeRadio,
+      radioStationPool,
+      radioStore,
+      handlePlayOnlineStation,
+      handleChangeDialFreq,
+      handleTuneOfflineSignal,
+    ],
+  )
+
+  const displayTrack: Track | null = useMemo(() => {
+    if (!activeRadio) return currentTrack
+    return {
+      id: activeRadio.id,
+      rel_path: activeRadio.url ?? '',
+      title: activeRadio.name,
+      artist: activeRadio.subtitle,
+      album: activeRadio.kind === 'offline' ? 'Offline FM' : 'Online FM',
+      genre: 'FM Radio',
+      duration_secs: 0,
+      file_size: 0,
+      modified_secs: 0,
+      folder: '',
+      has_cover: false,
+    }
+  }, [activeRadio, currentTrack])
+
+  const displayIsPlaying = activeRadio ? activeRadio.isPlaying : isPlaying
+  const displayLiveLabel = activeRadio
+    ? activeRadio.kind === 'offline'
+      ? `SIGNAL · ${formatMhz(activeRadio.freqMhz ?? radioStore.last_freq_mhz)}`
+      : activeRadio.isBuffering
+        ? 'CONNECTING · ONLINE FM'
+        : 'LIVE · ONLINE FM'
+    : null
+
+  const displayIsFavorite = useMemo(() => {
+    if (!activeRadio) return isCurrentFavorite
+    if (activeRadio.kind === 'online') {
+      return radioStore.marked_online_ids.includes(activeRadio.id)
+    }
+    const freq = activeRadio.freqMhz ?? radioStore.last_freq_mhz
+    return radioStore.offline_signals.some(
+      (s) => s.marked && Math.abs(s.freq_mhz - freq) < 0.051,
+    )
+  }, [activeRadio, isCurrentFavorite, radioStore])
+
+  const displayToggleFavorite = useCallback(() => {
+    if (!activeRadio) {
+      handleToggleFavorite()
+      return
+    }
+    if (activeRadio.kind === 'online') {
+      handleToggleMarkOnline(activeRadio.id)
+      return
+    }
+    const freq = activeRadio.freqMhz ?? radioStore.last_freq_mhz
+    const existing = radioStore.offline_signals.find(
+      (s) => Math.abs(s.freq_mhz - freq) < 0.051,
+    )
+    if (existing) {
+      handleToggleMarkOffline(existing.id)
+    } else {
+      handleUpsertOfflineSignal({
+        freq_mhz: freq,
+        name: activeRadio.name,
+        region: '',
+        genre: 'FM',
+        notes: '',
+        band: radioStore.band,
+        marked: true,
+      })
+    }
+  }, [
+    activeRadio,
+    handleToggleFavorite,
+    handleToggleMarkOnline,
+    radioStore,
+    handleToggleMarkOffline,
+    handleUpsertOfflineSignal,
+  ])
+
+  const displayPrev = useCallback(() => {
+    if (activeRadio) {
+      stepRadioStation(-1)
+      return
+    }
+    handlePrev()
+  }, [activeRadio, stepRadioStation, handlePrev])
+
+  const displayNext = useCallback(() => {
+    if (activeRadio) {
+      stepRadioStation(1)
+      return
+    }
+    handleNext(false)
+  }, [activeRadio, stepRadioStation, handleNext])
+
   const nowPlayingProps = {
-    track: currentTrack,
+    track: displayTrack,
     queueTracks,
     queueIndex,
-    playlistLabel: activePlaylistLabel,
-    isPlaying,
-    isFavorite: isCurrentFavorite,
+    playlistLabel: activeRadio
+      ? activeRadio.kind === 'offline'
+        ? 'Offline FM Signal'
+        : 'Online FM Radio'
+      : activePlaylistLabel,
+    isPlaying: displayIsPlaying,
+    isFavorite: displayIsFavorite,
+    liveLabel: displayLiveLabel,
+    radioDemoVisualizer: activeRadio?.kind === 'online',
     position,
     duration,
     volume,
@@ -1444,12 +1994,12 @@ export default function App() {
     repeat,
     playlists,
     onTogglePlay: handleTogglePlay,
-    onPrev: handlePrev,
-    onNext: () => handleNext(false),
+    onPrev: displayPrev,
+    onNext: displayNext,
     onSeekChange: setPosition,
     onSeekCommit: handleSeekCommit,
     onVolumeChange: setVolume,
-    onToggleFavorite: handleToggleFavorite,
+    onToggleFavorite: displayToggleFavorite,
     onToggleShuffle: handleToggleShuffle,
     onCycleRepeat: handleCycleRepeat,
     onSelectQueueIndex: handleSelectQueueIndex,
@@ -1484,12 +2034,44 @@ export default function App() {
         align={appearance.titlebarAlign}
         showTrack={appearance.titlebarShowTrack}
         compact={appearance.titlebarCompact}
-        currentTrack={currentTrack}
-        isPlaying={isPlaying}
+        currentTrack={displayTrack}
+        isPlaying={displayIsPlaying}
         onMaximizedChange={setWindowMaximized}
       />
 
       <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
+      {/* Dedicated Online FM Radio audio element (works in both Tauri WebView & Web Browser) */}
+      <audio
+        ref={radioAudioRef}
+        preload="none"
+        onPlaying={() => {
+          setActiveRadio((cur) =>
+            cur && cur.kind === 'online'
+              ? { ...cur, isPlaying: true, isBuffering: false, error: null }
+              : cur,
+          )
+        }}
+        onWaiting={() => {
+          setActiveRadio((cur) =>
+            cur && cur.kind === 'online' ? { ...cur, isBuffering: true } : cur,
+          )
+        }}
+        onPause={() => {
+          setActiveRadio((cur) =>
+            cur && cur.kind === 'online'
+              ? { ...cur, isPlaying: false, isBuffering: false }
+              : cur,
+          )
+        }}
+        onError={() => {
+          setActiveRadio((cur) => {
+            if (!cur || cur.kind !== 'online' || !cur.url) return cur
+            notify(`Stream unavailable: ${cur.name}`)
+            return { ...cur, isPlaying: false, isBuffering: false, error: 'Stream unavailable' }
+          })
+        }}
+      />
+
       {!nativeAudio && (
         <audio
           ref={audioRef}
@@ -1537,6 +2119,7 @@ export default function App() {
           recentCount={lastPlayedTracks.length}
           sourceCount={Math.max(1, sources.length)}
           eqEnabled={eqSettings.enabled}
+          radioActive={Boolean(activeRadio?.isPlaying)}
           mode={appearance.mode}
           themeTransition={appearance.themeTransition}
           themeTransitionStart={appearance.themeTransitionStart}
@@ -1550,6 +2133,10 @@ export default function App() {
           onGoRecent={() => {
             setSearchOpen(false)
             setPage('recent')
+          }}
+          onGoRadio={() => {
+            setSearchOpen(false)
+            setPage('radio')
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenFavorites={() => {
@@ -1603,6 +2190,7 @@ export default function App() {
           recentCount={lastPlayedTracks.length}
           sourceCount={Math.max(1, sources.length)}
           eqEnabled={eqSettings.enabled}
+          radioActive={Boolean(activeRadio?.isPlaying)}
           mode={appearance.mode}
           themeTransition={appearance.themeTransition}
           themeTransitionStart={appearance.themeTransitionStart}
@@ -1617,6 +2205,10 @@ export default function App() {
           onGoRecent={() => {
             setSearchOpen(false)
             setPage('recent')
+          }}
+          onGoRadio={() => {
+            setSearchOpen(false)
+            setPage('radio')
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenFavorites={() => {
@@ -1667,6 +2259,7 @@ export default function App() {
           sourceCount={Math.max(1, sources.length)}
           eqEnabled={eqSettings.enabled}
           eqLabel={eqLabel}
+          radioActive={Boolean(activeRadio?.isPlaying)}
           mode={appearance.mode}
           themeTransition={appearance.themeTransition}
           themeTransitionStart={appearance.themeTransitionStart}
@@ -1676,6 +2269,10 @@ export default function App() {
           onGoHome={() => {
             setSearchOpen(false)
             setPage('home')
+          }}
+          onGoRadio={() => {
+            setSearchOpen(false)
+            setPage('radio')
           }}
           onOpenSearch={() => setSearchOpen(true)}
           onGoEqualizer={() => {
@@ -1877,6 +2474,29 @@ export default function App() {
             />
           )}
 
+          {page === 'radio' && (
+            <RadioPage
+              store={radioStore}
+              activeRadio={activeRadio}
+              fmHardware={fmHardware}
+              appearance={appearance}
+              onRefreshHardware={refreshFmHardware}
+              onPlayOnlineStation={handlePlayOnlineStation}
+              onStopRadio={() => stopRadioPlayback()}
+              onToggleMarkOnline={handleToggleMarkOnline}
+              onAddCustomOnline={handleAddCustomOnline}
+              onDeleteCustomOnline={handleDeleteCustomOnline}
+              onSaveDiscoveredStation={handleSaveDiscoveredStation}
+              onChangeBand={handleChangeBand}
+              onChangeDialFreq={handleChangeDialFreq}
+              onTuneOfflineSignal={handleTuneOfflineSignal}
+              onUpsertOfflineSignal={handleUpsertOfflineSignal}
+              onToggleMarkOffline={handleToggleMarkOffline}
+              onDeleteOfflineSignal={handleDeleteOfflineSignal}
+              onExpandNowPlaying={() => setMobilePlayerOpen(true)}
+            />
+          )}
+
           {page === 'equalizer' && (
             <EqualizerPage
               settings={eqSettings}
@@ -1924,9 +2544,10 @@ export default function App() {
 
         {/* Desktop Floating Sticky Bottom Player Bar (>= 1024px) */}
         <DesktopPlayerBar
-          track={currentTrack}
-          isPlaying={isPlaying}
-          isFavorite={isCurrentFavorite}
+          track={displayTrack}
+          isPlaying={displayIsPlaying}
+          isFavorite={displayIsFavorite}
+          liveLabel={displayLiveLabel}
           position={position}
           duration={duration}
           volume={volume}
@@ -1937,12 +2558,12 @@ export default function App() {
           eqOpen={page === 'equalizer'}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
-          onPrev={handlePrev}
-          onNext={() => handleNext(false)}
+          onPrev={displayPrev}
+          onNext={displayNext}
           onSeekChange={setPosition}
           onSeekCommit={handleSeekCommit}
           onVolumeChange={setVolume}
-          onToggleFavorite={handleToggleFavorite}
+          onToggleFavorite={displayToggleFavorite}
           onToggleShuffle={handleToggleShuffle}
           onCycleRepeat={handleCycleRepeat}
           onToggleEqualizer={() =>
@@ -1955,12 +2576,12 @@ export default function App() {
         <MobileDock
           page={page}
           searchOpen={searchOpen}
-          track={currentTrack}
-          isPlaying={isPlaying}
-          isFavorite={isCurrentFavorite}
+          track={displayTrack}
+          isPlaying={displayIsPlaying}
+          isFavorite={displayIsFavorite}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
-          onToggleFavorite={handleToggleFavorite}
+          onToggleFavorite={displayToggleFavorite}
           onExpandPlayer={() => setMobilePlayerOpen(true)}
           onNavigate={(next) => {
             setSearchOpen(false)

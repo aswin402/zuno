@@ -27,6 +27,7 @@ interface DesktopPlayerBarProps {
   eqEnabled?: boolean
   eqLabel?: string
   eqOpen?: boolean
+  liveLabel?: string | null
   appearance?: AppearanceSettings
   onTogglePlay: () => void
   onPrev: () => void
@@ -58,6 +59,7 @@ export function DesktopPlayerBar({
   eqEnabled = false,
   eqLabel = 'Off',
   eqOpen = false,
+  liveLabel = null,
   appearance = DEFAULT_APPEARANCE,
   onTogglePlay,
   onPrev,
@@ -180,25 +182,49 @@ export function DesktopPlayerBar({
           </div>
         </Tooltip>
 
-        {/* 3. Multi-style Progress Scrubber */}
-        <div
-          className="min-w-0 flex-1"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Scrubber
-            value={position}
-            max={effectiveDuration}
-            styleVariant={appearance.scrubberKnob}
-            seed={track?.id ?? track?.title ?? 'zuno'}
-            onChange={onSeekChange}
-            onCommit={onSeekCommit}
-          />
-        </div>
+        {/* 3. Multi-style Progress Scrubber OR Live FM Indicator */}
+        {liveLabel ? (
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="relative h-[2px] flex-1 overflow-hidden rounded-full bg-accent">
+              <div
+                className={cn(
+                  'h-full w-full rounded-full bg-primary transition-opacity',
+                  isPlaying ? 'opacity-100' : 'opacity-35',
+                )}
+              />
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-secondary px-2.5 py-0.5 font-mono text-[10.5px] font-medium tracking-wide text-foreground whitespace-nowrap">
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full bg-primary',
+                  isPlaying && 'animate-pulse',
+                )}
+              />
+              {liveLabel}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div
+              className="min-w-0 flex-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Scrubber
+                value={position}
+                max={effectiveDuration}
+                styleVariant={appearance.scrubberKnob}
+                seed={track?.id ?? track?.title ?? 'zuno'}
+                onChange={onSeekChange}
+                onCommit={onSeekCommit}
+              />
+            </div>
 
-        {/* 4. Inline Timestamp */}
-        <span className="shrink-0 tabular-nums text-xs text-muted-foreground whitespace-nowrap">
-          {formatTime(position)} / {formatTime(effectiveDuration)}
-        </span>
+            {/* 4. Inline Timestamp */}
+            <span className="shrink-0 tabular-nums text-xs text-muted-foreground whitespace-nowrap">
+              {formatTime(position)} / {formatTime(effectiveDuration)}
+            </span>
+          </>
+        )}
 
         {/* 5. Utility Controls */}
         <div

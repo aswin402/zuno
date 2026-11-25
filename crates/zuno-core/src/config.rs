@@ -68,6 +68,10 @@ impl ZunoPaths {
         self.cache_dir().join("sources.json")
     }
 
+    pub fn radio_path(&self) -> PathBuf {
+        self.cache_dir().join("radio.json")
+    }
+
     /// Local Unix socket path used on Linux for live GUI <-> MCP IPC.
     pub fn socket_path(&self) -> PathBuf {
         if let Ok(custom) = std::env::var("ZUNO_SOCKET") {

@@ -3,6 +3,7 @@
 mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
+mod radio;
 mod updater;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +22,7 @@ use zuno_core::ipc::{IpcRequest, IpcResponse};
 
 struct AppState {
     service: Arc<ZunoService>,
+    fm_tuner: Arc<radio::FmTunerManager>,
     quitting: AtomicBool,
     update_progress: Arc<Mutex<updater::UpdateProgressEvent>>,
     #[cfg(target_os = "linux")]
@@ -66,6 +68,17 @@ fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
             | IpcRequest::RemoveSource { .. }
             | IpcRequest::DeleteSong { .. }
     );
+    let stops_fm = matches!(
+        req,
+        IpcRequest::Play { .. }
+            | IpcRequest::Resume
+            | IpcRequest::Stop
+            | IpcRequest::SetQueue { .. }
+            | IpcRequest::JumpQueue { .. }
+    );
+    if stops_fm {
+        state.fm_tuner.stop(None);
+    }
     let resp = state.service.handle_request(req);
     if matches!(resp, IpcResponse::Ok { .. }) {
         if affects_mpris {
@@ -133,6 +146,7 @@ fn window_toggle_fullscreen(window: WebviewWindow) -> bool {
 #[tauri::command]
 fn app_quit(app: AppHandle, state: tauri::State<'_, AppState>) {
     state.quitting.store(true, Ordering::SeqCst);
+    state.fm_tuner.stop(Some(&state.service));
     let _ = state.service.handle_request(IpcRequest::Stop);
     app.exit(0);
 }
@@ -206,11 +220,76 @@ async fn zuno_install_update(
 #[tauri::command]
 fn zuno_relaunch_app(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.quitting.store(true, Ordering::SeqCst);
+    state.fm_tuner.stop(Some(&state.service));
     let _ = state.service.handle_request(IpcRequest::Stop);
     state.notify_mpris();
     updater::spawn_relaunched_app()?;
     app.exit(0);
     Ok(())
+}
+
+#[tauri::command]
+fn zuno_radio_load_store(state: tauri::State<'_, AppState>) -> radio::RadioStoreData {
+    radio::load_radio_store(&state.service.paths())
+}
+
+#[tauri::command]
+fn zuno_radio_save_store(
+    store: radio::RadioStoreData,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    radio::save_radio_store(&state.service.paths(), &store)
+}
+
+#[tauri::command]
+async fn zuno_radio_discover(
+    query: Option<String>,
+    tag: Option<String>,
+    country: Option<String>,
+    language: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<radio::DiscoveredStation>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        radio::discover_online_stations(
+            query.as_deref(),
+            tag.as_deref(),
+            country.as_deref(),
+            language.as_deref(),
+            limit.unwrap_or(40),
+        )
+    })
+    .await
+    .map_err(|e| format!("radio discovery task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn zuno_radio_resolve_url(url: String) -> Result<radio::ResolvedStreamInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || radio::resolve_stream_url(&url))
+        .await
+        .map_err(|e| format!("radio link resolver failed: {e}"))?
+}
+
+#[tauri::command]
+fn zuno_fm_hardware_status(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
+    state.fm_tuner.hardware_status()
+}
+
+#[tauri::command]
+async fn zuno_fm_tune(
+    freq_mhz: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<radio::FmHardwareStatus, String> {
+    let tuner = Arc::clone(&state.fm_tuner);
+    let svc = Arc::clone(&state.service);
+    tauri::async_runtime::spawn_blocking(move || tuner.tune(freq_mhz, &svc))
+        .await
+        .map_err(|e| format!("FM tune task failed: {e}"))?
+}
+
+#[tauri::command]
+fn zuno_fm_stop(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
+    state.fm_tuner.stop(Some(&state.service));
+    state.fm_tuner.hardware_status()
 }
 
 #[tauri::command]
@@ -355,9 +434,12 @@ fn main() {
 
     let cover_server = Arc::new(cover_cache::CoverServer::start(Arc::clone(&service)));
 
+    let fm_tuner = Arc::new(radio::FmTunerManager::new());
+
     let app = tauri::Builder::default()
         .manage(AppState {
             service,
+            fm_tuner,
             quitting: AtomicBool::new(false),
             update_progress: Arc::new(Mutex::new(updater::UpdateProgressEvent::default())),
             #[cfg(target_os = "linux")]
@@ -395,6 +477,13 @@ fn main() {
             zuno_update_progress,
             zuno_install_update,
             zuno_relaunch_app,
+            zuno_radio_load_store,
+            zuno_radio_save_store,
+            zuno_radio_discover,
+            zuno_radio_resolve_url,
+            zuno_fm_hardware_status,
+            zuno_fm_tune,
+            zuno_fm_stop,
             window_minimize,
             window_toggle_maximize,
             window_is_maximized,
@@ -418,6 +507,7 @@ fn main() {
                     |handle| {
                         let st = handle.state::<AppState>();
                         st.quitting.store(true, Ordering::SeqCst);
+                        st.fm_tuner.stop(Some(&st.service));
                         let _ = st.service.handle_request(IpcRequest::Stop);
                         st.notify_mpris();
                         handle.exit(0);
@@ -463,6 +553,7 @@ fn main() {
                         }
                         "quit" => {
                             state.quitting.store(true, Ordering::SeqCst);
+                            state.fm_tuner.stop(Some(&state.service));
                             let _ = state.service.handle_request(IpcRequest::Stop);
                             state.notify_mpris();
                             app.exit(0);
@@ -489,7 +580,7 @@ fn main() {
             // down to ~8-12 MB RSS while Rust Rodio + 10-band EQ keep playing in the background!
             if let WindowEvent::CloseRequested { .. } = event {
                 let state = window.state::<AppState>();
-                if !state.service.is_playing() {
+                if !state.service.is_playing() && !state.fm_tuner.is_active() {
                     state.quitting.store(true, Ordering::SeqCst);
                 }
             }
@@ -500,7 +591,9 @@ fn main() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
             let state = app_handle.state::<AppState>();
-            if !state.quitting.load(Ordering::SeqCst) && state.service.is_playing() {
+            if !state.quitting.load(Ordering::SeqCst)
+                && (state.service.is_playing() || state.fm_tuner.is_active())
+            {
                 api.prevent_exit();
             }
         }

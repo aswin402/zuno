@@ -51,6 +51,8 @@ interface NowPlayingPanelProps {
   playlists: Playlist[]
   eqEnabled?: boolean
   eqLabel?: string
+  liveLabel?: string | null
+  radioDemoVisualizer?: boolean
   appearance?: AppearanceSettings
   audioEl?: HTMLAudioElement | null
   isMobileSheet?: boolean
@@ -90,6 +92,8 @@ export function NowPlayingPanel({
   playlists,
   eqEnabled = false,
   eqLabel = 'Off',
+  liveLabel = null,
+  radioDemoVisualizer = false,
   appearance = DEFAULT_APPEARANCE,
   audioEl = null,
   onCloseMobile,
@@ -312,11 +316,12 @@ export function NowPlayingPanel({
             mode={appearance.mode}
             isPlaying={isPlaying}
             audioEl={audioEl}
+            demo={radioDemoVisualizer}
             className="absolute inset-0 z-0 h-full w-full"
           />
         )}
 
-        {/* Top Bar: Back ←  |  Now playing  |  Heart + clean ··· Menu */}
+        {/* Top Bar: Back ←  |  Now playing / FM Radio  |  Heart + clean ··· Menu */}
         <header className="relative z-20 mx-auto flex h-11 w-full max-w-5xl shrink-0 items-center justify-between px-5 lg:h-14 lg:px-10">
           <button
             type="button"
@@ -329,7 +334,7 @@ export function NowPlayingPanel({
           </button>
 
           <span className="text-[15px] font-semibold tracking-tight text-foreground">
-            Now playing
+            {liveLabel ? 'FM Radio' : 'Now playing'}
           </span>
 
           <div
@@ -532,6 +537,7 @@ export function NowPlayingPanel({
                   mode={appearance.mode}
                   isPlaying={isPlaying}
                   audioEl={audioEl}
+                  demo={radioDemoVisualizer}
                   className={cn(
                     'w-full md:absolute md:inset-0 md:m-auto md:h-full md:max-h-[600px]',
                     appearance.visualizerStyle === 'orb' ||
@@ -557,30 +563,46 @@ export function NowPlayingPanel({
             />
           </div>
 
-          {/* Mobile-Only Scrubber + Split Timestamp (moved into Bottom Dock on Desktop) */}
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0 md:hidden"
-          >
-            <Scrubber
-              value={position}
-              max={effectiveDuration || 1}
-              styleVariant={appearance.scrubberKnob}
-              seed={track?.id ?? track?.title ?? 'zuno'}
-              onChange={onSeekChange}
-              onCommit={onSeekCommit}
-            />
-          </div>
+          {/* Mobile-Only Scrubber + Split Timestamp (or Live FM Badge) */}
+          {liveLabel ? (
+            <div className="mt-[clamp(1.25rem,4dvh,2.75rem)] flex shrink-0 items-center justify-center md:hidden">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-3.5 py-1 font-mono text-[11px] font-medium tracking-wider text-foreground">
+                <span
+                  className={cn(
+                    'h-2 w-2 rounded-full bg-primary',
+                    isPlaying && 'animate-pulse',
+                  )}
+                />
+                {liveLabel}
+              </span>
+            </div>
+          ) : (
+            <>
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0 md:hidden"
+              >
+                <Scrubber
+                  value={position}
+                  max={effectiveDuration || 1}
+                  styleVariant={appearance.scrubberKnob}
+                  seed={track?.id ?? track?.title ?? 'zuno'}
+                  onChange={onSeekChange}
+                  onCommit={onSeekCommit}
+                />
+              </div>
 
-          <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] md:hidden">
-            <span className="font-semibold text-foreground">
-              {formatTime(position)}
-            </span>
-            <span className="h-3 w-[1px] bg-border" aria-hidden="true" />
-            <span className="font-medium text-muted-foreground">
-              {formatTime(effectiveDuration)}
-            </span>
-          </div>
+              <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] md:hidden">
+                <span className="font-semibold text-foreground">
+                  {formatTime(position)}
+                </span>
+                <span className="h-3 w-[1px] bg-border" aria-hidden="true" />
+                <span className="font-medium text-muted-foreground">
+                  {formatTime(effectiveDuration)}
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Bottom Queue Trigger: Mobile keeps swipe-up pill line; Desktop uses clean borderless Up Arrow button */}
@@ -605,47 +627,83 @@ export function NowPlayingPanel({
         </div>
       </div>
 
-      {/* ── Contrasting Bottom Dock: Desktop Scrubber & Split Time + Previous · Play/Pause · Next ── */}
+      {/* ── Contrasting Bottom Dock: Desktop Scrubber & Split Time (or Live FM Badge) + Previous · Play/Pause · Next ── */}
       <footer className="shrink-0 px-8 py-4 pb-[max(0.85rem,env(safe-area-inset-bottom))] md:px-10 md:pt-4 md:pb-5">
-        {/* Desktop Scrubber & Split Elapsed | Total Timestamp above transport controls */}
+        {/* Desktop Scrubber & Split Elapsed | Total Timestamp (or Live FM Pill) above transport controls */}
         <div
           onPointerDown={(e) => e.stopPropagation()}
           className="mx-auto mb-3.5 hidden w-full max-w-[min(86vw,640px)] flex-col items-center md:flex"
         >
-          <Scrubber
-            value={position}
-            max={effectiveDuration || 1}
-            styleVariant={appearance.scrubberKnob}
-            seed={track?.id ?? track?.title ?? 'zuno'}
-            tone={isLight ? 'inverted' : 'surface'}
-            onChange={onSeekChange}
-            onCommit={onSeekCommit}
-          />
-          <div className="mt-1.5 flex items-center justify-center gap-3 tabular-nums text-[12px] lg:text-[12.5px]">
-            <span
-              className={cn(
-                'font-semibold',
-                isLight ? 'text-background' : 'text-foreground',
-              )}
-            >
-              {formatTime(position)}
-            </span>
-            <span
-              className={cn(
-                'h-3 w-[1px]',
-                isLight ? 'bg-background/25' : 'bg-border',
-              )}
-              aria-hidden="true"
-            />
-            <span
-              className={cn(
-                'font-medium',
-                isLight ? 'text-background/60' : 'text-muted-foreground',
-              )}
-            >
-              {formatTime(effectiveDuration)}
-            </span>
-          </div>
+          {liveLabel ? (
+            <div className="flex w-full items-center gap-3.5 py-1.5">
+              <div
+                className={cn(
+                  'h-[2px] flex-1 rounded-full',
+                  isLight ? 'bg-background/25' : 'bg-border',
+                )}
+              />
+              <span
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-full border px-3.5 py-1 font-mono text-[11px] font-medium tracking-wider',
+                  isLight
+                    ? 'border-background/25 bg-background/12 text-background'
+                    : 'border-border bg-secondary text-foreground',
+                )}
+              >
+                <span
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    isLight ? 'bg-background' : 'bg-primary',
+                    isPlaying && 'animate-pulse',
+                  )}
+                />
+                {liveLabel}
+              </span>
+              <div
+                className={cn(
+                  'h-[2px] flex-1 rounded-full',
+                  isLight ? 'bg-background/25' : 'bg-border',
+                )}
+              />
+            </div>
+          ) : (
+            <>
+              <Scrubber
+                value={position}
+                max={effectiveDuration || 1}
+                styleVariant={appearance.scrubberKnob}
+                seed={track?.id ?? track?.title ?? 'zuno'}
+                tone={isLight ? 'inverted' : 'surface'}
+                onChange={onSeekChange}
+                onCommit={onSeekCommit}
+              />
+              <div className="mt-1.5 flex items-center justify-center gap-3 tabular-nums text-[12px] lg:text-[12.5px]">
+                <span
+                  className={cn(
+                    'font-semibold',
+                    isLight ? 'text-background' : 'text-foreground',
+                  )}
+                >
+                  {formatTime(position)}
+                </span>
+                <span
+                  className={cn(
+                    'h-3 w-[1px]',
+                    isLight ? 'bg-background/25' : 'bg-border',
+                  )}
+                  aria-hidden="true"
+                />
+                <span
+                  className={cn(
+                    'font-medium',
+                    isLight ? 'text-background/60' : 'text-muted-foreground',
+                  )}
+                >
+                  {formatTime(effectiveDuration)}
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
         <div

@@ -5,6 +5,23 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.18] — 2026-11-25
+
+Offline FM (hardware signal) and Online FM (curated stable streams, custom link pasting, global station discovery, and unified signal/link bookmarking).
+
+### Added
+- **Online FM Player & 127 Curated Stable Stations (`src/lib/radioStations.ts`, `src/pages/RadioPage.tsx`, `src/App.tsx`)**:
+  - Built-in directory of **127** permanent public/community stations across 10 categories (SomaFM, Radio France / FIP, Radio Paradise, SRG Swiss Radio, KEXP, KCRW, WFMU, Jazz24, WBGO, WQXR, NPR, NTS, Nightride FM, Rainwave, UK/EU FM, 1.FM, and Indian AIR/Desi streams) with instant search and category filters.
+  - **Paste Link** workflow supporting `.mp3`, `.aac`, `.ogg`, `.m3u8` (HLS), and `.m3u`/`.pls` playlist URLs with automatic stream extraction, ICY metadata probing (`icy-name`, `icy-genre`, `icy-br`), Test Play, and permanent saving.
+- **Global Station Discovery (`src-tauri/src/radio.rs`, `src/lib/radioStore.ts`)**:
+  - Live search across **45,000+** free public radio stations via Radio Browser's open directory (multi-mirror failover, zero API key, zero extra Rust crates) with quick regional/language/genre presets (India FM, Malayalam, Tamil, Hindi, Lo-Fi, Jazz, Synthwave, Classical, Indie, News, UK, USA, Japan) and 1-click **Save & Mark**.
+- **Offline FM Signal Tuner & Hardware Audio Pipeline (`src-tauri/src/radio.rs`, `crates/zuno-audio/src/engine.rs`, `crates/zuno-audio/src/service.rs`)**:
+  - Tactile analog FM frequency dial (`Global 87.5–108.0`, `Americas 87.9–107.9`, `Japan 76.0–95.0 MHz`) with drag/keyboard tuning, precision `±0.1 / ±1.0 MHz` steps, and marked signal pins along the scale.
+  - Auto-detects real offline FM receiver hardware (**RTL-SDR USB** via `rtl_fm` streamed live into Zuno's Rodio output + 10-band Rust EQ + 1024-pt FFT visualizer, and Linux **V4L2 `/dev/radio*`** tuners), with honest setup guidance and full offline frequency logging/bookmarking even without hardware attached.
+- **Unified Marked Stations & Backup Support (`crates/zuno-core/src/config.rs`, `src-tauri/src/updater.rs`, `DesktopSidebar.tsx`, `FloatingNavigation.tsx`, `MobileDock.tsx`, `MobileNavbar.tsx`, `DesktopPlayerBar.tsx`, `NowPlayingPanel.tsx`, `ZunoIcon.tsx`)**:
+  - Dedicated **Marked** tab unifying marked **Offline Signals (`SIGNAL · MHz`)** and **Online Links (`ONLINE LINK`)**, persisted atomically to `~/zuno/.zuno/radio.json` and automatically backed up during self-updates.
+  - Integrated FM Radio across all desktop/mobile nav styles, live dock & full-screen Now Playing indicators, prev/next station stepping, heart-to-mark syncing, and automatic mutual exclusion with local songs.
+
 ## [0.0.17] — 2026-11-25
 
 Desktop Now Playing stage refresh with bottom-dock scrubber & split timestamp above transport controls, anchored lower track title, and large responsive desktop visualizers.

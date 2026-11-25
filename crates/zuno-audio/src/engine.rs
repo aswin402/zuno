@@ -3,7 +3,7 @@ use crate::spectrum::SharedSpectrum;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::f32::consts::FRAC_PI_2;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,6 +12,16 @@ use zuno_core::{Result, ZunoError};
 /// Platform audio backend abstraction (allows hardware-free unit/integration tests).
 pub trait AudioEngine: Send + 'static {
     fn load_and_play(&mut self, path: &Path, volume: f32) -> Result<()>;
+    /// Play a live raw signed 16-bit little-endian PCM stream (used for hardware RTL-SDR FM audio).
+    fn load_pcm_stream(
+        &mut self,
+        _reader: Box<dyn Read + Send>,
+        _sample_rate: u32,
+        _channels: u16,
+        _volume: f32,
+    ) -> Result<()> {
+        Err(ZunoError::Audio("live PCM stream unsupported on this backend".into()))
+    }
     fn pause(&mut self);
     fn resume(&mut self);
     fn stop(&mut self);
@@ -81,7 +91,111 @@ impl Default for RodioEngine {
 // `RodioEngine::new()` (where `stream` is `None`) into the audio thread on startup.
 unsafe impl Send for RodioEngine {}
 
+/// Streaming signed 16-bit LE PCM source (e.g. from `rtl_fm`) yielding normalized `f32` samples.
+struct PcmI16ReaderSource {
+    reader: BufReader<Box<dyn Read + Send>>,
+    sample_rate: u32,
+    channels: u16,
+    buf: Vec<u8>,
+    pos: usize,
+    filled: usize,
+}
+
+impl PcmI16ReaderSource {
+    fn new(reader: Box<dyn Read + Send>, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            reader: BufReader::with_capacity(16 * 1024, reader),
+            sample_rate: sample_rate.max(8_000),
+            channels: channels.max(1),
+            buf: vec![0u8; 4096],
+            pos: 0,
+            filled: 0,
+        }
+    }
+}
+
+impl Iterator for PcmI16ReaderSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos + 2 > self.filled {
+            let leftover = self.filled.saturating_sub(self.pos);
+            if leftover == 1 {
+                self.buf[0] = self.buf[self.pos];
+            }
+            self.pos = 0;
+            self.filled = leftover;
+            while self.filled < 2 {
+                match self.reader.read(&mut self.buf[self.filled..]) {
+                    Ok(0) => return None,
+                    Ok(n) => self.filled += n,
+                    Err(_) => return None,
+                }
+            }
+        }
+        let sample = i16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
+        self.pos += 2;
+        Some(sample as f32 / 32768.0)
+    }
+}
+
+impl Source for PcmI16ReaderSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 impl AudioEngine for RodioEngine {
+    fn load_pcm_stream(
+        &mut self,
+        reader: Box<dyn Read + Send>,
+        sample_rate: u32,
+        channels: u16,
+        volume: f32,
+    ) -> Result<()> {
+        let vol = volume.clamp(0.0, 1.0);
+        self.base_volume = vol;
+
+        if let Some((old_fade, ..)) = self.fading_out.take() {
+            old_fade.stop();
+        }
+        self.fading_in = None;
+        if let Some(old) = self.sink.take() {
+            old.stop();
+        }
+
+        let handle = self.ensure_stream()?;
+        let sink = Sink::try_new(handle)
+            .map_err(|e| ZunoError::Audio(format!("failed to create FM audio sink: {e}")))?;
+
+        let pcm = PcmI16ReaderSource::new(reader, sample_rate, channels);
+        let source = EqSource::with_spectrum(
+            pcm,
+            Arc::clone(&self.eq),
+            Some(Arc::clone(&self.spectrum)),
+        );
+
+        sink.set_volume(vol);
+        sink.append(source);
+        sink.play();
+
+        self.sink = Some(sink);
+        self.loaded = true;
+        Ok(())
+    }
+
     fn load_and_play(&mut self, path: &Path, volume: f32) -> Result<()> {
         let vol = volume.clamp(0.0, 1.0);
         self.base_volume = vol;

@@ -1,3 +1,10 @@
+import type {
+  DiscoveredStation,
+  FmHardwareStatus,
+  RadioStoreData,
+  ResolvedStreamInfo,
+} from '@/lib/radioStore'
+
 export interface Track {
   id: string
   rel_path: string
@@ -402,6 +409,86 @@ export const zunoApi = {
     const tauri = getTauriInternals()
     if (!tauri) return
     await tauri.invoke('zuno_relaunch_app')
+  },
+
+  async radioLoadStore(): Promise<RadioStoreData | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    return await tauri.invoke<RadioStoreData>('zuno_radio_load_store')
+  },
+
+  async radioSaveStore(store: RadioStoreData): Promise<void> {
+    const tauri = getTauriInternals()
+    if (!tauri) return
+    await tauri.invoke('zuno_radio_save_store', { store })
+  },
+
+  async radioDiscover(opts: {
+    query?: string
+    tag?: string
+    country?: string
+    language?: string
+    limit?: number
+  }): Promise<DiscoveredStation[]> {
+    const tauri = getTauriInternals()
+    if (!tauri) return []
+    return await tauri.invoke<DiscoveredStation[]>('zuno_radio_discover', {
+      query: opts.query ?? null,
+      tag: opts.tag ?? null,
+      country: opts.country ?? null,
+      language: opts.language ?? null,
+      limit: opts.limit ?? 40,
+    })
+  },
+
+  async radioResolveUrl(url: string): Promise<ResolvedStreamInfo> {
+    const tauri = getTauriInternals()
+    if (!tauri) {
+      return {
+        original_url: url,
+        resolved_url: url,
+        name: null,
+        genre: null,
+        bitrate: null,
+        content_type: null,
+        is_hls: /\.m3u8(\?|$)/i.test(url),
+      }
+    }
+    return await tauri.invoke<ResolvedStreamInfo>('zuno_radio_resolve_url', { url })
+  },
+
+  async fmHardwareStatus(): Promise<FmHardwareStatus> {
+    const tauri = getTauriInternals()
+    if (!tauri) {
+      return {
+        available: false,
+        backend: 'none',
+        devices: [],
+        rtl_fm_installed: false,
+        usb_sdr_detected: false,
+        v4l2_devices: [],
+        active_freq_mhz: null,
+        message:
+          'Offline FM hardware reception requires the native Zuno desktop app with an RTL-SDR USB dongle or V4L2 FM tuner. You can still dial & mark offline FM frequencies below.',
+      }
+    }
+    return await tauri.invoke<FmHardwareStatus>('zuno_fm_hardware_status')
+  },
+
+  async fmTune(freqMhz: number): Promise<FmHardwareStatus> {
+    const tauri = getTauriInternals()
+    if (!tauri) {
+      throw new Error(
+        'Offline FM hardware reception requires the native Zuno desktop app with an RTL-SDR USB dongle or V4L2 FM tuner.',
+      )
+    }
+    return await tauri.invoke<FmHardwareStatus>('zuno_fm_tune', { freqMhz })
+  },
+
+  async fmStop(): Promise<FmHardwareStatus | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    return await tauri.invoke<FmHardwareStatus>('zuno_fm_stop')
   },
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,

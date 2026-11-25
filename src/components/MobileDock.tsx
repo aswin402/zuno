@@ -79,6 +79,13 @@ export function MobileDock({
       active: (page === 'playlists' || page === 'playlist') && !searchOpen,
       onClick: () => onNavigate('playlists'),
     },
+    {
+      id: 'radio',
+      icon: 'radio',
+      label: 'FM',
+      active: page === 'radio' && !searchOpen,
+      onClick: () => onNavigate('radio'),
+    },
   ]
 
   const artistLabel = track
@@ -198,7 +205,7 @@ export function MobileDock({
         {/* Lower Tier: Nested Contrasting 4-Tab Curved Nav Tray */}
         <nav
           aria-label="Navigation"
-          className="grid grid-cols-4 items-center rounded-[28px] bg-primary px-3 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
+          className="grid grid-cols-5 items-center rounded-[28px] bg-primary px-2.5 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
         >
           {navItems.map((item) => (
             <button

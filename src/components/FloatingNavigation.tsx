@@ -26,6 +26,7 @@ interface FloatingNavigationProps {
   recentCount: number
   sourceCount: number
   eqEnabled: boolean
+  radioActive?: boolean
   mode: ThemeMode
   themeTransition: ThemeTransitionId
   themeTransitionStart: ThemeTransitionStartId
@@ -35,6 +36,7 @@ interface FloatingNavigationProps {
   onToggleMode: () => void
   onGoHome: () => void
   onGoRecent: () => void
+  onGoRadio: () => void
   onOpenSearch: () => void
   onOpenFavorites: () => void
   onOpenPlaylistsHub: () => void
@@ -65,6 +67,7 @@ export function FloatingNavigation({
   recentCount,
   sourceCount,
   eqEnabled,
+  radioActive = false,
   mode,
   themeTransition,
   themeTransitionStart,
@@ -74,6 +77,7 @@ export function FloatingNavigation({
   onToggleMode,
   onGoHome,
   onGoRecent,
+  onGoRadio,
   onOpenSearch,
   onOpenFavorites,
   onOpenPlaylistsHub,
@@ -175,6 +179,14 @@ export function FloatingNavigation({
       active: (page === 'playlists' || (page === 'playlist' && !isFav)) && !searchOpen,
       badge: playlists.length > 0 ? playlists.length : undefined,
       onClick: onOpenPlaylistsHub,
+    },
+    {
+      id: 'radio',
+      label: 'FM Radio',
+      icon: 'radio',
+      active: page === 'radio' && !searchOpen,
+      badge: radioActive,
+      onClick: onGoRadio,
     },
     {
       id: 'equalizer',
@@ -301,7 +313,7 @@ export function FloatingNavigation({
             aria-label="Floating dock navigation"
             className="flex items-center gap-1 rounded-2xl border border-border bg-card p-1.5 shadow-xl"
           >
-            {navItems.slice(0, 6).map((item) => (
+            {navItems.slice(0, 7).map((item) => (
               <Tooltip key={item.id} label={item.label} side="bottom">
                 <button
                   type="button"

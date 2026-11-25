@@ -1,6 +1,7 @@
 use crate::engine::{AudioEngine, RodioEngine};
 use crate::eq::EqConfig;
 use crate::spectrum::{AudioLevels, SharedSpectrum};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -13,6 +14,13 @@ use zuno_core::{
 enum AudioCmd {
     LoadAndPlay {
         path: PathBuf,
+        volume: f32,
+        reply: mpsc::Sender<Result<()>>,
+    },
+    LoadPcmStream {
+        reader: Box<dyn Read + Send>,
+        sample_rate: u32,
+        channels: u16,
         volume: f32,
         reply: mpsc::Sender<Result<()>>,
     },
@@ -98,6 +106,7 @@ impl ZunoService {
             .name("zuno-audio".into())
             .spawn(move || {
                 let mut active = false;
+                let mut pcm_live = false;
                 let mut crossfade_secs: f32 = 0.0;
                 let mut fading = false;
                 let mut next_tick = Instant::now() + Duration::from_millis(200);
@@ -117,9 +126,23 @@ impl ZunoService {
                         }) => {
                             let res = engine.load_and_play(&path, volume);
                             active = res.is_ok();
+                            pcm_live = false;
                             fading = engine.tick_transition();
                             next_tick = Instant::now()
                                 + Duration::from_millis(if fading { 25 } else { 200 });
+                            let _ = reply.send(res);
+                        }
+                        Ok(AudioCmd::LoadPcmStream {
+                            reader,
+                            sample_rate,
+                            channels,
+                            volume,
+                            reply,
+                        }) => {
+                            let res = engine.load_pcm_stream(reader, sample_rate, channels, volume);
+                            active = false;
+                            pcm_live = res.is_ok();
+                            fading = false;
                             let _ = reply.send(res);
                         }
                         Ok(AudioCmd::Pause) => {
@@ -129,12 +152,13 @@ impl ZunoService {
                         }
                         Ok(AudioCmd::Resume) => {
                             engine.resume();
-                            active = true;
+                            active = !pcm_live;
                             next_tick = Instant::now() + Duration::from_millis(200);
                         }
                         Ok(AudioCmd::Stop) => {
                             engine.stop();
                             active = false;
+                            pcm_live = false;
                             fading = false;
                         }
                         Ok(AudioCmd::Seek { pos, reply }) => {
@@ -270,6 +294,41 @@ impl ZunoService {
             .lock()
             .map(|s| s.play_state == PlayState::Playing)
             .unwrap_or(false)
+    }
+
+    /// Stream live raw signed 16-bit LE PCM audio (e.g., from an RTL-SDR hardware FM receiver)
+    /// directly through Zuno's Rodio output, 10-band Rust EQ, and 1024-pt FFT visualizer.
+    pub fn play_pcm_stream(
+        &self,
+        reader: Box<dyn Read + Send>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<()> {
+        let vol = {
+            let mut st = self.inner.lock().unwrap();
+            if st.play_state == PlayState::Playing {
+                st.play_state = PlayState::Paused;
+            }
+            st.volume
+        };
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.audio_tx
+            .send(AudioCmd::LoadPcmStream {
+                reader,
+                sample_rate,
+                channels,
+                volume: vol,
+                reply: reply_tx,
+            })
+            .map_err(|_| ZunoError::Audio("audio thread unavailable".into()))?;
+        reply_rx
+            .recv()
+            .map_err(|_| ZunoError::Audio("audio thread dropped reply".into()))?
+    }
+
+    /// Stop any live PCM hardware FM stream without clearing the user's song queue.
+    pub fn stop_pcm_stream(&self) {
+        let _ = self.audio_tx.send(AudioCmd::Stop);
     }
 
     /// Execute any `IpcRequest` and return a structured `IpcResponse`.
