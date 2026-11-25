@@ -174,7 +174,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [sources, setSources] = useState<MusicSource[]>([])
   const [suggestedDirs, setSuggestedDirs] = useState<string[]>([])
-  const [appVersion, setAppVersion] = useState<string>('0.0.18')
+  const [appVersion, setAppVersion] = useState<string>('0.0.19')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [updateChecking, setUpdateChecking] = useState(false)
@@ -1903,13 +1903,69 @@ export default function App() {
     }
   }, [activeRadio, currentTrack])
 
+  const handleDisconnectRadio = useCallback(() => {
+    const el = radioAudioRef.current
+    if (el) {
+      el.pause()
+      el.removeAttribute('src')
+      el.load()
+    }
+    if (nativeAudio) {
+      zunoApi
+        .fmStop()
+        .then((st) => {
+          if (st) setFmHardware(st)
+        })
+        .catch(() => {})
+    }
+    setActiveRadio((cur) =>
+      cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
+    )
+    notify('FM disconnected')
+  }, [nativeAudio, notify])
+
+  const handleReconnectRadio = useCallback(() => {
+    if (!activeRadio) return
+    if (activeRadio.kind === 'online' && activeRadio.url) {
+      pauseLocalSongs()
+      const el = radioAudioRef.current
+      if (!el) return
+      const wasConnected = activeRadio.isPlaying || activeRadio.isBuffering
+      el.pause()
+      el.removeAttribute('src')
+      el.load()
+      setActiveRadio((cur) =>
+        cur ? { ...cur, isPlaying: false, isBuffering: true, error: null } : null,
+      )
+      el.src = activeRadio.url
+      el.volume = volume
+      el.load()
+      el.play().catch(() => {
+        setActiveRadio((cur) =>
+          cur ? { ...cur, isPlaying: false, isBuffering: false, error: 'Stream failed' } : null,
+        )
+        notify(`Unable to connect to ${activeRadio.name}`)
+      })
+      notify(wasConnected ? `Reconnecting ${activeRadio.name}...` : `Connecting ${activeRadio.name}...`)
+      return
+    }
+    if (activeRadio.kind === 'offline' && activeRadio.freqMhz !== undefined) {
+      handleTuneOfflineSignal(activeRadio.freqMhz, activeRadio.name, activeRadio.id)
+    }
+  }, [activeRadio, pauseLocalSongs, volume, notify, handleTuneOfflineSignal])
+
   const displayIsPlaying = activeRadio ? activeRadio.isPlaying : isPlaying
+  const displayIsBuffering = Boolean(activeRadio?.isBuffering)
   const displayLiveLabel = activeRadio
     ? activeRadio.kind === 'offline'
-      ? `SIGNAL · ${formatMhz(activeRadio.freqMhz ?? radioStore.last_freq_mhz)}`
+      ? activeRadio.isPlaying
+        ? `SIGNAL · ${formatMhz(activeRadio.freqMhz ?? radioStore.last_freq_mhz)}`
+        : `DISCONNECTED · ${formatMhz(activeRadio.freqMhz ?? radioStore.last_freq_mhz)}`
       : activeRadio.isBuffering
         ? 'CONNECTING · ONLINE FM'
-        : 'LIVE · ONLINE FM'
+        : activeRadio.isPlaying
+          ? 'LIVE · ONLINE FM'
+          : 'DISCONNECTED · ONLINE FM'
     : null
 
   const displayIsFavorite = useMemo(() => {
@@ -1986,6 +2042,7 @@ export default function App() {
     isPlaying: displayIsPlaying,
     isFavorite: displayIsFavorite,
     liveLabel: displayLiveLabel,
+    isBuffering: displayIsBuffering,
     radioDemoVisualizer: activeRadio?.kind === 'online',
     position,
     duration,
@@ -1994,6 +2051,8 @@ export default function App() {
     repeat,
     playlists,
     onTogglePlay: handleTogglePlay,
+    onReconnectRadio: handleReconnectRadio,
+    onDisconnectRadio: handleDisconnectRadio,
     onPrev: displayPrev,
     onNext: displayNext,
     onSeekChange: setPosition,
@@ -2482,6 +2541,8 @@ export default function App() {
               appearance={appearance}
               onRefreshHardware={refreshFmHardware}
               onPlayOnlineStation={handlePlayOnlineStation}
+              onReconnectRadio={handleReconnectRadio}
+              onDisconnectRadio={handleDisconnectRadio}
               onStopRadio={() => stopRadioPlayback()}
               onToggleMarkOnline={handleToggleMarkOnline}
               onAddCustomOnline={handleAddCustomOnline}
@@ -2548,6 +2609,7 @@ export default function App() {
           isPlaying={displayIsPlaying}
           isFavorite={displayIsFavorite}
           liveLabel={displayLiveLabel}
+          isBuffering={displayIsBuffering}
           position={position}
           duration={duration}
           volume={volume}
@@ -2558,6 +2620,8 @@ export default function App() {
           eqOpen={page === 'equalizer'}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
+          onReconnectRadio={handleReconnectRadio}
+          onDisconnectRadio={handleDisconnectRadio}
           onPrev={displayPrev}
           onNext={displayNext}
           onSeekChange={setPosition}
@@ -2579,8 +2643,12 @@ export default function App() {
           track={displayTrack}
           isPlaying={displayIsPlaying}
           isFavorite={displayIsFavorite}
+          isRadio={Boolean(activeRadio)}
+          isBuffering={displayIsBuffering}
           appearance={appearance}
           onTogglePlay={handleTogglePlay}
+          onReconnectRadio={handleReconnectRadio}
+          onDisconnectRadio={handleDisconnectRadio}
           onToggleFavorite={displayToggleFavorite}
           onExpandPlayer={() => setMobilePlayerOpen(true)}
           onNavigate={(next) => {

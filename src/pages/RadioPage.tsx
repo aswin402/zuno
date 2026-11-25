@@ -31,7 +31,6 @@ import {
 } from '@/components/ui/motion'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Loader2 } from '@/components/PulseBarsLoader'
-import { ZunoIcon } from '@/components/ZunoIcon'
 import { cn } from '@/lib/utils'
 import type { AppearanceSettings } from '@/lib/appearance'
 import {
@@ -64,6 +63,8 @@ interface RadioPageProps {
   appearance: AppearanceSettings
   onRefreshHardware: () => void
   onPlayOnlineStation: (station: OnlineStation, pool: OnlineStation[]) => void
+  onReconnectRadio: () => void
+  onDisconnectRadio: () => void
   onStopRadio: () => void
   onToggleMarkOnline: (stationId: string) => void
   onAddCustomOnline: (
@@ -96,6 +97,8 @@ export function RadioPage({
   appearance,
   onRefreshHardware,
   onPlayOnlineStation,
+  onReconnectRadio,
+  onDisconnectRadio,
   onStopRadio,
   onToggleMarkOnline,
   onAddCustomOnline,
@@ -109,8 +112,41 @@ export function RadioPage({
   onDeleteOfflineSignal,
   onExpandNowPlaying,
 }: RadioPageProps) {
-  const iconPack = appearance.iconPack
+  const playingStyle = appearance.playingStyle
   const [tab, setTab] = useState<RadioTab>('online')
+
+  /** High-contrast playing indicator matching Zuno's active playingStyle (never white-on-white). */
+  const renderFmRowBadge = (isActive: boolean, isPlayingThis: boolean, isBufferingThis: boolean) => {
+    if (isBufferingThis) {
+      return <LoaderCircle className="h-4 w-4 animate-spin" />
+    }
+    if (isPlayingThis) {
+      if (playingStyle === 'equalizer') {
+        return (
+          <span className="flex h-4 items-end justify-center gap-[2px]" aria-label="Playing">
+            <span className="zuno-eq-bar" style={{ backgroundColor: 'currentColor' }} />
+            <span className="zuno-eq-bar" style={{ backgroundColor: 'currentColor' }} />
+            <span className="zuno-eq-bar" style={{ backgroundColor: 'currentColor' }} />
+            <span className="zuno-eq-bar" style={{ backgroundColor: 'currentColor' }} />
+          </span>
+        )
+      }
+      return (
+        <Loader2
+          barCount={4}
+          height={14}
+          width={2.2}
+          gap={2}
+          speed={0.92}
+          color="currentColor"
+        />
+      )
+    }
+    if (isActive) {
+      return <RefreshCw className="h-3.5 w-3.5" />
+    }
+    return <Radio className="h-4 w-4" />
+  }
 
   // ── Online FM filters ──
   const [onlineSearch, setOnlineSearch] = useState('')
@@ -494,35 +530,72 @@ export function RadioPage({
         <div className="flex flex-wrap items-center gap-2">
           {activeRadio && (
             <div className="inline-flex h-9 items-center gap-2 rounded-full border border-border bg-card pl-3 pr-1.5 text-xs">
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span
-                  className={cn(
-                    'absolute inline-flex h-full w-full rounded-full bg-primary opacity-75',
-                    activeRadio.isPlaying && 'animate-ping',
-                  )}
+              {activeRadio.isBuffering ? (
+                <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              ) : activeRadio.isPlaying ? (
+                <Loader2
+                  barCount={3}
+                  height={12}
+                  width={2}
+                  gap={1.5}
+                  speed={0.9}
+                  color="var(--primary)"
+                  className="shrink-0"
                 />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-              </span>
+              ) : (
+                <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/60" />
+              )}
               <button
                 type="button"
                 onClick={onExpandNowPlaying}
-                className="max-w-[160px] truncate font-medium text-foreground hover:text-primary cursor-pointer"
+                className="max-w-[150px] truncate font-medium text-foreground hover:text-primary cursor-pointer"
               >
                 {activeRadio.name}
               </button>
               <span className="hidden rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[9.5px] uppercase text-muted-foreground sm:inline">
-                {activeRadio.kind === 'offline'
-                  ? formatMhz(activeRadio.freqMhz ?? currentFreq)
-                  : 'LIVE'}
+                {activeRadio.isBuffering
+                  ? 'CONNECTING'
+                  : !activeRadio.isPlaying
+                    ? 'OFFLINE'
+                    : activeRadio.kind === 'offline'
+                      ? formatMhz(activeRadio.freqMhz ?? currentFreq)
+                      : 'LIVE'}
               </span>
-              <Tooltip label="Stop FM" side="bottom">
+              <Tooltip
+                label={activeRadio.isPlaying ? 'Reconnect FM' : 'Connect FM'}
+                side="bottom"
+              >
+                <button
+                  type="button"
+                  onClick={onReconnectRadio}
+                  aria-label={activeRadio.isPlaying ? 'Reconnect FM' : 'Connect FM'}
+                  className="t-press flex h-6 w-6 items-center justify-center rounded-full text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                >
+                  <RefreshCw
+                    className={cn('h-3 w-3', activeRadio.isBuffering && 'animate-spin')}
+                  />
+                </button>
+              </Tooltip>
+              {(activeRadio.isPlaying || activeRadio.isBuffering) && (
+                <Tooltip label="Disconnect FM" side="bottom">
+                  <button
+                    type="button"
+                    onClick={onDisconnectRadio}
+                    aria-label="Disconnect FM"
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                  >
+                    <Square className="h-2.5 w-2.5 fill-current" />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip label="Close FM banner" side="bottom">
                 <button
                   type="button"
                   onClick={onStopRadio}
-                  aria-label="Stop FM"
+                  aria-label="Close FM"
                   className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
                 >
-                  <Square className="h-3 w-3 fill-current" />
+                  <X className="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -693,8 +766,8 @@ export function RadioPage({
                   <div
                     key={station.id}
                     onClick={() =>
-                      isPlayingThis
-                        ? onStopRadio()
+                      isActive && (isPlayingThis || isBufferingThis)
+                        ? onReconnectRadio()
                         : onPlayOnlineStation(station, filteredOnline)
                     }
                     className={cn(
@@ -705,34 +778,42 @@ export function RadioPage({
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (isPlayingThis) onStopRadio()
-                          else onPlayOnlineStation(station, filteredOnline)
-                        }}
-                        aria-label={isPlayingThis ? `Stop ${station.name}` : `Play ${station.name}`}
-                        className={cn(
-                          'flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-95 cursor-pointer',
-                          isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'border border-border bg-background text-foreground group-hover:border-primary/50',
-                        )}
-                      >
-                        {isBufferingThis ? (
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : isPlayingThis ? (
-                          <Loader2 barCount={3} height={14} width={2.2} gap={2} speed={0.95} />
-                        ) : (
-                          <ZunoIcon
-                            name="play"
-                            pack={iconPack}
-                            filled
-                            className="h-3.5 w-3.5 translate-x-[0.5px]"
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center">
+                        {isPlayingThis && appearance.showPlayPulse && (
+                          <span
+                            aria-hidden="true"
+                            className="animate-btn-pulse pointer-events-none absolute inset-0 rounded-full border border-primary"
                           />
                         )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (isActive && (isPlayingThis || isBufferingThis)) {
+                              onReconnectRadio()
+                            } else {
+                              onPlayOnlineStation(station, filteredOnline)
+                            }
+                          }}
+                          aria-label={
+                            isActive
+                              ? isPlayingThis
+                                ? `Reconnect ${station.name}`
+                                : `Connect ${station.name}`
+                              : `Connect ${station.name}`
+                          }
+                          className={cn(
+                            'relative z-10 flex h-10 w-10 items-center justify-center rounded-full transition-transform active:scale-95 cursor-pointer',
+                            isPlayingThis || isBufferingThis
+                              ? 'bg-primary text-primary-foreground'
+                              : isActive
+                                ? 'border border-primary/50 bg-background text-primary'
+                                : 'border border-border bg-background text-foreground group-hover:border-primary/50',
+                          )}
+                        >
+                          {renderFmRowBadge(isActive, isPlayingThis, isBufferingThis)}
+                        </button>
+                      </div>
 
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
@@ -769,6 +850,40 @@ export function RadioPage({
                       className="flex shrink-0 items-center gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {isActive && (
+                        <>
+                          <Tooltip
+                            label={isPlayingThis ? 'Reconnect stream' : 'Connect stream'}
+                            side="top"
+                          >
+                            <button
+                              type="button"
+                              onClick={onReconnectRadio}
+                              className="t-press inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-[11px] font-medium text-foreground hover:bg-secondary cursor-pointer"
+                            >
+                              <RefreshCw
+                                className={cn('h-3 w-3', isBufferingThis && 'animate-spin')}
+                              />
+                              <span className="hidden sm:inline">
+                                {isPlayingThis ? 'Reconnect' : 'Connect'}
+                              </span>
+                            </button>
+                          </Tooltip>
+                          {(isPlayingThis || isBufferingThis) && (
+                            <Tooltip label="Disconnect" side="top">
+                              <button
+                                type="button"
+                                onClick={onDisconnectRadio}
+                                aria-label={`Disconnect ${station.name}`}
+                                className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                              >
+                                <Square className="h-3 w-3 fill-current" />
+                              </button>
+                            </Tooltip>
+                          )}
+                        </>
+                      )}
+
                       <Tooltip
                         label={isMarked ? 'Unmark online station' : 'Mark online station'}
                         side="top"
@@ -921,8 +1036,8 @@ export function RadioPage({
                   <div
                     key={st.id}
                     onClick={() =>
-                      isPlayingThis
-                        ? onStopRadio()
+                      isActive && (isPlayingThis || isBufferingThis)
+                        ? onReconnectRadio()
                         : onPlayOnlineStation(asOnline, [asOnline])
                     }
                     className={cn(
@@ -933,34 +1048,38 @@ export function RadioPage({
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (isPlayingThis) onStopRadio()
-                          else onPlayOnlineStation(asOnline, [asOnline])
-                        }}
-                        aria-label={isPlayingThis ? `Stop ${st.name}` : `Play ${st.name}`}
-                        className={cn(
-                          'flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-transform active:scale-95 cursor-pointer',
-                          isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'border border-border bg-background text-foreground',
-                        )}
-                      >
-                        {isBufferingThis ? (
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-                        ) : isPlayingThis ? (
-                          <Loader2 barCount={3} height={14} width={2.2} gap={2} speed={0.95} />
-                        ) : (
-                          <ZunoIcon
-                            name="play"
-                            pack={iconPack}
-                            filled
-                            className="h-3.5 w-3.5 translate-x-[0.5px]"
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center">
+                        {isPlayingThis && appearance.showPlayPulse && (
+                          <span
+                            aria-hidden="true"
+                            className="animate-btn-pulse pointer-events-none absolute inset-0 rounded-full border border-primary"
                           />
                         )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (isActive && (isPlayingThis || isBufferingThis)) {
+                              onReconnectRadio()
+                            } else {
+                              onPlayOnlineStation(asOnline, [asOnline])
+                            }
+                          }}
+                          aria-label={
+                            isPlayingThis ? `Reconnect ${st.name}` : `Connect ${st.name}`
+                          }
+                          className={cn(
+                            'relative z-10 flex h-10 w-10 items-center justify-center rounded-full transition-transform active:scale-95 cursor-pointer',
+                            isPlayingThis || isBufferingThis
+                              ? 'bg-primary text-primary-foreground'
+                              : isActive
+                                ? 'border border-primary/50 bg-background text-primary'
+                                : 'border border-border bg-background text-foreground',
+                          )}
+                        >
+                          {renderFmRowBadge(isActive, isPlayingThis, isBufferingThis)}
+                        </button>
+                      </div>
 
                       <div className="min-w-0">
                         <p
@@ -989,6 +1108,40 @@ export function RadioPage({
                       className="flex shrink-0 items-center gap-1.5"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {isActive && (
+                        <>
+                          <Tooltip
+                            label={isPlayingThis ? 'Reconnect stream' : 'Connect stream'}
+                            side="top"
+                          >
+                            <button
+                              type="button"
+                              onClick={onReconnectRadio}
+                              className="t-press inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-[11px] font-medium text-foreground hover:bg-secondary cursor-pointer"
+                            >
+                              <RefreshCw
+                                className={cn('h-3 w-3', isBufferingThis && 'animate-spin')}
+                              />
+                              <span className="hidden sm:inline">
+                                {isPlayingThis ? 'Reconnect' : 'Connect'}
+                              </span>
+                            </button>
+                          </Tooltip>
+                          {(isPlayingThis || isBufferingThis) && (
+                            <Tooltip label="Disconnect" side="top">
+                              <button
+                                type="button"
+                                onClick={onDisconnectRadio}
+                                aria-label={`Disconnect ${st.name}`}
+                                className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                              >
+                                <Square className="h-3 w-3 fill-current" />
+                              </button>
+                            </Tooltip>
+                          )}
+                        </>
+                      )}
+
                       <button
                         type="button"
                         disabled={alreadySaved}
@@ -1284,36 +1437,40 @@ export function RadioPage({
 
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isOfflinePlayingThisFreq) {
-                      onStopRadio()
-                    } else {
-                      onTuneOfflineSignal(
-                        currentFreq,
-                        matchedOfflineSignal?.name,
-                        matchedOfflineSignal?.id,
-                      )
-                    }
-                  }}
-                  className={cn(
-                    't-press mx-1 inline-flex h-10 items-center gap-2 rounded-full px-5 text-xs font-semibold shadow-sm transition-opacity hover:opacity-90 cursor-pointer',
-                    isOfflinePlayingThisFreq
-                      ? 'bg-secondary text-foreground border border-primary/50'
-                      : 'bg-primary text-primary-foreground',
-                  )}
+                  onClick={() =>
+                    onTuneOfflineSignal(
+                      currentFreq,
+                      matchedOfflineSignal?.name,
+                      matchedOfflineSignal?.id,
+                    )
+                  }
+                  className="t-press mx-1 inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-xs font-semibold text-primary-foreground shadow-sm transition-opacity hover:opacity-90 cursor-pointer"
                 >
                   {isOfflinePlayingThisFreq ? (
                     <>
-                      <Square className="h-3.5 w-3.5 fill-current" />
-                      <span>Stop Signal</span>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>Reconnect {currentFreq.toFixed(1)}</span>
                     </>
                   ) : (
                     <>
-                      <ZunoIcon name="play" pack={iconPack} filled className="h-3.5 w-3.5" />
-                      <span>Tune {currentFreq.toFixed(1)}</span>
+                      <Radio className="h-3.5 w-3.5" />
+                      <span>Connect {currentFreq.toFixed(1)}</span>
                     </>
                   )}
                 </button>
+
+                {isOfflinePlayingThisFreq && (
+                  <Tooltip label="Disconnect offline FM" side="top">
+                    <button
+                      type="button"
+                      onClick={onDisconnectRadio}
+                      aria-label="Disconnect offline FM"
+                      className="t-press flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground hover:bg-secondary cursor-pointer"
+                    >
+                      <Square className="h-3.5 w-3.5 fill-current" />
+                    </button>
+                  </Tooltip>
+                )}
 
                 <button
                   type="button"
@@ -1645,8 +1802,8 @@ export function RadioPage({
                           <div
                             key={station.id}
                             onClick={() =>
-                              isPlayingThis
-                                ? onStopRadio()
+                              isActive && (isPlayingThis || isBufferingThis)
+                                ? onReconnectRadio()
                                 : onPlayOnlineStation(station, markedOnlineStations)
                             }
                             className={cn(
@@ -1657,27 +1814,26 @@ export function RadioPage({
                             )}
                           >
                             <div className="flex min-w-0 items-center gap-3">
-                              <span
-                                className={cn(
-                                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-                                  isActive
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'border border-border bg-background text-foreground',
-                                )}
-                              >
-                                {isBufferingThis ? (
-                                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                                ) : isPlayingThis ? (
-                                  <Loader2 barCount={3} height={13} width={2} gap={2} speed={0.95} />
-                                ) : (
-                                  <ZunoIcon
-                                    name="play"
-                                    pack={iconPack}
-                                    filled
-                                    className="h-3.5 w-3.5 translate-x-[0.5px]"
+                              <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                                {isPlayingThis && appearance.showPlayPulse && (
+                                  <span
+                                    aria-hidden="true"
+                                    className="animate-btn-pulse pointer-events-none absolute inset-0 rounded-full border border-primary"
                                   />
                                 )}
-                              </span>
+                                <span
+                                  className={cn(
+                                    'relative z-10 flex h-9 w-9 items-center justify-center rounded-full',
+                                    isPlayingThis || isBufferingThis
+                                      ? 'bg-primary text-primary-foreground'
+                                      : isActive
+                                        ? 'border border-primary/50 bg-background text-primary'
+                                        : 'border border-border bg-background text-foreground',
+                                  )}
+                                >
+                                  {renderFmRowBadge(isActive, isPlayingThis, isBufferingThis)}
+                                </span>
+                              </div>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                   <p
@@ -1706,17 +1862,56 @@ export function RadioPage({
                               </div>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onToggleMarkOnline(station.id)
-                              }}
-                              aria-label={`Unmark ${station.name}`}
-                              className="t-press flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground cursor-pointer"
+                            <div
+                              className="flex shrink-0 items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              <Bookmark className="h-3.5 w-3.5 fill-current" />
-                            </button>
+                              {isActive && (
+                                <>
+                                  <Tooltip
+                                    label={isPlayingThis ? 'Reconnect' : 'Connect'}
+                                    side="top"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={onReconnectRadio}
+                                      className="t-press inline-flex h-8 items-center gap-1 rounded-full border border-border bg-background px-2.5 text-[11px] font-medium text-foreground hover:bg-secondary cursor-pointer"
+                                    >
+                                      <RefreshCw
+                                        className={cn(
+                                          'h-3 w-3',
+                                          isBufferingThis && 'animate-spin',
+                                        )}
+                                      />
+                                      <span className="hidden sm:inline">
+                                        {isPlayingThis ? 'Reconnect' : 'Connect'}
+                                      </span>
+                                    </button>
+                                  </Tooltip>
+                                  {(isPlayingThis || isBufferingThis) && (
+                                    <Tooltip label="Disconnect" side="top">
+                                      <button
+                                        type="button"
+                                        onClick={onDisconnectRadio}
+                                        aria-label={`Disconnect ${station.name}`}
+                                        className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
+                                      >
+                                        <Square className="h-3 w-3 fill-current" />
+                                      </button>
+                                    </Tooltip>
+                                  )}
+                                </>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => onToggleMarkOnline(station.id)}
+                                aria-label={`Unmark ${station.name}`}
+                                className="t-press flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground cursor-pointer"
+                              >
+                                <Bookmark className="h-3.5 w-3.5 fill-current" />
+                              </button>
+                            </div>
                           </div>
                         )
                       })}

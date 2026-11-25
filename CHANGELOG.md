@@ -5,6 +5,17 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.19] — 2026-11-25
+
+FM Radio playing animation contrast fix, Connect/Reconnect/Disconnect live controls, and unified mobile + desktop Now Playing layout.
+
+### Fixed
+- **FM Playing Animation Contrast (`src/pages/RadioPage.tsx`)**: Fixed invisible white-on-white pulse bars inside active FM station circles by rendering `Loader2` and `.zuno-eq-bar` with high-contrast `currentColor` alongside the active pulse ring (`animate-btn-pulse`) and live bars in the FM header pill and player dock.
+
+### Improved
+- **FM Connect / Reconnect & Disconnect Controls (`src/pages/RadioPage.tsx`, `src/components/DesktopPlayerBar.tsx`, `src/components/MobileDock.tsx`, `src/components/NowPlayingPanel.tsx`, `src/App.tsx`)**: Replaced Play/Pause controls on live FM radio playback with dedicated **Connect / Reconnect** (cleanly re-buffering online streams or re-tuning offline FM) and **Disconnect** controls across station rows, header status pill, desktop player bar, mobile dock, and full-screen Now Playing.
+- **Unified Mobile & Desktop Now Playing Stage (`src/components/NowPlayingPanel.tsx`)**: Moved the scrubber & split timestamp into the bottom dock above transport controls on mobile screens as well, lowered the track title & artist, expanded the Now Playing visualizer across the full mobile stage, and replaced the mobile `"Swipe up for queue & playlists"` text label with a clean icon-only up arrow.
+
 ## [0.0.18] — 2026-11-25
 
 Offline FM (hardware signal) and Online FM (curated stable streams, custom link pasting, global station discovery, and unified signal/link bookmarking).

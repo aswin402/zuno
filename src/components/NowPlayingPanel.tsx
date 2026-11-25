@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Check, ChevronUp, MoreHorizontal, Sparkles, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  Check,
+  ChevronUp,
+  LoaderCircle,
+  MoreHorizontal,
+  Radio,
+  RefreshCw,
+  Sparkles,
+  Square,
+  X,
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +63,7 @@ interface NowPlayingPanelProps {
   eqEnabled?: boolean
   eqLabel?: string
   liveLabel?: string | null
+  isBuffering?: boolean
   radioDemoVisualizer?: boolean
   appearance?: AppearanceSettings
   audioEl?: HTMLAudioElement | null
@@ -65,6 +77,8 @@ interface NowPlayingPanelProps {
   onSelectQueueIndex?: (idx: number) => void
   onDeleteTrack?: (track: Track) => void
   onTogglePlay: () => void
+  onReconnectRadio?: () => void
+  onDisconnectRadio?: () => void
   onPrev: () => void
   onNext: () => void
   onSeekChange: (secs: number) => void
@@ -93,6 +107,7 @@ export function NowPlayingPanel({
   eqEnabled = false,
   eqLabel = 'Off',
   liveLabel = null,
+  isBuffering = false,
   radioDemoVisualizer = false,
   appearance = DEFAULT_APPEARANCE,
   audioEl = null,
@@ -104,6 +119,8 @@ export function NowPlayingPanel({
   onSelectQueueIndex,
   onDeleteTrack,
   onTogglePlay,
+  onReconnectRadio,
+  onDisconnectRadio,
   onPrev,
   onNext,
   onSeekChange,
@@ -300,7 +317,7 @@ export function NowPlayingPanel({
           transform: pullUpY < 0 ? `translateY(${pullUpY * 0.32}px)` : undefined,
         }}
         className={cn(
-          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-5 pt-[max(1rem,env(safe-area-inset-top))] md:pb-2',
+          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-2 pt-[max(1rem,env(safe-area-inset-top))]',
           pullUpY === 0 && 'transition-transform duration-300 ease-out',
           isLight
             ? 'bg-background shadow-[0_18px_42px_rgba(0,0,0,0.22)]'
@@ -516,20 +533,20 @@ export function NowPlayingPanel({
           </div>
         </header>
 
-        {/* ── Hero Centerpiece: Big Responsive Visualizer + Lowered Song Title (Desktop) / Compact Mobile Stage ── */}
+        {/* ── Hero Centerpiece: Big Responsive Visualizer + Lowered Song Title (Mobile + Desktop Unified) ── */}
         <div
           style={{
             transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
           }}
           className={cn(
-            'relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6 md:justify-end md:px-10 md:pb-1',
+            'relative z-10 flex min-h-0 flex-1 flex-col items-center justify-end px-6 pb-1 md:px-10',
             swipeX === 0 && 'transition-transform duration-300 ease-out',
           )}
         >
           {/* Floating borderless Audio-Reactive Sound Orb / Wave Bars / Harmonic Waves / Bass Ring */}
           {appearance.visualizerStyle !== 'none' &&
             appearance.visualizerStyle !== 'aurora-pulse' && (
-              <div className="relative mb-[clamp(0.75rem,2.4dvh,1.75rem)] flex w-full max-w-[min(92vw,560px)] shrink items-center justify-center md:mb-3 md:min-h-0 md:flex-1 md:max-w-[min(92vw,1160px)]">
+              <div className="relative mb-2.5 flex min-h-0 w-full max-w-[min(92vw,1160px)] flex-1 items-center justify-center md:mb-3">
                 <NowPlayingVisualizer
                   styleVariant={appearance.visualizerStyle}
                   colorMode={appearance.visualizerColor}
@@ -538,76 +555,29 @@ export function NowPlayingPanel({
                   isPlaying={isPlaying}
                   audioEl={audioEl}
                   demo={radioDemoVisualizer}
-                  className={cn(
-                    'w-full md:absolute md:inset-0 md:m-auto md:h-full md:max-h-[600px]',
-                    appearance.visualizerStyle === 'orb' ||
-                      appearance.visualizerStyle === 'radial-ring'
-                      ? 'h-[clamp(116px,26dvh,240px)]'
-                      : 'h-[clamp(84px,19dvh,176px)]',
-                  )}
+                  className="absolute inset-0 m-auto h-full max-h-[600px] w-full"
                 />
               </div>
             )}
 
-          {/* Centered Track Title & Artist (anchored low on Desktop below the big visualizer) */}
+          {/* Centered Track Title & Artist (anchored low below the big responsive visualizer on Mobile & Desktop) */}
           <div className="w-full max-w-[min(90vw,740px)] shrink-0 text-center">
             <TextSwap
               as="h2"
               text={track ? track.title : 'Not Playing'}
-              className="truncate text-[clamp(24px,4.2vw,44px)] font-bold leading-tight tracking-tight text-foreground md:text-[clamp(22px,2.8vw,34px)]"
+              className="truncate text-[clamp(22px,5.6vw,34px)] font-bold leading-tight tracking-tight text-foreground md:text-[clamp(22px,2.8vw,34px)]"
             />
             <TextSwap
               as="p"
               text={subtitle}
-              className="mt-1 truncate text-[clamp(13px,1.8vw,16px)] font-medium text-muted-foreground md:mt-1 md:text-[clamp(13px,1.2vw,15px)]"
+              className="mt-1 truncate text-[clamp(12.5px,3.2vw,15px)] font-medium text-muted-foreground md:text-[clamp(13px,1.2vw,15px)]"
             />
           </div>
-
-          {/* Mobile-Only Scrubber + Split Timestamp (or Live FM Badge) */}
-          {liveLabel ? (
-            <div className="mt-[clamp(1.25rem,4dvh,2.75rem)] flex shrink-0 items-center justify-center md:hidden">
-              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-3.5 py-1 font-mono text-[11px] font-medium tracking-wider text-foreground">
-                <span
-                  className={cn(
-                    'h-2 w-2 rounded-full bg-primary',
-                    isPlaying && 'animate-pulse',
-                  )}
-                />
-                {liveLabel}
-              </span>
-            </div>
-          ) : (
-            <>
-              <div
-                onPointerDown={(e) => e.stopPropagation()}
-                className="mt-[clamp(1.25rem,4dvh,2.75rem)] w-full max-w-[min(88vw,540px)] shrink-0 md:hidden"
-              >
-                <Scrubber
-                  value={position}
-                  max={effectiveDuration || 1}
-                  styleVariant={appearance.scrubberKnob}
-                  seed={track?.id ?? track?.title ?? 'zuno'}
-                  onChange={onSeekChange}
-                  onCommit={onSeekCommit}
-                />
-              </div>
-
-              <div className="mt-3.5 flex shrink-0 items-center justify-center gap-3 tabular-nums text-[12.5px] md:hidden">
-                <span className="font-semibold text-foreground">
-                  {formatTime(position)}
-                </span>
-                <span className="h-3 w-[1px] bg-border" aria-hidden="true" />
-                <span className="font-medium text-muted-foreground">
-                  {formatTime(effectiveDuration)}
-                </span>
-              </div>
-            </>
-          )}
         </div>
 
         {/* Bottom Queue Trigger: Mobile keeps swipe-up pill line; Desktop uses clean borderless Up Arrow button */}
         <div
-          className="flex shrink-0 justify-center pt-1"
+          className="flex shrink-0 justify-center pt-1.5 pb-1 md:pt-1 md:pb-0"
           onPointerDown={(e) => e.stopPropagation()}
         >
           <span
@@ -627,15 +597,15 @@ export function NowPlayingPanel({
         </div>
       </div>
 
-      {/* ── Contrasting Bottom Dock: Desktop Scrubber & Split Time (or Live FM Badge) + Previous · Play/Pause · Next ── */}
-      <footer className="shrink-0 px-8 py-4 pb-[max(0.85rem,env(safe-area-inset-bottom))] md:px-10 md:pt-4 md:pb-5">
-        {/* Desktop Scrubber & Split Elapsed | Total Timestamp (or Live FM Pill) above transport controls */}
+      {/* ── Contrasting Bottom Dock (Mobile + Desktop): Scrubber & Split Time (or Live FM Pill) + Transport Controls ── */}
+      <footer className="shrink-0 px-6 pt-3.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-10 md:pt-4 md:pb-5">
+        {/* Scrubber & Split Elapsed | Total Timestamp (or Live FM Status + Disconnect) above transport controls */}
         <div
           onPointerDown={(e) => e.stopPropagation()}
-          className="mx-auto mb-3.5 hidden w-full max-w-[min(86vw,640px)] flex-col items-center md:flex"
+          className="mx-auto mb-3 flex w-full max-w-[min(90vw,640px)] flex-col items-center md:mb-3.5"
         >
           {liveLabel ? (
-            <div className="flex w-full items-center gap-3.5 py-1.5">
+            <div className="flex w-full items-center gap-3 py-1">
               <div
                 className={cn(
                   'h-[2px] flex-1 rounded-full',
@@ -644,21 +614,44 @@ export function NowPlayingPanel({
               />
               <span
                 className={cn(
-                  'inline-flex items-center gap-2 rounded-full border px-3.5 py-1 font-mono text-[11px] font-medium tracking-wider',
+                  'inline-flex items-center gap-2 rounded-full border px-3 py-1 font-mono text-[10.5px] font-medium tracking-wider sm:text-[11px]',
                   isLight
                     ? 'border-background/25 bg-background/12 text-background'
                     : 'border-border bg-secondary text-foreground',
                 )}
               >
-                <span
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    isLight ? 'bg-background' : 'bg-primary',
-                    isPlaying && 'animate-pulse',
-                  )}
-                />
-                {liveLabel}
+                {isBuffering ? (
+                  <LoaderCircle className="h-3 w-3 animate-spin" />
+                ) : isPlaying ? (
+                  <Loader2
+                    barCount={3}
+                    height={11}
+                    width={2}
+                    gap={1.5}
+                    speed={0.9}
+                    color="currentColor"
+                  />
+                ) : (
+                  <span className="h-1.5 w-1.5 rounded-full bg-current opacity-50" />
+                )}
+                <span>{liveLabel}</span>
               </span>
+              {(isPlaying || isBuffering) && onDisconnectRadio && (
+                <button
+                  type="button"
+                  onClick={onDisconnectRadio}
+                  aria-label="Disconnect FM"
+                  className={cn(
+                    't-press inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-[10.5px] font-medium transition-colors cursor-pointer',
+                    isLight
+                      ? 'border-background/25 bg-background/12 text-background hover:bg-background/20'
+                      : 'border-border bg-secondary text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Square className="h-2.5 w-2.5 fill-current" />
+                  <span>Disconnect</span>
+                </button>
+              )}
               <div
                 className={cn(
                   'h-[2px] flex-1 rounded-full',
@@ -714,7 +707,7 @@ export function NowPlayingPanel({
           <button
             type="button"
             onClick={onPrev}
-            aria-label="Previous track"
+            aria-label={liveLabel ? 'Previous station' : 'Previous track'}
             className={cn(
               'flex h-12 w-12 items-center justify-center rounded-full transition-all active:scale-92 cursor-pointer',
               traySkipClass,
@@ -723,16 +716,46 @@ export function NowPlayingPanel({
             <ZunoIcon name="prev" pack={iconPack} filled className="h-5 w-5" />
           </button>
 
-          {/* Center Play / Pause */}
-          <button
-            type="button"
-            onClick={onTogglePlay}
-            aria-label={isPlaying ? 'Pause' : 'Play'}
-            className={cn(
-              'relative flex h-14 w-14 items-center justify-center rounded-full transition-transform duration-150 active:scale-92 cursor-pointer',
-              trayPlayBtnClass,
-            )}
-          >
+          {/* Center Control: Connect / Reconnect for FM Radio, Play / Pause for local tracks */}
+          {liveLabel ? (
+            <Tooltip
+              label={
+                isBuffering
+                  ? 'Connecting...'
+                  : isPlaying
+                    ? 'Reconnect FM stream'
+                    : 'Connect FM stream'
+              }
+              side="top"
+            >
+              <button
+                type="button"
+                onClick={onReconnectRadio ?? onTogglePlay}
+                aria-label={isPlaying ? 'Reconnect FM' : 'Connect FM'}
+                className={cn(
+                  'relative flex h-14 w-14 items-center justify-center rounded-full transition-transform duration-150 active:scale-92 cursor-pointer',
+                  trayPlayBtnClass,
+                )}
+              >
+                {isBuffering ? (
+                  <LoaderCircle className="h-5 w-5 animate-spin" />
+                ) : isPlaying ? (
+                  <RefreshCw className="h-5 w-5" />
+                ) : (
+                  <Radio className="h-5 w-5" />
+                )}
+              </button>
+            </Tooltip>
+          ) : (
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+              className={cn(
+                'relative flex h-14 w-14 items-center justify-center rounded-full transition-transform duration-150 active:scale-92 cursor-pointer',
+                trayPlayBtnClass,
+              )}
+            >
             {appearance.playButtonStyle === 'waveform' && isPlaying ? (
               <span className="flex h-5 items-center gap-[3px]" aria-hidden="true">
                 <span className="h-full w-[2.5px] rounded-full bg-current animate-wave-1" />
@@ -810,13 +833,14 @@ export function NowPlayingPanel({
                 }
               />
             )}
-          </button>
+            </button>
+          )}
 
           {/* Next */}
           <button
             type="button"
             onClick={onNext}
-            aria-label="Next track"
+            aria-label={liveLabel ? 'Next station' : 'Next track'}
             className={cn(
               'flex h-12 w-12 items-center justify-center rounded-full transition-all active:scale-92 cursor-pointer',
               traySkipClass,
@@ -826,22 +850,23 @@ export function NowPlayingPanel({
           </button>
         </div>
 
-        {/* Mobile Swipe-Up Queue / Playlists Cue */}
+        {/* Mobile Swipe-Up Queue / Playlists Cue (icon-only up arrow) */}
         <button
           type="button"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={() => openSheet('queue')}
+          aria-label="Open queue and playlists"
           style={{
             transform: pullUpY < 0 ? `translateY(${pullUpY * 0.25}px)` : undefined,
           }}
           className={cn(
-            'mx-auto mt-2.5 flex items-center justify-center gap-1 rounded-full px-3 py-1 text-[10.5px] font-medium tracking-wide transition-opacity cursor-pointer md:hidden',
+            'group mx-auto mt-1.5 flex h-8 w-12 items-center justify-center rounded-full transition-colors active:scale-92 cursor-pointer md:hidden',
             isLight
               ? 'text-background/55 hover:text-background/90'
               : 'text-muted-foreground/70 hover:text-foreground',
           )}
         >
-          <ChevronUp className="h-3.5 w-3.5" />
-          <span>Swipe up for queue &amp; playlists</span>
+          <ChevronUp className="h-4.5 w-4.5 transition-transform duration-200 ease-out group-hover:-translate-y-0.5" />
         </button>
       </footer>
 

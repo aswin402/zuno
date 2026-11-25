@@ -1,3 +1,4 @@
+import { LoaderCircle, Radio, RefreshCw, Square } from 'lucide-react'
 import { ArtworkTile } from '@/components/ArtworkTile'
 import { IconSwap, TextSwap } from '@/components/ui/motion'
 import { Loader2 } from '@/components/PulseBarsLoader'
@@ -15,8 +16,12 @@ interface MobileDockProps {
   track: Track | null
   isPlaying: boolean
   isFavorite: boolean
+  isRadio?: boolean
+  isBuffering?: boolean
   appearance: AppearanceSettings
   onTogglePlay: () => void
+  onReconnectRadio?: () => void
+  onDisconnectRadio?: () => void
   onToggleFavorite: () => void
   onExpandPlayer: () => void
   onNavigate: (page: AppPage) => void
@@ -35,8 +40,12 @@ export function MobileDock({
   track,
   isPlaying,
   isFavorite,
+  isRadio = false,
+  isBuffering = false,
   appearance,
   onTogglePlay,
+  onReconnectRadio,
+  onDisconnectRadio,
   onToggleFavorite,
   onExpandPlayer,
   onNavigate,
@@ -158,7 +167,34 @@ export function MobileDock({
                 className="h-9 w-9"
               />
 
-              {appearance.playButtonStyle === 'waveform' ? (
+              {isRadio ? (
+                <>
+                  {(isPlaying || isBuffering) && onDisconnectRadio && (
+                    <button
+                      type="button"
+                      onClick={onDisconnectRadio}
+                      aria-label="Disconnect FM"
+                      className="t-press flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
+                    >
+                      <Square className="h-3.5 w-3.5 fill-current" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onReconnectRadio ?? onTogglePlay}
+                    aria-label={isPlaying ? 'Reconnect FM' : 'Connect FM'}
+                    className="t-press flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
+                  >
+                    {isBuffering ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                    ) : isPlaying ? (
+                      <RefreshCw className="h-4 w-4" />
+                    ) : (
+                      <Radio className="h-4 w-4" />
+                    )}
+                  </button>
+                </>
+              ) : appearance.playButtonStyle === 'waveform' ? (
                 <WaveformPlayButton
                   isPlaying={isPlaying}
                   onClick={onTogglePlay}

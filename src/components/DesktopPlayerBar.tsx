@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { LoaderCircle, Radio, RefreshCw, Square } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,6 +8,7 @@ import {
 import { IconSwap, TextSwap } from '@/components/ui/motion'
 import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
+import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
@@ -28,8 +30,11 @@ interface DesktopPlayerBarProps {
   eqLabel?: string
   eqOpen?: boolean
   liveLabel?: string | null
+  isBuffering?: boolean
   appearance?: AppearanceSettings
   onTogglePlay: () => void
+  onReconnectRadio?: () => void
+  onDisconnectRadio?: () => void
   onPrev: () => void
   onNext: () => void
   onSeekChange: (secs: number) => void
@@ -60,8 +65,11 @@ export function DesktopPlayerBar({
   eqLabel = 'Off',
   eqOpen = false,
   liveLabel = null,
+  isBuffering = false,
   appearance = DEFAULT_APPEARANCE,
   onTogglePlay,
+  onReconnectRadio,
+  onDisconnectRadio,
   onPrev,
   onNext,
   onSeekChange,
@@ -111,55 +119,96 @@ export function DesktopPlayerBar({
           className="flex shrink-0 items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          <Tooltip label="Previous" side="top">
+          <Tooltip label={liveLabel ? 'Previous station' : 'Previous'} side="top">
             <button
               onClick={onPrev}
               className="t-press flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
-              aria-label="Previous"
+              aria-label={liveLabel ? 'Previous station' : 'Previous'}
             >
               <ZunoIcon name="prev" pack={iconPack} filled className="h-4 w-4" />
             </button>
           </Tooltip>
 
-          <Tooltip label={isPlaying ? 'Pause (Space)' : 'Play (Space)'} side="top">
-            {appearance.playButtonStyle === 'waveform' ? (
-              <WaveformPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
-            ) : appearance.playButtonStyle === 'vinyl' ? (
-              <VinylPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
-            ) : (
-              <button
-                onClick={onTogglePlay}
-                className="t-press flex h-9 w-9 items-center justify-center rounded-full text-foreground hover:bg-secondary cursor-pointer"
-                aria-label={isPlaying ? 'Pause' : 'Play'}
+          {liveLabel ? (
+            <>
+              <Tooltip
+                label={
+                  isBuffering
+                    ? 'Connecting FM...'
+                    : isPlaying
+                      ? 'Reconnect FM'
+                      : 'Connect FM'
+                }
+                side="top"
               >
-                <IconSwap
-                  active={isPlaying ? 'b' : 'a'}
-                  iconA={
-                    <ZunoIcon
-                      name="play"
-                      pack={iconPack}
-                      filled
-                      className="h-4.5 w-4.5 translate-x-[1px]"
-                    />
-                  }
-                  iconB={
-                    <ZunoIcon
-                      name="pause"
-                      pack={iconPack}
-                      filled
-                      className="h-4.5 w-4.5"
-                    />
-                  }
-                />
-              </button>
-            )}
-          </Tooltip>
+                <button
+                  onClick={onReconnectRadio ?? onTogglePlay}
+                  className="t-press flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+                  aria-label={isPlaying ? 'Reconnect FM' : 'Connect FM'}
+                >
+                  {isBuffering ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : isPlaying ? (
+                    <RefreshCw className="h-4 w-4" />
+                  ) : (
+                    <Radio className="h-4 w-4" />
+                  )}
+                </button>
+              </Tooltip>
 
-          <Tooltip label="Next" side="top">
+              {(isPlaying || isBuffering) && onDisconnectRadio && (
+                <Tooltip label="Disconnect FM" side="top">
+                  <button
+                    onClick={onDisconnectRadio}
+                    className="t-press flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
+                    aria-label="Disconnect FM"
+                  >
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                  </button>
+                </Tooltip>
+              )}
+            </>
+          ) : (
+            <Tooltip label={isPlaying ? 'Pause (Space)' : 'Play (Space)'} side="top">
+              {appearance.playButtonStyle === 'waveform' ? (
+                <WaveformPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
+              ) : appearance.playButtonStyle === 'vinyl' ? (
+                <VinylPlayButton isPlaying={isPlaying} onClick={onTogglePlay} />
+              ) : (
+                <button
+                  onClick={onTogglePlay}
+                  className="t-press flex h-9 w-9 items-center justify-center rounded-full text-foreground hover:bg-secondary cursor-pointer"
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
+                >
+                  <IconSwap
+                    active={isPlaying ? 'b' : 'a'}
+                    iconA={
+                      <ZunoIcon
+                        name="play"
+                        pack={iconPack}
+                        filled
+                        className="h-4.5 w-4.5 translate-x-[1px]"
+                      />
+                    }
+                    iconB={
+                      <ZunoIcon
+                        name="pause"
+                        pack={iconPack}
+                        filled
+                        className="h-4.5 w-4.5"
+                      />
+                    }
+                  />
+                </button>
+              )}
+            </Tooltip>
+          )}
+
+          <Tooltip label={liveLabel ? 'Next station' : 'Next'} side="top">
             <button
               onClick={onNext}
               className="t-press flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground cursor-pointer"
-              aria-label="Next"
+              aria-label={liveLabel ? 'Next station' : 'Next'}
             >
               <ZunoIcon name="next" pack={iconPack} filled className="h-4 w-4" />
             </button>
@@ -194,12 +243,20 @@ export function DesktopPlayerBar({
               />
             </div>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-secondary px-2.5 py-0.5 font-mono text-[10.5px] font-medium tracking-wide text-foreground whitespace-nowrap">
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full bg-primary',
-                  isPlaying && 'animate-pulse',
-                )}
-              />
+              {isBuffering ? (
+                <LoaderCircle className="h-3 w-3 animate-spin text-primary" />
+              ) : isPlaying ? (
+                <Loader2
+                  barCount={3}
+                  height={11}
+                  width={2}
+                  gap={1.5}
+                  speed={0.9}
+                  color="var(--primary)"
+                />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+              )}
               {liveLabel}
             </span>
           </div>
