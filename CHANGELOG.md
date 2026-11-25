@@ -5,6 +5,14 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.11] — 2026-11-25
+
+Bottom-only progressive `GradualBlur` edge effect (`@react-bits/GradualBlur-TS-TW`) behind the floating bottom docks.
+
+### Added
+- **Zero-Bloat `GradualBlur` Component (`src/components/GradualBlur.tsx`)**: Implemented React Bits' overlapping 4-stop trapezoidal `mask-image` slices with an exponential `bezier` `backdrop-filter: blur(...)` ramp and `contain: strict` GPU compositing without adding external runtime dependencies.
+- **Bottom-Only Floating Dock Integration (`src/App.tsx`, `src/lib/appearance.ts`, `src/components/StudioPreviews.tsx`, `src/pages/CustomizePage.tsx`)**: Applied `GradualBlur` strictly at `position="bottom"` behind the floating mobile dock and floating desktop player bar (top edge untouched), with an enabled-by-default `Bottom dock gradual blur` toggle and live preview under **Customize → Music Components → Player Bar & Rows**.
+
 ## [0.0.10] — 2026-11-25
 
 Sticky floating mobile bottom dock with background bar removed.

@@ -14,6 +14,7 @@ import { SearchOverlay } from '@/components/SearchOverlay'
 import { AutoNextBanner } from '@/components/AutoNextBanner'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { FloatingNavigation } from '@/components/FloatingNavigation'
+import { GradualBlur } from '@/components/GradualBlur'
 import { MusicFoldersModal } from '@/components/MusicFoldersModal'
 import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
@@ -1736,6 +1737,34 @@ export default function App() {
           )}
         </main>
         </CompactScrollArea>
+
+        {/* Bottom-Only Progressive GradualBlur (@react-bits/GradualBlur-TS-TW) behind floating docks */}
+        {appearance.dockGradualBlur && (
+          <>
+            <GradualBlur
+              position="bottom"
+              height={currentTrack ? '9.5rem' : '5.75rem'}
+              strength={1.6}
+              divCount={5}
+              curve="bezier"
+              exponential
+              zIndex={10}
+              className="lg:hidden"
+            />
+            {appearance.playerBarStyle === 'floating' && (
+              <GradualBlur
+                position="bottom"
+                height="6.5rem"
+                strength={1.5}
+                divCount={5}
+                curve="bezier"
+                exponential
+                zIndex={10}
+                className="hidden lg:block"
+              />
+            )}
+          </>
+        )}
 
         {/* Desktop Floating Sticky Bottom Player Bar (>= 1024px) */}
         <DesktopPlayerBar

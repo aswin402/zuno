@@ -5480,7 +5480,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zuno"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "gdk-pixbuf",
  "gio",
@@ -5495,7 +5495,7 @@ dependencies = [
 
 [[package]]
 name = "zuno-audio"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rodio",
  "serde",
@@ -5506,7 +5506,7 @@ dependencies = [
 
 [[package]]
 name = "zuno-core"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "blake3",
  "dirs 6.0.0",
@@ -5521,7 +5521,7 @@ dependencies = [
 
 [[package]]
 name = "zuno-mcp"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "clap",
  "serde",

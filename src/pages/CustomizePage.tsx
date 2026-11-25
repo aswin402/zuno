@@ -324,8 +324,8 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
         categoryId: 'music_components',
         label: 'Player Bar & Rows',
         description:
-          'Configure Floating Sticky vs Docked desktop bar layout and toggle song row metadata visibility.',
-        keywords: 'player bar floating docked visibility pulse overline artist duration metadata',
+          'Configure Floating Sticky vs Docked desktop bar layout, bottom dock gradual blur, and track row metadata.',
+        keywords: 'player bar floating docked gradual blur gradualblur react-bits dock visibility pulse overline artist duration metadata',
         icon: RectangleHorizontal,
       },
       {
@@ -2220,6 +2220,12 @@ export function CustomizePage({
                 description="Show or hide UI elements to keep your song rows as minimal as you like."
               >
                 <div className="z-surface-card divide-y divide-border rounded-2xl border border-border bg-card">
+                  <ToggleRow
+                    label="Bottom dock gradual blur"
+                    description="Progressive liquid edge blur behind the floating bottom dock only (top stays sharp)."
+                    checked={settings.dockGradualBlur}
+                    onChange={(dockGradualBlur) => onChange({ dockGradualBlur })}
+                  />
                   <ToggleRow
                     label="Play button pulse animation"
                     description="Show a subtle ring pulse on the active track's Play/Pause button."

@@ -125,6 +125,8 @@ export interface AppearanceSettings {
   showPlayPulse: boolean
   showTrackOverline: boolean
   showTrackDuration: boolean
+  /** Progressive bottom-only GradualBlur (React Bits) behind the floating dock. */
+  dockGradualBlur: boolean
   /** Audio transition / crossfade & fade-in duration in seconds (0 = off, up to 10s). */
   crossfadeSecs: number
 }
@@ -166,6 +168,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   showPlayPulse: true,
   showTrackOverline: true,
   showTrackDuration: true,
+  dockGradualBlur: true,
   crossfadeSecs: 0,
 }
 

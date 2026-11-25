@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, Maximize2, Menu, Minimize2, RotateCcw, Sparkles, Wand2, X } from 'lucide-react'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { EaseThemeToggle, runThemeViewTransition } from '@/components/EaseThemeToggle'
+import { GradualBlur } from '@/components/GradualBlur'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { Scrubber } from '@/components/Scrubber'
 import { ScrollProgressOverlay } from '@/components/ScrollProgressOverlay'
@@ -932,9 +933,9 @@ export function PlayerBarAndRowsPreview({
   onTogglePlay: () => void
 }) {
   return (
-    <div className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-border bg-background">
-      {/* Sample Track Row reflecting showTrackOverline & showTrackDuration */}
-      <div className="space-y-1.5 p-4">
+    <div className="relative flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-border bg-background">
+      {/* Sample Track Rows reflecting showTrackOverline & showTrackDuration */}
+      <div className={cn('space-y-1.5 p-4', settings.playerBarStyle === 'floating' && 'pb-16')}>
         <div className="flex items-center justify-between rounded-xl bg-secondary px-3 py-2">
           <div className="flex items-center gap-3">
             <div className="relative flex h-8 w-8 items-center justify-center">
@@ -967,13 +968,46 @@ export function PlayerBarAndRowsPreview({
             <span className="font-mono text-[11px] text-muted-foreground">03:32</span>
           )}
         </div>
+
+        <div className="flex items-center justify-between rounded-xl px-3 py-1.5 text-muted-foreground">
+          <div>
+            {settings.showTrackOverline && (
+              <p className="text-[9.5px] font-medium uppercase tracking-[0.12em] opacity-70">
+                SYNTHWAVE
+              </p>
+            )}
+            <p className="text-xs font-medium text-foreground/85">velvet_horizon</p>
+          </div>
+          {settings.showTrackDuration && (
+            <span className="font-mono text-[11px]">04:10</span>
+          )}
+        </div>
       </div>
 
+      {/* Bottom-Only GradualBlur behind floating dock */}
+      {settings.dockGradualBlur && settings.playerBarStyle === 'floating' && (
+        <GradualBlur
+          position="bottom"
+          height="5rem"
+          strength={1.5}
+          divCount={5}
+          curve="bezier"
+          exponential
+          zIndex={10}
+        />
+      )}
+
       {/* Desktop Player Bar Layout Preview (Floating Sticky vs Docked Full-Width) */}
-      <div className={cn(settings.playerBarStyle === 'floating' ? 'px-4 pb-3.5' : 'pt-1')}>
+      <div
+        className={cn(
+          settings.playerBarStyle === 'floating'
+            ? 'pointer-events-none absolute inset-x-0 bottom-3 z-20 px-4'
+            : 'relative z-20 pt-1',
+        )}
+      >
         <div
           className={cn(
-            'flex items-center justify-between gap-3 border-border bg-card px-3.5 py-2.5',
+            'pointer-events-auto flex items-center justify-between gap-3 border-border bg-card px-3.5 py-2.5',
             settings.playerBarStyle === 'floating'
               ? 'rounded-2xl border shadow-lg'
               : 'border-t',
