@@ -331,6 +331,7 @@ do_uninstall() {
   rm -f "$BIN_DIR/zuno" "$BIN_DIR/zuno-mcp" "$BIN_DIR/zuno.old" "$BIN_DIR/zuno-mcp.old"
   rm -f "$DATA_DIR/applications/zuno.desktop"
   rm -f "$DATA_DIR/icons/hicolor/scalable/apps/zuno.svg" \
+        "$DATA_DIR/icons/hicolor/192x192/apps/zuno.png" \
         "$DATA_DIR/icons/hicolor/256x256/apps/zuno.png" \
         "$DATA_DIR/icons/hicolor/512x512/apps/zuno.png"
   rm -rf "$HOME/Applications/Zuno.app"
@@ -493,9 +494,9 @@ step_ok "Installed binaries" "${BIN_DIR/#$HOME/~}/{zuno,zuno-mcp}"
 if [ "$OS" = "linux" ]; then
   APP_DIR="$DATA_DIR/applications"
   ICON_BASE="$DATA_DIR/icons/hicolor"
-  mkdir -p "$APP_DIR" "$ICON_BASE/scalable/apps" "$ICON_BASE/256x256/apps" "$ICON_BASE/512x512/apps"
-  [ -f "$EXTRACT_DIR/icons/zuno.svg" ]     && install -m 644 "$EXTRACT_DIR/icons/zuno.svg" "$ICON_BASE/scalable/apps/zuno.svg"
-  [ -f "$EXTRACT_DIR/icons/zuno-192.png" ] && install -m 644 "$EXTRACT_DIR/icons/zuno-192.png" "$ICON_BASE/256x256/apps/zuno.png"
+  mkdir -p "$APP_DIR" "$ICON_BASE/192x192/apps" "$ICON_BASE/512x512/apps"
+  rm -f "$ICON_BASE/scalable/apps/zuno.svg" "$ICON_BASE/256x256/apps/zuno.png"
+  [ -f "$EXTRACT_DIR/icons/zuno-192.png" ] && install -m 644 "$EXTRACT_DIR/icons/zuno-192.png" "$ICON_BASE/192x192/apps/zuno.png"
   [ -f "$EXTRACT_DIR/icons/zuno-512.png" ] && install -m 644 "$EXTRACT_DIR/icons/zuno-512.png" "$ICON_BASE/512x512/apps/zuno.png"
 
   cat > "$APP_DIR/zuno.desktop" <<EOF

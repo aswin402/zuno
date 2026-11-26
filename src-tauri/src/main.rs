@@ -68,7 +68,7 @@ impl TrayAction {
 
 fn shutdown_app(app: &AppHandle, state: &AppState) {
     state.quitting.store(true, Ordering::SeqCst);
-    state.fm_tuner.stop(Some(&state.service));
+    state.radio.clear(Some(&state.service), &state.fm_tuner);
     let _ = state.service.handle_request(IpcRequest::Stop);
     state.notify_mpris();
     app.exit(0);
@@ -98,6 +98,7 @@ fn percent_decode_segment(input: &str) -> String {
 struct AppState {
     service: Arc<ZunoService>,
     fm_tuner: Arc<radio::FmTunerManager>,
+    radio: Arc<radio::RadioPlaybackManager>,
     quitting: AtomicBool,
     update_progress: Arc<Mutex<updater::UpdateProgressEvent>>,
     #[cfg(target_os = "linux")]
@@ -110,6 +111,14 @@ impl AppState {
         if let Some(handle) = self.mpris.get() {
             handle.notify_change();
         }
+    }
+
+    fn mpris_notify_cb(&self) -> Arc<dyn Fn() + Send + Sync> {
+        #[cfg(target_os = "linux")]
+        if let Some(handle) = self.mpris.get().cloned() {
+            return Arc::new(move || handle.notify_change());
+        }
+        Arc::new(|| {})
     }
 
     fn notify_mpris_seeked(&self, position_secs: f64) {
@@ -143,16 +152,18 @@ fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
             | IpcRequest::RemoveSource { .. }
             | IpcRequest::DeleteSong { .. }
     );
-    let stops_fm = matches!(
+    let stops_radio = matches!(
         req,
         IpcRequest::Play { .. }
             | IpcRequest::Resume
             | IpcRequest::Stop
             | IpcRequest::SetQueue { .. }
             | IpcRequest::JumpQueue { .. }
+            | IpcRequest::Next
+            | IpcRequest::Previous
     );
-    if stops_fm {
-        state.fm_tuner.stop(None);
+    if stops_radio {
+        state.radio.clear(None, &state.fm_tuner);
     }
     let resp = state.service.handle_request(req);
     if matches!(resp, IpcResponse::Ok { .. }) {
@@ -356,6 +367,43 @@ async fn zuno_radio_resolve_url(url: String) -> Result<radio::ResolvedStreamInfo
 }
 
 #[tauri::command]
+async fn zuno_radio_play_online(
+    id: String,
+    name: String,
+    subtitle: String,
+    url: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<radio::ActiveRadioInfo, String> {
+    let radio_mgr = Arc::clone(&state.radio);
+    let svc = Arc::clone(&state.service);
+    let fm = Arc::clone(&state.fm_tuner);
+    let on_change = state.mpris_notify_cb();
+    tauri::async_runtime::spawn_blocking(move || {
+        radio_mgr.play_online(id, name, subtitle, url, &svc, &fm, on_change)
+    })
+    .await
+    .map_err(|e| format!("online radio task failed: {e}"))?
+}
+
+#[tauri::command]
+fn zuno_radio_disconnect(state: tauri::State<'_, AppState>) -> Option<radio::ActiveRadioInfo> {
+    let next = state.radio.disconnect(&state.service, &state.fm_tuner);
+    state.notify_mpris();
+    next
+}
+
+#[tauri::command]
+fn zuno_radio_stop(state: tauri::State<'_, AppState>) {
+    state.radio.clear(Some(&state.service), &state.fm_tuner);
+    state.notify_mpris();
+}
+
+#[tauri::command]
+fn zuno_radio_poll(state: tauri::State<'_, AppState>) -> radio::RadioPollStatus {
+    state.radio.poll_status()
+}
+
+#[tauri::command]
 fn zuno_fm_hardware_status(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
     state.fm_tuner.hardware_status()
 }
@@ -363,18 +411,35 @@ fn zuno_fm_hardware_status(state: tauri::State<'_, AppState>) -> radio::FmHardwa
 #[tauri::command]
 async fn zuno_fm_tune(
     freq_mhz: f64,
+    name: Option<String>,
+    signal_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<radio::FmHardwareStatus, String> {
     let tuner = Arc::clone(&state.fm_tuner);
+    let radio_mgr = Arc::clone(&state.radio);
     let svc = Arc::clone(&state.service);
-    tauri::async_runtime::spawn_blocking(move || tuner.tune(freq_mhz, &svc))
-        .await
-        .map_err(|e| format!("FM tune task failed: {e}"))?
+    let on_change = state.mpris_notify_cb();
+    tauri::async_runtime::spawn_blocking(move || {
+        radio_mgr.clear(None, &tuner);
+        let hw = tuner.tune(freq_mhz, &svc)?;
+        let rounded = (freq_mhz * 10.0).round() / 10.0;
+        let id = signal_id.unwrap_or_else(|| format!("freq-{rounded:.1}"));
+        let display_name = name
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| format!("{rounded:.1} MHz"));
+        let subtitle = format!("{rounded:.1} MHz · Offline FM Signal");
+        radio_mgr.set_offline_active(id, display_name, subtitle, rounded);
+        on_change();
+        Ok(hw)
+    })
+    .await
+    .map_err(|e| format!("FM tune task failed: {e}"))?
 }
 
 #[tauri::command]
 fn zuno_fm_stop(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
-    state.fm_tuner.stop(Some(&state.service));
+    state.radio.disconnect(&state.service, &state.fm_tuner);
+    state.notify_mpris();
     state.fm_tuner.hardware_status()
 }
 
@@ -486,11 +551,13 @@ fn main() {
     let cover_server = Arc::new(cover_cache::CoverServer::start(Arc::clone(&service)));
 
     let fm_tuner = Arc::new(radio::FmTunerManager::new());
+    let radio_mgr = Arc::new(radio::RadioPlaybackManager::new());
 
     let app = tauri::Builder::default()
         .manage(AppState {
             service,
             fm_tuner,
+            radio: radio_mgr,
             quitting: AtomicBool::new(false),
             update_progress: Arc::new(Mutex::new(updater::UpdateProgressEvent::default())),
             #[cfg(target_os = "linux")]
@@ -533,6 +600,10 @@ fn main() {
             zuno_radio_save_store,
             zuno_radio_discover,
             zuno_radio_resolve_url,
+            zuno_radio_play_online,
+            zuno_radio_disconnect,
+            zuno_radio_stop,
+            zuno_radio_poll,
             zuno_fm_hardware_status,
             zuno_fm_tune,
             zuno_fm_stop,
@@ -553,8 +624,12 @@ fn main() {
             {
                 let st = app.state::<AppState>();
                 let mpris_svc = Arc::clone(&st.service);
+                let mpris_radio = Arc::clone(&st.radio);
+                let mpris_fm = Arc::clone(&st.fm_tuner);
                 let handle = mpris::start_mpris(
                     mpris_svc,
+                    mpris_radio,
+                    mpris_fm,
                     app.handle().clone(),
                     |handle| show_or_create_main_window(handle),
                     |handle| {
@@ -589,16 +664,41 @@ fn main() {
                     match TrayAction::from_id(event.id.as_ref()) {
                         Some(TrayAction::Show) => show_or_create_main_window(app),
                         Some(TrayAction::Toggle) => {
-                            let _ = state.service.handle_request(IpcRequest::TogglePause);
-                            state.notify_mpris();
+                            if let Some(active) = state.radio.active() {
+                                if matches!(
+                                    active.state,
+                                    radio::RadioPlayState::Playing
+                                        | radio::RadioPlayState::Connecting
+                                ) {
+                                    state.radio.disconnect(&state.service, &state.fm_tuner);
+                                    state.notify_mpris();
+                                } else {
+                                    state.radio.reconnect(
+                                        &state.service,
+                                        &state.fm_tuner,
+                                        state.mpris_notify_cb(),
+                                    );
+                                }
+                            } else {
+                                let _ = state.service.handle_request(IpcRequest::TogglePause);
+                                state.notify_mpris();
+                            }
                         }
                         Some(TrayAction::Next) => {
-                            let _ = state.service.handle_request(IpcRequest::Next);
-                            state.notify_mpris();
+                            if state.radio.is_active() {
+                                state.radio.queue_step(1);
+                            } else {
+                                let _ = state.service.handle_request(IpcRequest::Next);
+                                state.notify_mpris();
+                            }
                         }
                         Some(TrayAction::Prev) => {
-                            let _ = state.service.handle_request(IpcRequest::Previous);
-                            state.notify_mpris();
+                            if state.radio.is_active() {
+                                state.radio.queue_step(-1);
+                            } else {
+                                let _ = state.service.handle_request(IpcRequest::Previous);
+                                state.notify_mpris();
+                            }
                         }
                         Some(TrayAction::Quit) => shutdown_app(app, &state),
                         None => {}
@@ -623,7 +723,10 @@ fn main() {
             // down to ~8-12 MB RSS while Rust Rodio + 10-band EQ keep playing in the background!
             if let WindowEvent::CloseRequested { .. } = event {
                 let state = window.state::<AppState>();
-                if !state.service.is_playing() && !state.fm_tuner.is_active() {
+                if !state.service.is_playing()
+                    && !state.fm_tuner.is_active()
+                    && !state.radio.is_playing()
+                {
                     state.quitting.store(true, Ordering::SeqCst);
                 }
             }
@@ -635,7 +738,9 @@ fn main() {
         if let RunEvent::ExitRequested { api, .. } = event {
             let state = app_handle.state::<AppState>();
             if !state.quitting.load(Ordering::SeqCst)
-                && (state.service.is_playing() || state.fm_tuner.is_active())
+                && (state.service.is_playing()
+                    || state.fm_tuner.is_active()
+                    || state.radio.is_playing())
             {
                 api.prevent_exit();
             }

@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use zuno_audio::ZunoService;
+use zuno_core::ipc::IpcRequest;
 use zuno_core::{ZunoPaths, atomic_write};
 
 const RADIO_BROWSER_MIRRORS: &[&str] = &[
@@ -18,8 +20,54 @@ const FM_MIN_MHZ: f64 = 64.0;
 const FM_MAX_MHZ: f64 = 108.0;
 const DEFAULT_FM_FREQ_MHZ: f64 = 98.3;
 const RTL_FM_SAMPLE_RATE: u32 = 48_000;
+const ONLINE_STREAM_SAMPLE_RATE: u32 = 48_000;
+const ONLINE_STREAM_CHANNELS: u16 = 2;
+const ONLINE_HANDSHAKE_BYTES: usize = 4096;
+pub const NO_NATIVE_DECODER_ERR: &str = "NO_NATIVE_STREAM_DECODER";
 pub const RADIO_DISCOVER_DEFAULT_LIMIT: usize = 40;
 const RADIO_DISCOVER_MAX_LIMIT: usize = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RadioKind {
+    Online,
+    Offline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RadioPlayState {
+    Connecting,
+    Playing,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveRadioInfo {
+    pub kind: RadioKind,
+    pub id: String,
+    pub name: String,
+    pub subtitle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freq_mhz: Option<f64>,
+    pub state: RadioPlayState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RadioPollStatus {
+    pub active: Option<ActiveRadioInfo>,
+    pub step_delta: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamDecoder {
+    Ffmpeg,
+    GstLaunch,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FmBackend {
@@ -198,6 +246,517 @@ struct FmActiveState {
 impl Default for FmTunerManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for FmTunerManager {
+    fn drop(&mut self) {
+        if let Ok(mut st) = self.inner.lock() {
+            if let Some(mut child) = st.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+/// Unified native Radio playback manager for both Online FM streams (`ffmpeg` / `gst-launch-1.0`
+/// decoded into Zuno's Rodio + 10-band EQ + 1024-pt FFT pipeline) and Offline FM hardware state.
+/// Playing Online FM natively in Rust avoids WebKitGTK's duplicate MPRIS2 notification while
+/// enabling real Rust EQ, FFT visualizers, and tray background playback.
+pub struct RadioPlaybackManager {
+    inner: Mutex<RadioPlaybackInner>,
+}
+
+#[derive(Default)]
+struct RadioPlaybackInner {
+    child: Option<Child>,
+    generation: u64,
+    active: Option<ActiveRadioInfo>,
+    pending_step: i32,
+}
+
+impl Default for RadioPlaybackManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RadioPlaybackManager {
+    fn drop(&mut self) {
+        if let Ok(mut st) = self.inner.lock() {
+            if let Some(mut child) = st.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+impl RadioPlaybackManager {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(RadioPlaybackInner::default()),
+        }
+    }
+
+    pub fn active(&self) -> Option<ActiveRadioInfo> {
+        self.inner.lock().ok().and_then(|s| s.active.clone())
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|s| s.active.is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|s| s.active.as_ref().map(|a| matches!(a.state, RadioPlayState::Playing | RadioPlayState::Connecting)))
+            .unwrap_or(false)
+    }
+
+    pub fn poll_status(&self) -> RadioPollStatus {
+        let Ok(mut st) = self.inner.lock() else {
+            return RadioPollStatus {
+                active: None,
+                step_delta: 0,
+            };
+        };
+        let step_delta = std::mem::take(&mut st.pending_step);
+        RadioPollStatus {
+            active: st.active.clone(),
+            step_delta,
+        }
+    }
+
+    pub fn queue_step(&self, delta: i32) {
+        if let Ok(mut st) = self.inner.lock() {
+            st.pending_step = st.pending_step.saturating_add(delta);
+        }
+    }
+
+    fn current_generation(&self) -> u64 {
+        self.inner.lock().map(|s| s.generation).unwrap_or(0)
+    }
+
+    /// Record an active hardware Offline FM tuner session in the unified radio state
+    /// (stopping any running Online FM decoder first).
+    pub fn set_offline_active(
+        &self,
+        id: String,
+        name: String,
+        subtitle: String,
+        freq_mhz: f64,
+    ) -> ActiveRadioInfo {
+        let info = ActiveRadioInfo {
+            kind: RadioKind::Offline,
+            id,
+            name,
+            subtitle,
+            url: None,
+            freq_mhz: Some(freq_mhz),
+            state: RadioPlayState::Playing,
+            error: None,
+        };
+        let old_child = {
+            let mut st = self.inner.lock().unwrap();
+            st.generation = st.generation.wrapping_add(1);
+            st.active = Some(info.clone());
+            st.child.take()
+        };
+        if let Some(mut c) = old_child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        info
+    }
+
+    /// Stream an Online FM URL through `ffmpeg` (or `gst-launch-1.0` fallback) directly into
+    /// Zuno's Rodio output + 10-band Rust EQ + 1024-pt FFT visualizer.
+    pub fn play_online(
+        self: &Arc<Self>,
+        id: String,
+        name: String,
+        subtitle: String,
+        url: String,
+        service: &Arc<ZunoService>,
+        fm_tuner: &FmTunerManager,
+        on_change: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<ActiveRadioInfo, String> {
+        let decoder = detect_stream_decoder().ok_or_else(|| NO_NATIVE_DECODER_ERR.to_string())?;
+        let trimmed_url = url.trim().to_string();
+        if !is_valid_http_url(&trimmed_url) {
+            return Err("Invalid stream URL (must start with http:// or https://).".to_string());
+        }
+
+        let connecting = ActiveRadioInfo {
+            kind: RadioKind::Online,
+            id,
+            name,
+            subtitle,
+            url: Some(trimmed_url.clone()),
+            freq_mhz: None,
+            state: RadioPlayState::Connecting,
+            error: None,
+        };
+
+        let (my_gen, old_child) = {
+            let mut st = self.inner.lock().unwrap();
+            st.generation = st.generation.wrapping_add(1);
+            let next_gen = st.generation;
+            let prev = st.child.take();
+            st.active = Some(connecting.clone());
+            (next_gen, prev)
+        };
+
+        if let Some(mut c) = old_child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        fm_tuner.stop(None);
+        let _ = service.handle_request(IpcRequest::Pause);
+        service.stop_pcm_stream();
+        on_change();
+
+        // Resolve .pls / .m3u playlists automatically before launching the decoder.
+        let mut play_url = trimmed_url.clone();
+        if is_playlist_url(&trimmed_url) {
+            if let Ok(resolved) = resolve_stream_url(&trimmed_url) {
+                play_url = resolved.resolved_url;
+            }
+            if self.current_generation() != my_gen {
+                return Err("cancelled".to_string());
+            }
+        }
+
+        let mut cmd = build_decoder_command(decoder, &play_url);
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to launch stream decoder: {e}"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to capture online radio PCM stream".to_string())?;
+
+        // Store child before blocking on the first PCM bytes so disconnect/switch kills it instantly.
+        {
+            let mut st = self.inner.lock().unwrap();
+            if st.generation != my_gen {
+                drop(st);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cancelled".to_string());
+            }
+            st.child = Some(child);
+        }
+
+        // Read the first small PCM chunk (~21 ms) to confirm real decoded audio before marking Live.
+        let mut first_chunk = vec![0u8; ONLINE_HANDSHAKE_BYTES];
+        let mut filled = 0usize;
+        while filled < ONLINE_HANDSHAKE_BYTES {
+            match stdout.read(&mut first_chunk[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(_) => break,
+            }
+        }
+        // Keep stereo 16-bit (4 bytes/frame) alignment intact.
+        filled -= filled % 4;
+        first_chunk.truncate(filled);
+
+        if self.current_generation() != my_gen {
+            return Err("cancelled".to_string());
+        }
+
+        if first_chunk.is_empty() {
+            let dead_child = {
+                let mut st = self.inner.lock().unwrap();
+                if st.generation == my_gen {
+                    if let Some(ref mut info) = st.active {
+                        info.state = RadioPlayState::Disconnected;
+                        info.error = Some("Stream unavailable".to_string());
+                    }
+                    st.child.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(mut c) = dead_child {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            on_change();
+            return Err("Stream unavailable".to_string());
+        }
+
+        let chained = Cursor::new(first_chunk).chain(stdout);
+        let monitored = MonitoredPcmReader {
+            inner: chained,
+            manager: Arc::downgrade(self),
+            generation: my_gen,
+            on_change: Arc::clone(&on_change),
+            notified: false,
+        };
+
+        if let Err(e) = service.play_pcm_stream(
+            Box::new(monitored),
+            ONLINE_STREAM_SAMPLE_RATE,
+            ONLINE_STREAM_CHANNELS,
+        ) {
+            let _ = self.disconnect(service, fm_tuner);
+            on_change();
+            return Err(format!("failed to start online radio audio output: {e}"));
+        }
+
+        let live_info = {
+            let mut st = self.inner.lock().unwrap();
+            if st.generation != my_gen {
+                return Err("cancelled".to_string());
+            }
+            if let Some(ref mut info) = st.active {
+                info.state = RadioPlayState::Playing;
+                info.error = None;
+                info.clone()
+            } else {
+                return Err("cancelled".to_string());
+            }
+        };
+        on_change();
+        Ok(live_info)
+    }
+
+    /// Disconnect active Online or Offline FM while keeping the station metadata so the user
+    /// can 1-click reconnect from the OS notification banner, tray, or UI.
+    pub fn disconnect(
+        &self,
+        service: &ZunoService,
+        fm_tuner: &FmTunerManager,
+    ) -> Option<ActiveRadioInfo> {
+        let (old_child, next_active) = {
+            let mut st = self.inner.lock().unwrap();
+            st.generation = st.generation.wrapping_add(1);
+            let child = st.child.take();
+            if let Some(ref mut info) = st.active {
+                info.state = RadioPlayState::Disconnected;
+                info.error = None;
+            }
+            (child, st.active.clone())
+        };
+        if let Some(mut c) = old_child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        fm_tuner.stop(None);
+        service.stop_pcm_stream();
+        next_active
+    }
+
+    /// Completely stop and clear any active Online/Offline FM session (e.g., when switching back
+    /// to local music or closing the FM banner).
+    pub fn clear(&self, service: Option<&ZunoService>, fm_tuner: &FmTunerManager) {
+        let (old_child, was_active) = {
+            let mut st = self.inner.lock().unwrap();
+            st.generation = st.generation.wrapping_add(1);
+            let child = st.child.take();
+            let active = st.active.take().is_some();
+            st.pending_step = 0;
+            (child, active)
+        };
+        if let Some(mut c) = old_child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        fm_tuner.stop(None);
+        if was_active {
+            if let Some(svc) = service {
+                svc.stop_pcm_stream();
+            }
+        }
+    }
+
+    /// Reconnect the current Online or Offline FM station asynchronously (used by MPRIS & Tray).
+    pub fn reconnect(
+        self: &Arc<Self>,
+        service: &Arc<ZunoService>,
+        fm_tuner: &Arc<FmTunerManager>,
+        on_change: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let Some(info) = self.active() else {
+            return;
+        };
+        let mgr = Arc::clone(self);
+        let svc = Arc::clone(service);
+        let fm = Arc::clone(fm_tuner);
+        let _ = std::thread::Builder::new()
+            .name("zuno-radio-reconnect".into())
+            .spawn(move || match info.kind {
+                RadioKind::Online => {
+                    if let Some(url) = info.url {
+                        let _ = mgr.play_online(
+                            info.id,
+                            info.name,
+                            info.subtitle,
+                            url,
+                            &svc,
+                            &fm,
+                            on_change,
+                        );
+                    }
+                }
+                RadioKind::Offline => {
+                    if let Some(freq) = info.freq_mhz {
+                        match fm.tune(freq, &svc) {
+                            Ok(_) => {
+                                mgr.set_offline_active(info.id, info.name, info.subtitle, freq);
+                            }
+                            Err(err) => {
+                                if let Ok(mut st) = mgr.inner.lock() {
+                                    if let Some(ref mut cur) = st.active {
+                                        cur.state = RadioPlayState::Disconnected;
+                                        cur.error = Some(err);
+                                    }
+                                }
+                            }
+                        }
+                        on_change();
+                    }
+                }
+            });
+    }
+
+    fn mark_unexpected_eof(&self, expected_gen: u64, on_change: &Arc<dyn Fn() + Send + Sync>) {
+        let dead_child = {
+            let Ok(mut st) = self.inner.lock() else {
+                return;
+            };
+            if st.generation != expected_gen {
+                return;
+            }
+            if let Some(ref mut info) = st.active {
+                if info.state == RadioPlayState::Playing {
+                    info.state = RadioPlayState::Disconnected;
+                    info.error = Some("Stream disconnected".to_string());
+                }
+            }
+            st.child.take()
+        };
+        if let Some(mut c) = dead_child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        on_change();
+    }
+}
+
+struct MonitoredPcmReader<R: Read + Send> {
+    inner: R,
+    manager: Weak<RadioPlaybackManager>,
+    generation: u64,
+    on_change: Arc<dyn Fn() + Send + Sync>,
+    notified: bool,
+}
+
+impl<R: Read + Send> Read for MonitoredPcmReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let res = self.inner.read(buf);
+        let ended = matches!(&res, Ok(0) | Err(_));
+        if ended && !self.notified {
+            self.notified = true;
+            if let Some(mgr) = self.manager.upgrade() {
+                mgr.mark_unexpected_eof(self.generation, &self.on_change);
+            }
+        }
+        res
+    }
+}
+
+fn detect_stream_decoder() -> Option<StreamDecoder> {
+    if find_in_path("ffmpeg") {
+        Some(StreamDecoder::Ffmpeg)
+    } else if find_in_path("gst-launch-1.0") {
+        Some(StreamDecoder::GstLaunch)
+    } else {
+        None
+    }
+}
+
+fn is_playlist_url(url: &str) -> bool {
+    matches!(
+        url_path_extension(url).map(str::to_ascii_lowercase).as_deref(),
+        Some("pls" | "m3u")
+    )
+}
+
+fn is_hls_url(url: &str) -> bool {
+    url_path_extension(url)
+        .map(|ext| ext.eq_ignore_ascii_case("m3u8"))
+        .unwrap_or(false)
+}
+
+fn build_decoder_command(decoder: StreamDecoder, url: &str) -> Command {
+    match decoder {
+        StreamDecoder::Ffmpeg => {
+            let mut cmd = Command::new("ffmpeg");
+            let ua = format!("Zuno/{}", env!("CARGO_PKG_VERSION"));
+            cmd.args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-user_agent",
+                &ua,
+                "-reconnect",
+                "1",
+                "-reconnect_on_network_error",
+                "1",
+                "-reconnect_delay_max",
+                "3",
+                "-reconnect_max_retries",
+                "2",
+            ]);
+            if !is_hls_url(url) {
+                cmd.args(["-reconnect_streamed", "1"]);
+            }
+            cmd.args([
+                "-i",
+                url,
+                "-vn",
+                "-f",
+                "s16le",
+                "-ac",
+                &ONLINE_STREAM_CHANNELS.to_string(),
+                "-ar",
+                &ONLINE_STREAM_SAMPLE_RATE.to_string(),
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+            crate::configure_hidden_command(&mut cmd);
+            cmd
+        }
+        StreamDecoder::GstLaunch => {
+            let mut cmd = Command::new("gst-launch-1.0");
+            let sink = format!(
+                "audio-sink=audioconvert ! audioresample ! audio/x-raw,format=S16LE,channels={ONLINE_STREAM_CHANNELS},rate={ONLINE_STREAM_SAMPLE_RATE} ! fdsink fd=1"
+            );
+            cmd.args([
+                "-q",
+                "playbin",
+                &format!("uri={url}"),
+                "video-sink=fakesink",
+                &sink,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+            crate::configure_hidden_command(&mut cmd);
+            cmd
+        }
     }
 }
 
@@ -1023,5 +1582,40 @@ mod tests {
         let loaded = load_radio_store(&paths);
         assert_eq!(loaded, data);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn radio_playback_manager_tracks_state_and_steps() {
+        let mgr = RadioPlaybackManager::new();
+        assert!(!mgr.is_active());
+        assert!(!mgr.is_playing());
+
+        let info = mgr.set_offline_active(
+            "sig-983".into(),
+            "Radio Mirchi".into(),
+            "98.3 MHz · Offline FM Signal".into(),
+            98.3,
+        );
+        assert_eq!(info.kind, RadioKind::Offline);
+        assert_eq!(info.state, RadioPlayState::Playing);
+        assert!(mgr.is_active());
+        assert!(mgr.is_playing());
+
+        mgr.queue_step(1);
+        mgr.queue_step(1);
+        let polled = mgr.poll_status();
+        assert_eq!(polled.step_delta, 2);
+        assert_eq!(polled.active.as_ref().map(|a| a.name.as_str()), Some("Radio Mirchi"));
+
+        // Second poll resets step_delta back to 0.
+        assert_eq!(mgr.poll_status().step_delta, 0);
+
+        let fm = FmTunerManager::new();
+        mgr.clear(None, &fm);
+        assert!(!mgr.is_active());
+        assert!(!mgr.is_playing());
+        assert!(is_playlist_url("https://example.com/listen.pls?token=1"));
+        assert!(is_hls_url("https://example.com/live/playlist.m3u8?auth=ok"));
+        assert!(!is_playlist_url("https://example.com/live/playlist.m3u8"));
     }
 }

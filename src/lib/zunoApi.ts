@@ -115,6 +115,22 @@ export interface UpdateInstallResult {
   backup_files: number
 }
 
+export interface NativeRadioInfo {
+  kind: 'online' | 'offline'
+  id: string
+  name: string
+  subtitle: string
+  url?: string | null
+  freq_mhz?: number | null
+  state: 'connecting' | 'playing' | 'disconnected'
+  error?: string | null
+}
+
+export interface NativeRadioPollStatus {
+  active: NativeRadioInfo | null
+  step_delta: number
+}
+
 type IpcRequest =
   | { op: 'ping' }
   | { op: 'rescan' }
@@ -478,20 +494,67 @@ export const zunoApi = {
     return await tauri.invoke<FmHardwareStatus>('zuno_fm_hardware_status')
   },
 
-  async fmTune(freqMhz: number): Promise<FmHardwareStatus> {
+  async fmTune(
+    freqMhz: number,
+    opts?: { name?: string; signalId?: string },
+  ): Promise<FmHardwareStatus> {
     const tauri = getTauriInternals()
     if (!tauri) {
       throw new Error(
         'Offline FM hardware reception requires the native Zuno desktop app with an RTL-SDR USB dongle or V4L2 FM tuner.',
       )
     }
-    return await tauri.invoke<FmHardwareStatus>('zuno_fm_tune', { freqMhz })
+    return await tauri.invoke<FmHardwareStatus>('zuno_fm_tune', {
+      freqMhz,
+      name: opts?.name ?? null,
+      signalId: opts?.signalId ?? null,
+    })
   },
 
   async fmStop(): Promise<FmHardwareStatus | null> {
     const tauri = getTauriInternals()
     if (!tauri) return null
     return await tauri.invoke<FmHardwareStatus>('zuno_fm_stop')
+  },
+
+  async radioPlayOnline(opts: {
+    id: string
+    name: string
+    subtitle: string
+    url: string
+  }): Promise<NativeRadioInfo> {
+    const tauri = getTauriInternals()
+    if (!tauri) {
+      throw new Error('NO_NATIVE_STREAM_DECODER')
+    }
+    return await tauri.invoke<NativeRadioInfo>('zuno_radio_play_online', {
+      id: opts.id,
+      name: opts.name,
+      subtitle: opts.subtitle,
+      url: opts.url,
+    })
+  },
+
+  async radioDisconnect(): Promise<NativeRadioInfo | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    return await tauri.invoke<NativeRadioInfo | null>('zuno_radio_disconnect')
+  },
+
+  async radioStop(): Promise<void> {
+    const tauri = getTauriInternals()
+    if (!tauri) return
+    await tauri.invoke('zuno_radio_stop')
+  },
+
+  async radioPoll(): Promise<NativeRadioPollStatus | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    try {
+      return await tauri.invoke<NativeRadioPollStatus>('zuno_radio_poll')
+    } catch {
+      return null
+    }
   },
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,

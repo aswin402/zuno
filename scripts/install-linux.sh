@@ -45,7 +45,8 @@ install -m 755 "$TARGET_DIR/release/zuno-mcp" "$BIN_DIR/zuno-mcp"
 # Clean up any legacy external web/ folder (frontend is now compiled straight into the binaries)
 rm -rf "$DATA_DIR/zuno/web"
 
-install -m 644 "public/zuno-logo.svg" "$ICON_BASE/scalable/apps/zuno.svg"
+# Remove any legacy SVG icon so GNOME/GTK renders the lossless glossy PNG icon cleanly
+rm -f "$ICON_BASE/scalable/apps/zuno.svg" "$ICON_BASE/256x256/apps/zuno.png"
 if [ -f "public/icon-512.png" ]; then
   install -m 644 "public/icon-512.png" "$ICON_BASE/512x512/apps/zuno.png"
 fi

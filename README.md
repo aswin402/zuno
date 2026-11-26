@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./public/zuno-logo.svg" width="88" height="88" alt="Zuno minimalist black and white logo" />
+<img src="./public/icon-512.png" width="88" height="88" alt="Zuno minimalist black and white app icon" />
 
 # Zuno
 
@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.21-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.22-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -230,6 +230,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.19** — Fixed FM active playing animation contrast, added Connect/Reconnect & Disconnect controls for live FM playback across all docks and Now Playing, unified mobile Now Playing with the lowered title, bottom-dock scrubber, and big responsive visualizer, and simplified the mobile queue cue to a clean icon-only up arrow.
 - [x] **v0.0.20** — Chrome-style Display Zoom (`50% – 200%`, presets `75%`–`200%`) powered by native Tauri v2 `WebviewWindow::set_zoom` in Customize Studio (**Display Zoom** & **Layout & Geometry**) with `Ctrl +` / `Ctrl −` / `Ctrl 0` / `Ctrl + Scroll` shortcuts.
 - [x] **v0.0.21** — Full-stack audit & algorithmic upgrade (zero new dependencies): Gotoh/Smith-Waterman DP fuzzy + Damerau-Levenshtein typo search, 50%-overlap Hann STFT + precomputed FFT tables, sample-rate-normalized EQ + bitmask bypass, lock-free playback position, LRU + singleflight cover cache, concurrent Radio Browser mirror racing, SemVer 2.0 & PowerShell-safe updater, WCAG 2.1 color math, WHATWG URL parsing, and critical backup/polling/desktop-EQ/visualizer fixes.
+- [x] **v0.0.22** — Unified single OS media notification for songs & FM (native Rust Online FM streaming via `ffmpeg`/`gst-launch-1.0` into `ZunoService` with real EQ, FFT visualizer, and tray background playback, eliminating duplicate WebKitGTK MPRIS cards), new glossy musical-note app icon across desktop/tray/web/installers, and classic four-bar acoustic icon as default fallback thumbnail for songs without cover art.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

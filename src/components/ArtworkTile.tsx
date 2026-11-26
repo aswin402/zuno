@@ -1,5 +1,4 @@
 import { memo, useEffect, useState } from 'react'
-import { fnv1aHash } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { zunoApi } from '@/lib/zunoApi'
 
@@ -12,8 +11,30 @@ interface ArtworkTileProps {
 }
 
 /**
+ * Default fallback music thumbnail: Zuno's classic four stepped pure-white
+ * acoustic bars forming a Play silhouette on an obsidian tile.
+ */
+export function DefaultMusicCover({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 512 512"
+      aria-hidden="true"
+      className={cn('h-full w-full select-none', className)}
+    >
+      <rect width="512" height="512" fill="#09090b" />
+      <g fill="#fafafa">
+        <rect x="148" y="140" width="38" height="232" rx="19" />
+        <rect x="214" y="170" width="38" height="172" rx="19" />
+        <rect x="280" y="201" width="38" height="110" rx="19" />
+        <rect x="346" y="232" width="38" height="48" rx="19" />
+      </g>
+    </svg>
+  )
+}
+
+/**
  * Displays cached embedded cover art (96px thumbnails for lists, full-res for Now Playing)
- * with lazy async decoding, or a lightweight monochrome architectural fallback.
+ * with lazy async decoding, or Zuno's classic four-bar default music thumbnail when absent.
  */
 export const ArtworkTile = memo(function ArtworkTile({
   trackId,
@@ -42,67 +63,5 @@ export const ArtworkTile = memo(function ArtworkTile({
     )
   }
 
-  const h = fnv1aHash(seed || 'zuno')
-  const cx = 42 + (h % 17)
-  const cy = variant === 'arch' ? 54 + ((h >> 4) % 12) : 46 + ((h >> 4) % 12)
-
-  // Ultra-fast pure CSS fallback for small list thumbnails (avoids per-row SVG gradients)
-  if (variant === 'thumb') {
-    return (
-      <div
-        className={cn(
-          'relative flex h-full w-full items-center justify-center overflow-hidden bg-secondary',
-          className,
-        )}
-        style={{
-          backgroundImage: `radial-gradient(circle at ${cx}% ${cy}%, color-mix(in srgb, var(--foreground) 16%, transparent) 0%, transparent 65%)`,
-        }}
-        aria-hidden="true"
-      >
-        <span className="h-5 w-5 rounded-full border border-foreground/15 flex items-center justify-center">
-          <span className="h-1.5 w-1.5 rounded-full bg-foreground/45" />
-        </span>
-      </div>
-    )
-  }
-
-  const ringStep = 11
-
-  return (
-    <div
-      className={cn(
-        'relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-b from-accent/70 via-secondary to-card',
-        className,
-      )}
-    >
-      <svg
-        viewBox="0 0 100 100"
-        preserveAspectRatio="xMidYMid slice"
-        className="h-full w-full opacity-90"
-        aria-hidden="true"
-      >
-        <defs>
-          <radialGradient id={`g-${h}`} cx={`${cx}%`} cy={`${cy}%`} r="65%">
-            <stop offset="0%" stopColor="var(--muted-foreground)" stopOpacity="0.28" />
-            <stop offset="60%" stopColor="var(--secondary)" stopOpacity="0.12" />
-            <stop offset="100%" stopColor="var(--background)" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <rect width="100" height="100" fill={`url(#g-${h})`} />
-        {[1, 2, 3, 4].map((i) => (
-          <circle
-            key={i}
-            cx={cx}
-            cy={cy}
-            r={i * ringStep}
-            fill="none"
-            stroke="var(--foreground)"
-            strokeOpacity={0.18 - i * 0.03}
-            strokeWidth={0.5}
-          />
-        ))}
-        <circle cx={cx} cy={cy} r={2.2} fill="var(--foreground)" fillOpacity="0.55" />
-      </svg>
-    </div>
-  )
+  return <DefaultMusicCover className={className} />
 })

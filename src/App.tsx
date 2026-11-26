@@ -83,6 +83,7 @@ import {
   zunoApi,
   zunoWindow,
   type MusicSource,
+  type NativeRadioInfo,
   type PlaybackStatus,
   type Playlist,
   type RepeatMode,
@@ -171,6 +172,39 @@ function shuffleIds(ids: string[], keepFirstId?: string): string[] {
   return keepFirstId ? [keepFirstId, ...pool] : pool
 }
 
+function nativeRadioToActive(info: NativeRadioInfo): ActiveRadioPlayback {
+  return {
+    kind: info.kind,
+    id: info.id,
+    name: info.name,
+    subtitle: info.subtitle,
+    url: info.url ?? undefined,
+    freqMhz: info.freq_mhz ?? undefined,
+    isPlaying: info.state === 'playing',
+    isBuffering: info.state === 'connecting',
+    error: info.error ?? null,
+  }
+}
+
+function sameActiveRadio(
+  a: ActiveRadioPlayback | null,
+  b: ActiveRadioPlayback | null,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return (
+    a.kind === b.kind &&
+    a.id === b.id &&
+    a.name === b.name &&
+    a.subtitle === b.subtitle &&
+    a.url === b.url &&
+    a.freqMhz === b.freqMhz &&
+    a.isPlaying === b.isPlaying &&
+    a.isBuffering === b.isBuffering &&
+    a.error === b.error
+  )
+}
+
 export default function App() {
   const nativeAudio = isTauriRuntime()
   const [page, setPage] = useState<AppPage>('home')
@@ -226,7 +260,12 @@ export default function App() {
   const [radioStore, setRadioStore] = useState<RadioStoreData>(DEFAULT_RADIO_STORE)
   const [fmHardware, setFmHardware] = useState<FmHardwareStatus | null>(null)
   const [activeRadio, setActiveRadio] = useState<ActiveRadioPlayback | null>(null)
+  const [usingHtmlRadioFallback, setUsingHtmlRadioFallback] = useState(false)
   const [radioStationPool, setRadioStationPool] = useState<OnlineStation[]>(CURATED_ONLINE_STATIONS)
+  const radioReqIdRef = useRef(0)
+  const stepRadioStationRef = useRef<(dir: -1 | 1) => void>(() => {})
+  const usingHtmlRadioFallbackRef = useRef(false)
+  usingHtmlRadioFallbackRef.current = usingHtmlRadioFallback
   const [queueIds, setQueueIds] = useState<string[]>([])
   const [baseQueueIds, setBaseQueueIds] = useState<string[]>([])
   const [queueIndex, setQueueIndex] = useState<number | null>(null)
@@ -587,27 +626,30 @@ export default function App() {
     }
   }, [page, refreshFmHardware])
 
+  const clearHtmlRadioElement = useCallback(() => {
+    const el = radioAudioRef.current
+    if (el) {
+      el.pause()
+      el.removeAttribute('src')
+      el.load()
+    }
+  }, [])
+
   const stopRadioPlayback = useCallback(
     (clearState = true) => {
-      const el = radioAudioRef.current
-      if (el) {
-        el.pause()
-        el.removeAttribute('src')
-        el.load()
-      }
+      radioReqIdRef.current += 1
+      clearHtmlRadioElement()
       if (nativeAudio) {
-        zunoApi
-          .fmStop()
-          .then((st) => {
-            if (st) setFmHardware(st)
-          })
-          .catch(() => {})
+        const op = clearState ? zunoApi.radioStop() : zunoApi.radioDisconnect()
+        op.catch(() => {})
+        refreshFmHardware()
       }
       if (clearState) {
+        setUsingHtmlRadioFallback(false)
         setActiveRadio(null)
       }
     },
-    [nativeAudio],
+    [clearHtmlRadioElement, nativeAudio, refreshFmHardware],
   )
 
   const pauseLocalSongs = useCallback(() => {
@@ -623,17 +665,80 @@ export default function App() {
     }
   }, [nativeAudio])
 
+  const startHtmlOnlineStream = useCallback(
+    (stationId: string, stationName: string, url: string) => {
+      const el = radioAudioRef.current
+      if (!el) return
+      el.pause()
+      el.src = url
+      el.volume = volume
+      el.load()
+      el.play().catch(() => {
+        setActiveRadio((cur) =>
+          cur && cur.id === stationId
+            ? { ...cur, isPlaying: false, isBuffering: false, error: 'Stream failed to start' }
+            : cur,
+        )
+        notify(`Unable to connect to ${stationName}`)
+      })
+    },
+    [volume, notify],
+  )
+
+  const startOnlineRadioStream = useCallback(
+    (opts: { id: string; name: string; subtitle: string; url: string }) => {
+      const reqId = ++radioReqIdRef.current
+      setActiveRadio({
+        kind: 'online',
+        id: opts.id,
+        name: opts.name,
+        subtitle: opts.subtitle,
+        url: opts.url,
+        isPlaying: false,
+        isBuffering: true,
+        error: null,
+      })
+
+      if (nativeAudio) {
+        // Stream natively through Rust (Rodio + 10-band EQ + 1024-pt FFT + single MPRIS2 card)
+        // so WebKitGTK never spawns a duplicate OS media notification.
+        clearHtmlRadioElement()
+        setIsPlaying(false)
+        zunoApi
+          .radioPlayOnline(opts)
+          .then((info) => {
+            if (reqId !== radioReqIdRef.current) return
+            setUsingHtmlRadioFallback(false)
+            setActiveRadio(nativeRadioToActive(info))
+          })
+          .catch((err) => {
+            if (reqId !== radioReqIdRef.current) return
+            const msg = formatError(err, 'Stream failed to start')
+            if (msg === 'cancelled') return
+            if (msg.includes('NO_NATIVE_STREAM_DECODER')) {
+              setUsingHtmlRadioFallback(true)
+              pauseLocalSongs()
+              startHtmlOnlineStream(opts.id, opts.name, opts.url)
+              return
+            }
+            setActiveRadio((cur) =>
+              cur && cur.id === opts.id
+                ? { ...cur, isPlaying: false, isBuffering: false, error: msg }
+                : cur,
+            )
+            notify(`Unable to connect to ${opts.name}`)
+          })
+        return
+      }
+
+      pauseLocalSongs()
+      startHtmlOnlineStream(opts.id, opts.name, opts.url)
+    },
+    [nativeAudio, clearHtmlRadioElement, pauseLocalSongs, startHtmlOnlineStream, notify],
+  )
+
   const handlePlayOnlineStation = useCallback(
     (station: OnlineStation, pool: OnlineStation[]) => {
-      pauseLocalSongs()
-      if (nativeAudio) {
-        zunoApi
-          .fmStop()
-          .then((st) => {
-            if (st) setFmHardware(st)
-          })
-          .catch(() => {})
-      }
       if (pool.length > 0) {
         setRadioStationPool(pool)
       }
@@ -645,49 +750,26 @@ export default function App() {
         .filter(Boolean)
         .join(' · ')
 
-      setActiveRadio({
-        kind: 'online',
+      startOnlineRadioStream({
         id: station.id,
         name: station.name,
         subtitle: subtitle || 'Online FM Stream',
         url: station.url,
-        isPlaying: false,
-        isBuffering: true,
-        error: null,
       })
-
-      const el = radioAudioRef.current
-      if (el) {
-        el.pause()
-        el.src = station.url
-        el.volume = volume
-        el.load()
-        el.play().catch(() => {
-          setActiveRadio((cur) =>
-            cur && cur.id === station.id
-              ? { ...cur, isPlaying: false, isBuffering: false, error: 'Stream failed to start' }
-              : cur,
-          )
-          notify(`Unable to connect to ${station.name}`)
-        })
-      }
     },
-    [pauseLocalSongs, nativeAudio, volume, notify],
+    [startOnlineRadioStream],
   )
 
   const handleTuneOfflineSignal = useCallback(
     async (freqMhz: number, label?: string, signalId?: string) => {
       const cleanFreq = Math.round(freqMhz * 10) / 10
+      radioReqIdRef.current += 1
       pauseLocalSongs()
-      const el = radioAudioRef.current
-      if (el) {
-        el.pause()
-        el.removeAttribute('src')
-        el.load()
-      }
+      clearHtmlRadioElement()
       try {
-        const hw = await zunoApi.fmTune(cleanFreq)
+        const hw = await zunoApi.fmTune(cleanFreq, { name: label, signalId })
         setFmHardware(hw)
+        setUsingHtmlRadioFallback(false)
         setActiveRadio({
           kind: 'offline',
           id: signalId ?? `freq-${cleanFreq.toFixed(1)}`,
@@ -704,8 +786,44 @@ export default function App() {
         refreshFmHardware()
       }
     },
-    [pauseLocalSongs, notify, refreshFmHardware],
+    [pauseLocalSongs, clearHtmlRadioElement, notify, refreshFmHardware],
   )
+
+  const handleDisconnectRadio = useCallback(() => {
+    radioReqIdRef.current += 1
+    clearHtmlRadioElement()
+    if (nativeAudio) {
+      zunoApi
+        .radioDisconnect()
+        .then((info) => {
+          if (info) setActiveRadio(nativeRadioToActive(info))
+        })
+        .catch(() => {})
+      refreshFmHardware()
+    }
+    setActiveRadio((cur) =>
+      cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
+    )
+    notify('FM disconnected')
+  }, [clearHtmlRadioElement, nativeAudio, refreshFmHardware, notify])
+
+  const handleReconnectRadio = useCallback(() => {
+    if (!activeRadio) return
+    if (activeRadio.kind === 'online' && activeRadio.url) {
+      const wasConnected = activeRadio.isPlaying || activeRadio.isBuffering
+      startOnlineRadioStream({
+        id: activeRadio.id,
+        name: activeRadio.name,
+        subtitle: activeRadio.subtitle,
+        url: activeRadio.url,
+      })
+      notify(wasConnected ? `Reconnecting ${activeRadio.name}...` : `Connecting ${activeRadio.name}...`)
+      return
+    }
+    if (activeRadio.kind === 'offline' && activeRadio.freqMhz !== undefined) {
+      handleTuneOfflineSignal(activeRadio.freqMhz, activeRadio.name, activeRadio.id)
+    }
+  }, [activeRadio, startOnlineRadioStream, notify, handleTuneOfflineSignal])
 
   const handleToggleMarkOnline = useCallback(
     (stationId: string) => {
@@ -986,12 +1104,12 @@ export default function App() {
     }
   }, [])
 
-  // In native Tauri mode, restore live Rust playback & queue on window open/recreate
+  // In native Tauri mode, restore live Rust playback, queue & active FM radio on window open/recreate
   useEffect(() => {
     if (!nativeAudio) return
     let cancelled = false
-    Promise.all([zunoApi.getStatus(), zunoApi.queueGet()])
-      .then(([st, q]) => {
+    Promise.all([zunoApi.getStatus(), zunoApi.queueGet(), zunoApi.radioPoll()])
+      .then(([st, q, radioRes]) => {
         if (cancelled) return
         setVolume(st.volume)
         if (q.tracks.length > 0) {
@@ -1000,6 +1118,9 @@ export default function App() {
           setBaseQueueIds(ids)
         }
         applyNativeStatus(st)
+        if (radioRes?.active) {
+          setActiveRadio(nativeRadioToActive(radioRes.active))
+        }
       })
       .catch(() => {})
     return () => {
@@ -1007,7 +1128,10 @@ export default function App() {
     }
   }, [nativeAudio, applyNativeStatus])
 
-  // Lightweight in-process status sync while visible in Tauri mode (pauses completely when hidden)
+  const hasLiveNativePlayback =
+    isPlaying || Boolean(activeRadio?.isPlaying || activeRadio?.isBuffering)
+
+  // Lightweight in-process status + radio sync while visible in Tauri mode (pauses when hidden)
   useEffect(() => {
     if (!nativeAudio) return
     let cancelled = false
@@ -1018,24 +1142,34 @@ export default function App() {
         timer = window.setTimeout(poll, 1200)
         return
       }
-      zunoApi
-        .getStatus()
-        .then((st) => {
+      Promise.all([zunoApi.getStatus(), zunoApi.radioPoll()])
+        .then(([st, radioRes]) => {
           if (cancelled) return
           applyNativeStatus(st)
-          timer = window.setTimeout(poll, st.state === 'playing' ? 350 : 1500)
+          if (radioRes && !usingHtmlRadioFallbackRef.current) {
+            const nextRadio = radioRes.active ? nativeRadioToActive(radioRes.active) : null
+            setActiveRadio((cur) => (sameActiveRadio(cur, nextRadio) ? cur : nextRadio))
+            if (radioRes.step_delta !== 0) {
+              stepRadioStationRef.current(radioRes.step_delta > 0 ? 1 : -1)
+            }
+          }
+          const fast =
+            st.state === 'playing' ||
+            radioRes?.active?.state === 'playing' ||
+            radioRes?.active?.state === 'connecting'
+          timer = window.setTimeout(poll, fast ? 350 : 1500)
         })
         .catch(() => {
           if (cancelled) return
           timer = window.setTimeout(poll, 2000)
         })
     }
-    timer = window.setTimeout(poll, isPlaying ? 350 : 1500)
+    timer = window.setTimeout(poll, hasLiveNativePlayback ? 350 : 1500)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [nativeAudio, isPlaying, applyNativeStatus])
+  }, [nativeAudio, hasLiveNativePlayback, applyNativeStatus])
 
   const currentTrack: Track | null = useMemo(() => {
     if (queueIndex === null) return null
@@ -1168,44 +1302,12 @@ export default function App() {
 
   const handleTogglePlay = useCallback(() => {
     if (activeRadio) {
-      if (activeRadio.kind === 'online') {
-        const el = radioAudioRef.current
-        if (!el) return
-        if (activeRadio.isPlaying || activeRadio.isBuffering) {
-          el.pause()
-          el.removeAttribute('src')
-          el.load()
-          setActiveRadio((cur) =>
-            cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
-          )
-        } else if (activeRadio.url) {
-          setActiveRadio((cur) => (cur ? { ...cur, isBuffering: true, error: null } : null))
-          el.src = activeRadio.url
-          el.volume = volume
-          el.load()
-          el.play().catch(() => {
-            setActiveRadio((cur) =>
-              cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
-            )
-            notify(`Unable to reconnect to ${activeRadio.name}`)
-          })
-        }
-        return
+      if (activeRadio.isPlaying || activeRadio.isBuffering) {
+        handleDisconnectRadio()
+      } else {
+        handleReconnectRadio()
       }
-      if (activeRadio.kind === 'offline') {
-        if (activeRadio.isPlaying) {
-          zunoApi
-            .fmStop()
-            .then((st) => {
-              if (st) setFmHardware(st)
-            })
-            .catch(() => {})
-          setActiveRadio((cur) => (cur ? { ...cur, isPlaying: false } : null))
-        } else if (activeRadio.freqMhz !== undefined) {
-          handleTuneOfflineSignal(activeRadio.freqMhz, activeRadio.name, activeRadio.id)
-        }
-        return
-      }
+      return
     }
     if (nativeAudio) {
       if (!currentTrack && queueIds.length === 0) {
@@ -1255,9 +1357,8 @@ export default function App() {
     }
   }, [
     activeRadio,
-    volume,
-    notify,
-    handleTuneOfflineSignal,
+    handleDisconnectRadio,
+    handleReconnectRadio,
     nativeAudio,
     currentTrack,
     queueIds.length,
@@ -1453,64 +1554,6 @@ export default function App() {
       zunoApi.setMode({ repeat: next }).then(applyNativeStatus).catch(() => {})
     }
   }, [nativeAudio, applyNativeStatus, repeat])
-
-  // Browser Media Session API (for web/mobile mode — native Tauri uses Rust MPRIS2 directly)
-  useEffect(() => {
-    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
-      return
-    }
-    const ms = navigator.mediaSession
-    if (currentTrack) {
-      const artist = displayArtist(currentTrack)
-      const artwork = currentTrack.has_cover
-        ? [{ src: zunoApi.coverUrl(currentTrack.id) }]
-        : [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
-      ms.metadata = new MediaMetadata({
-        title: currentTrack.title,
-        artist,
-        album: currentTrack.album || currentTrack.folder || 'Zuno',
-        artwork,
-      })
-    } else {
-      ms.metadata = null
-    }
-    ms.playbackState = currentTrack ? (isPlaying ? 'playing' : 'paused') : 'none'
-  }, [nativeAudio, currentTrack, isPlaying])
-
-  useEffect(() => {
-    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
-      return
-    }
-    const ms = navigator.mediaSession
-    const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
-      try {
-        ms.setActionHandler(action, handler)
-      } catch {
-        /* unsupported action */
-      }
-    }
-    safeSet('play', () => {
-      if (!isPlaying) handleTogglePlay()
-    })
-    safeSet('pause', () => {
-      if (isPlaying) handleTogglePlay()
-    })
-    safeSet('previoustrack', () => handlePrev())
-    safeSet('nexttrack', () => handleNext(false))
-    safeSet('seekto', (details) => {
-      if (typeof details.seekTime === 'number') {
-        setPosition(details.seekTime)
-        handleSeekCommit(details.seekTime)
-      }
-    })
-    return () => {
-      safeSet('play', null)
-      safeSet('pause', null)
-      safeSet('previoustrack', null)
-      safeSet('nexttrack', null)
-      safeSet('seekto', null)
-    }
-  }, [nativeAudio, isPlaying, handleTogglePlay, handlePrev, handleNext, handleSeekCommit])
 
   // Refs keep playback position/duration/track current inside the global keydown handler
   // without tearing down and re-registering `window.addEventListener('keydown')` 3–4×/sec.
@@ -1974,6 +2017,8 @@ export default function App() {
     ],
   )
 
+  stepRadioStationRef.current = stepRadioStation
+
   const displayTrack: Track | null = useMemo(() => {
     if (!activeRadio) return currentTrack
     return {
@@ -1990,57 +2035,6 @@ export default function App() {
       has_cover: false,
     }
   }, [activeRadio, currentTrack])
-
-  const handleDisconnectRadio = useCallback(() => {
-    const el = radioAudioRef.current
-    if (el) {
-      el.pause()
-      el.removeAttribute('src')
-      el.load()
-    }
-    if (nativeAudio) {
-      zunoApi
-        .fmStop()
-        .then((st) => {
-          if (st) setFmHardware(st)
-        })
-        .catch(() => {})
-    }
-    setActiveRadio((cur) =>
-      cur ? { ...cur, isPlaying: false, isBuffering: false } : null,
-    )
-    notify('FM disconnected')
-  }, [nativeAudio, notify])
-
-  const handleReconnectRadio = useCallback(() => {
-    if (!activeRadio) return
-    if (activeRadio.kind === 'online' && activeRadio.url) {
-      pauseLocalSongs()
-      const el = radioAudioRef.current
-      if (!el) return
-      const wasConnected = activeRadio.isPlaying || activeRadio.isBuffering
-      el.pause()
-      el.removeAttribute('src')
-      el.load()
-      setActiveRadio((cur) =>
-        cur ? { ...cur, isPlaying: false, isBuffering: true, error: null } : null,
-      )
-      el.src = activeRadio.url
-      el.volume = volume
-      el.load()
-      el.play().catch(() => {
-        setActiveRadio((cur) =>
-          cur ? { ...cur, isPlaying: false, isBuffering: false, error: 'Stream failed' } : null,
-        )
-        notify(`Unable to connect to ${activeRadio.name}`)
-      })
-      notify(wasConnected ? `Reconnecting ${activeRadio.name}...` : `Connecting ${activeRadio.name}...`)
-      return
-    }
-    if (activeRadio.kind === 'offline' && activeRadio.freqMhz !== undefined) {
-      handleTuneOfflineSignal(activeRadio.freqMhz, activeRadio.name, activeRadio.id)
-    }
-  }, [activeRadio, pauseLocalSongs, volume, notify, handleTuneOfflineSignal])
 
   const displayIsPlaying = activeRadio ? activeRadio.isPlaying : isPlaying
   const displayIsBuffering = Boolean(activeRadio?.isBuffering)
@@ -2116,6 +2110,84 @@ export default function App() {
     handleNext(false)
   }, [activeRadio, stepRadioStation, handleNext])
 
+  // Unified Browser Media Session API for web/mobile mode (handles both songs & FM in one card;
+  // native desktop uses Rust's unified MPRIS2 server directly).
+  useEffect(() => {
+    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return
+    }
+    const ms = navigator.mediaSession
+    if (displayTrack) {
+      const artist = displayArtist(displayTrack)
+      const artwork = activeRadio
+        ? [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
+        : displayTrack.has_cover
+          ? [{ src: zunoApi.coverUrl(displayTrack.id) }]
+          : [{ src: '/default-music-cover.png', sizes: '512x512', type: 'image/png' }]
+      ms.metadata = new MediaMetadata({
+        title: displayTrack.title,
+        artist,
+        album: displayTrack.album || displayTrack.folder || 'Zuno',
+        artwork,
+      })
+    } else {
+      ms.metadata = null
+    }
+    ms.playbackState = displayTrack
+      ? displayIsPlaying || displayIsBuffering
+        ? 'playing'
+        : 'paused'
+      : 'none'
+  }, [nativeAudio, activeRadio, displayTrack, displayIsPlaying, displayIsBuffering])
+
+  useEffect(() => {
+    if (nativeAudio || typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return
+    }
+    const ms = navigator.mediaSession
+    const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler)
+      } catch {
+        /* unsupported action */
+      }
+    }
+    safeSet('play', () => {
+      if (!displayIsPlaying) handleTogglePlay()
+    })
+    safeSet('pause', () => {
+      if (displayIsPlaying) handleTogglePlay()
+    })
+    safeSet('previoustrack', () => displayPrev())
+    safeSet('nexttrack', () => displayNext())
+    safeSet(
+      'seekto',
+      activeRadio
+        ? null
+        : (details) => {
+            if (typeof details.seekTime === 'number') {
+              setPosition(details.seekTime)
+              handleSeekCommit(details.seekTime)
+            }
+          },
+    )
+    return () => {
+      safeSet('play', null)
+      safeSet('pause', null)
+      safeSet('previoustrack', null)
+      safeSet('nexttrack', null)
+      safeSet('seekto', null)
+    }
+  }, [
+    nativeAudio,
+    activeRadio,
+    displayIsPlaying,
+    handleTogglePlay,
+    displayPrev,
+    displayNext,
+    handleSeekCommit,
+  ])
+
   const nowPlayingProps = {
     track: displayTrack,
     queueTracks,
@@ -2129,7 +2201,8 @@ export default function App() {
     isFavorite: displayIsFavorite,
     liveLabel: displayLiveLabel,
     isBuffering: displayIsBuffering,
-    radioDemoVisualizer: activeRadio?.kind === 'online',
+    radioDemoVisualizer:
+      activeRadio?.kind === 'online' && (!nativeAudio || usingHtmlRadioFallback),
     position,
     duration,
     volume,
@@ -2649,7 +2722,7 @@ export default function App() {
           {page === 'equalizer' && (
             <EqualizerPage
               settings={eqSettings}
-              isPlaying={isPlaying}
+              isPlaying={displayIsPlaying}
               iconPack={appearance.iconPack}
               audioEl={audioRef.current}
               onChange={updateEqSettings}

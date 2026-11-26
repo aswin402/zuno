@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
 
+use crate::radio::{
+    ActiveRadioInfo, FmTunerManager, RadioKind, RadioPlayState, RadioPlaybackManager,
+};
 use gio::prelude::*;
 use glib::variant::ObjectPath;
 use std::collections::VecDeque;
@@ -78,6 +81,7 @@ struct MprisSnapshot {
     state: PlayState,
     track_id: Option<String>,
     duration_secs: u64,
+    radio_key: Option<(String, String, String, RadioPlayState)>,
     volume_pct: i32,
     shuffle: bool,
     repeat: RepeatMode,
@@ -89,12 +93,45 @@ struct CoverCache {
 
 struct MprisShared {
     service: Arc<ZunoService>,
+    radio: Arc<RadioPlaybackManager>,
+    fm_tuner: Arc<FmTunerManager>,
     connection: Mutex<Option<gio::DBusConnection>>,
     snapshot: Mutex<MprisSnapshot>,
     cover_cache: Mutex<CoverCache>,
 }
 
 impl MprisShared {
+    fn cached_embedded_art_url(&self, filename: &str, bytes: &[u8]) -> Option<String> {
+        let cache_dir = self.service.paths().cache_dir();
+        let _ = fs::create_dir_all(&cache_dir);
+        let path = cache_dir.join(filename);
+        let up_to_date = fs::metadata(&path)
+            .map(|m| m.len() as usize == bytes.len())
+            .unwrap_or(false)
+            && fs::read(&path).ok().as_deref() == Some(bytes);
+        if !up_to_date {
+            let _ = atomic_write(&path, bytes);
+        }
+        path.exists().then(|| {
+            glib::filename_to_uri(&path, None)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| format!("file://{}", path.display()))
+        })
+    }
+
+    /// Classic four-bar acoustic icon used as default thumbnail for songs without embedded cover art.
+    fn default_music_art_url(&self) -> Option<String> {
+        self.cached_embedded_art_url(
+            "mpris-default-music-cover.png",
+            include_bytes!("../icons/default-music-cover.png"),
+        )
+    }
+
+    /// Glossy Zuno app icon used for live Online / Offline FM radio sessions.
+    fn app_icon_art_url(&self) -> Option<String> {
+        self.cached_embedded_art_url("mpris-app-icon.png", include_bytes!("../icons/icon.png"))
+    }
+
     fn art_url_for_track(&self, track: &Track) -> Option<String> {
         let mut cache = self.cover_cache.lock().unwrap();
         if let Some(pos) = cache.recent.iter().position(|(id, _, _)| id == &track.id) {
@@ -108,7 +145,7 @@ impl MprisShared {
         let _ = fs::create_dir_all(&cache_dir);
 
         let mut owned_file: Option<PathBuf> = None;
-        let art_path: Option<PathBuf> = if let Some(art) = self.service.extract_cover(&track.id) {
+        let url: Option<String> = if let Some(art) = self.service.extract_cover(&track.id) {
             let ext = match art.mime_type.as_str() {
                 "image/png" => "png",
                 "image/webp" => "webp",
@@ -118,23 +155,21 @@ impl MprisShared {
             let target = cache_dir.join(format!("mpris-cover-{safe_id}.{ext}"));
             if atomic_write(&target, &art.bytes).is_ok() {
                 owned_file = Some(target.clone());
-                Some(target)
+                Some(
+                    glib::filename_to_uri(&target, None)
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|_| format!("file://{}", target.display())),
+                )
             } else {
                 None
             }
         } else {
-            let fallback = cache_dir.join("mpris-default-icon.png");
-            if !fallback.exists() {
-                let _ = atomic_write(&fallback, include_bytes!("../icons/icon.png"));
-            }
-            fallback.exists().then_some(fallback)
+            drop(cache);
+            let fallback_url = self.default_music_art_url();
+            cache = self.cover_cache.lock().unwrap();
+            fallback_url
         };
 
-        let url = art_path.map(|p| {
-            glib::filename_to_uri(&p, None)
-                .map(|u| u.to_string())
-                .unwrap_or_else(|_| format!("file://{}", p.display()))
-        });
         cache.recent.push_back((track.id.clone(), url.clone(), owned_file));
         while cache.recent.len() > MAX_CACHED_ART_FILES {
             if let Some((_, _, Some(stale))) = cache.recent.pop_front() {
@@ -152,6 +187,11 @@ impl MprisShared {
         build_metadata_variant(status.current_track.as_ref(), art_url.as_deref())
     }
 
+    fn metadata_variant_for_radio(&self, radio: &ActiveRadioInfo) -> glib::Variant {
+        let art_url = self.app_icon_art_url();
+        build_radio_metadata_variant(radio, art_url.as_deref())
+    }
+
     fn emit_changes(&self) {
         let conn = {
             let guard = self.connection.lock().unwrap();
@@ -161,15 +201,31 @@ impl MprisShared {
             }
         };
 
+        // If a local song started externally (e.g. via CLI/MCP Unix socket) while FM was active,
+        // automatically clear radio metadata so the single OS notification switches to the song.
+        if self.service.is_playing() && self.radio.is_active() {
+            self.radio.clear(None, &self.fm_tuner);
+        }
+
         let status = self.service.status();
+        let active_radio = self.radio.active();
+        let effective_state = match active_radio.as_ref() {
+            Some(r) => radio_to_play_state(r.state),
+            None => status.state,
+        };
+        let radio_key = active_radio
+            .as_ref()
+            .map(|r| (r.id.clone(), r.name.clone(), r.subtitle.clone(), r.state));
+
         let next = MprisSnapshot {
-            state: status.state,
+            state: effective_state,
             track_id: status.current_track.as_ref().map(|t| t.id.clone()),
             duration_secs: status
                 .current_track
                 .as_ref()
                 .map(|t| t.duration_secs)
                 .unwrap_or(0),
+            radio_key,
             volume_pct: (status.volume * 100.0).round() as i32,
             shuffle: status.shuffle,
             repeat: status.repeat,
@@ -187,10 +243,35 @@ impl MprisShared {
 
         let changed = glib::VariantDict::new(None);
         if prev.state != next.state {
-            changed.insert("PlaybackStatus", playback_status_str(status.state));
+            changed.insert("PlaybackStatus", playback_status_str(effective_state));
         }
-        if prev.track_id != next.track_id || prev.duration_secs != next.duration_secs {
-            changed.insert_value("Metadata", &self.metadata_variant(&status));
+        let media_changed = prev.radio_key != next.radio_key
+            || (active_radio.is_none()
+                && (prev.track_id != next.track_id || prev.duration_secs != next.duration_secs));
+        if media_changed {
+            if let Some(ref r) = active_radio {
+                changed.insert_value("Metadata", &self.metadata_variant_for_radio(r));
+                changed.insert("CanSeek", false);
+                changed.insert("CanPlay", true);
+                changed.insert("CanPause", true);
+                changed.insert("CanGoNext", true);
+                changed.insert("CanGoPrevious", true);
+            } else {
+                let has_track = status.current_track.is_some();
+                let has_queue = status.queue_len > 0;
+                changed.insert_value("Metadata", &self.metadata_variant(&status));
+                changed.insert("CanSeek", has_track && status.duration_secs > 0.0);
+                changed.insert("CanPlay", has_track || has_queue);
+                changed.insert("CanPause", has_track);
+                changed.insert(
+                    "CanGoNext",
+                    status.queue_len > 1 || status.repeat == RepeatMode::All,
+                );
+                changed.insert(
+                    "CanGoPrevious",
+                    status.queue_len > 1 || status.repeat == RepeatMode::All,
+                );
+            }
         }
         if prev.volume_pct != next.volume_pct {
             changed.insert("Volume", status.volume as f64);
@@ -290,6 +371,53 @@ fn build_metadata_variant(track: Option<&Track>, art_url: Option<&str>) -> glib:
     dict.end()
 }
 
+fn build_radio_metadata_variant(radio: &ActiveRadioInfo, art_url: Option<&str>) -> glib::Variant {
+    let dict = glib::VariantDict::new(None);
+    let obj_path = format!("/org/zuno/radio/{}", sanitize_object_segment(&radio.id));
+    if let Ok(path) = ObjectPath::try_from(obj_path) {
+        dict.insert("mpris:trackid", path);
+    }
+    dict.insert("mpris:length", 0_i64);
+    dict.insert("xesam:title", radio.name.as_str());
+    let artist = if radio.subtitle.trim().is_empty() {
+        match radio.kind {
+            RadioKind::Offline => "Offline FM Signal",
+            RadioKind::Online => "Online FM Radio",
+        }
+    } else {
+        radio.subtitle.as_str()
+    };
+    dict.insert("xesam:artist", vec![artist.to_string()]);
+    dict.insert(
+        "xesam:album",
+        match radio.kind {
+            RadioKind::Offline => "Offline FM",
+            RadioKind::Online => "Online FM",
+        },
+    );
+    if let Some(url) = art_url {
+        dict.insert("mpris:artUrl", url);
+    }
+    dict.end()
+}
+
+fn radio_to_play_state(state: RadioPlayState) -> PlayState {
+    match state {
+        RadioPlayState::Playing | RadioPlayState::Connecting => PlayState::Playing,
+        RadioPlayState::Disconnected => PlayState::Paused,
+    }
+}
+
+fn notify_bg_callback(shared: &Arc<MprisShared>) -> Arc<dyn Fn() + Send + Sync> {
+    let s = Arc::clone(shared);
+    Arc::new(move || {
+        let s2 = Arc::clone(&s);
+        glib::MainContext::default().invoke(move || {
+            s2.emit_changes();
+        });
+    })
+}
+
 fn build_properties_changed_payload(
     iface: &str,
     changed: glib::Variant,
@@ -307,6 +435,8 @@ fn build_properties_changed_payload(
 /// lock screen controls, hardware media keys, Bluetooth headphone buttons, and `playerctl`.
 pub fn start_mpris<F, Q>(
     service: Arc<ZunoService>,
+    radio: Arc<RadioPlaybackManager>,
+    fm_tuner: Arc<FmTunerManager>,
     app_handle: AppHandle,
     on_raise: F,
     on_quit: Q,
@@ -317,6 +447,8 @@ where
 {
     let shared = Arc::new(MprisShared {
         service,
+        radio,
+        fm_tuner,
         connection: Mutex::new(None),
         snapshot: Mutex::new(MprisSnapshot::default()),
         cover_cache: Mutex::new(CoverCache {
@@ -392,6 +524,46 @@ where
                 MPRIS_OBJECT_PATH,
                 &player_info,
                 move |_conn, _sender, _path, _iface, method, params, invocation| {
+                    if let Some(active_radio) = shared_call.radio.active() {
+                        match method {
+                            "Pause" | "Stop" => {
+                                shared_call
+                                    .radio
+                                    .disconnect(&shared_call.service, &shared_call.fm_tuner);
+                                shared_call.emit_changes();
+                            }
+                            "Play" => {
+                                shared_call.radio.reconnect(
+                                    &shared_call.service,
+                                    &shared_call.fm_tuner,
+                                    notify_bg_callback(&shared_call),
+                                );
+                            }
+                            "PlayPause" => {
+                                if matches!(
+                                    active_radio.state,
+                                    RadioPlayState::Playing | RadioPlayState::Connecting
+                                ) {
+                                    shared_call
+                                        .radio
+                                        .disconnect(&shared_call.service, &shared_call.fm_tuner);
+                                    shared_call.emit_changes();
+                                } else {
+                                    shared_call.radio.reconnect(
+                                        &shared_call.service,
+                                        &shared_call.fm_tuner,
+                                        notify_bg_callback(&shared_call),
+                                    );
+                                }
+                            }
+                            "Next" => shared_call.radio.queue_step(1),
+                            "Previous" => shared_call.radio.queue_step(-1),
+                            _ => {}
+                        }
+                        invocation.return_value(None);
+                        return;
+                    }
+
                     if let Some(req) = transport_ipc_for_method(method) {
                         let _ = shared_call.service.handle_request(req);
                         shared_call.emit_changes();
@@ -423,6 +595,23 @@ where
                 },
                 move |_conn, _sender, _path, _iface, prop| {
                     let st = shared_get.service.status();
+                    if let Some(ref radio) = shared_get.radio.active() {
+                        return match prop {
+                            "PlaybackStatus" => {
+                                playback_status_str(radio_to_play_state(radio.state)).to_variant()
+                            }
+                            "LoopStatus" => loop_status_str(st.repeat).to_variant(),
+                            "Rate" | "MinimumRate" | "MaximumRate" => 1.0_f64.to_variant(),
+                            "Shuffle" => st.shuffle.to_variant(),
+                            "Metadata" => shared_get.metadata_variant_for_radio(radio),
+                            "Volume" => (st.volume as f64).to_variant(),
+                            "Position" => 0_i64.to_variant(),
+                            "CanGoNext" | "CanGoPrevious" | "CanPlay" | "CanPause"
+                            | "CanControl" => true.to_variant(),
+                            "CanSeek" => false.to_variant(),
+                            _ => "".to_variant(),
+                        };
+                    }
                     let has_track = st.current_track.is_some();
                     let has_queue = st.queue_len > 0;
                     match prop {
@@ -614,5 +803,38 @@ mod tests {
             .lookup_value("Metadata", None)
             .expect("Metadata missing");
         assert_eq!(emitted_meta.type_().as_str(), "a{sv}");
+    }
+
+    #[test]
+    fn radio_metadata_variant_sets_station_title_subtitle_and_live_length() {
+        let radio = ActiveRadioInfo {
+            kind: RadioKind::Online,
+            id: "somafm-groovesalad".into(),
+            name: "SomaFM Groove Salad".into(),
+            subtitle: "Chill & Lofi · USA · 128k".into(),
+            url: Some("https://ice1.somafm.com/groovesalad-128-mp3".into()),
+            freq_mhz: None,
+            state: RadioPlayState::Playing,
+            error: None,
+        };
+        let meta = build_radio_metadata_variant(&radio, Some("file:///tmp/zuno.png"));
+        assert_eq!(meta.type_().as_str(), "a{sv}");
+        let dict = glib::VariantDict::new(Some(&meta));
+        assert_eq!(
+            dict.lookup_value("mpris:trackid", None).and_then(|v| v.str().map(str::to_string)),
+            Some("/org/zuno/radio/somafm_groovesalad".to_string())
+        );
+        assert_eq!(
+            dict.lookup_value("xesam:title", None).and_then(|v| v.str().map(str::to_string)),
+            Some("SomaFM Groove Salad".to_string())
+        );
+        assert_eq!(
+            dict.lookup_value("xesam:album", None).and_then(|v| v.str().map(str::to_string)),
+            Some("Online FM".to_string())
+        );
+        assert_eq!(
+            dict.lookup_value("mpris:length", None).and_then(|v| v.get::<i64>()),
+            Some(0)
+        );
     }
 }

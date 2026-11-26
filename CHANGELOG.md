@@ -5,6 +5,20 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.22] — 2026-11-26
+
+Unified single OS media notification across local songs, Online FM, and Offline FM via native Rust Online FM streaming, plus a new glossy musical-note app icon with the classic four-bar icon promoted to default music fallback artwork.
+
+### Fixed
+- **Duplicate OS Media Notification for FM Radio (`src-tauri/src/radio.rs`, `src-tauri/src/mpris.rs`, `src-tauri/src/main.rs`, `src/lib/zunoApi.ts`, `src/App.tsx`)**:
+  - Routed desktop Online FM streaming natively through Rust (`RadioPlaybackManager` decoding HTTP/HLS/PLS/M3U streams via `ffmpeg` or `gst-launch-1.0` into `ZunoService::play_pcm_stream`), eliminating the WebView `<audio>` path that caused WebKitGTK to spawn a duplicate generic `zuno` MPRIS2 card.
+  - Unified `org.mpris.MediaPlayer2.zuno`, System Tray controls, and browser `navigator.mediaSession` so a single `Zuno` media card reflects whichever source is active (local song, Online FM, or Offline FM) with Play/Pause/Disconnect/Reconnect and Next/Previous station or track controls.
+  - Enabled real Rust 10-band EQ, 1024-pt FFT spectrum visualizers, and close-to-tray background playback for Online FM streams.
+
+### Changed
+- **New Glossy App Icon (`src-tauri/icons/icon.png`, `public/icon-512.png`, `public/icon-192.png`, `public/zuno-logo.svg`, `src/components/ZunoLogo.tsx`, `index.html`, `public/manifest.webmanifest`, `scripts/install-linux.sh`, `install.sh`, `README.md`)**: Replaced the app icon across Tauri window/bundle/tray, in-app navigation chrome, web favicons/PWA manifests, and Linux `hicolor` desktop installers with the glossy black squircle musical-note icon.
+- **Classic Four-Bar Icon as Default Music Thumbnail (`src/components/ArtworkTile.tsx`, `src-tauri/icons/default-music-cover.png`, `public/default-music-cover.{png,svg}`, `src-tauri/src/mpris.rs`, `src/App.tsx`)**: Preserved the previous four stepped acoustic bars icon as the default fallback cover art for songs without embedded thumbnails across track lists, search results, queue items, mobile mini-player, Linux MPRIS2 notifications, and browser MediaSession.
+
 ## [0.0.21] — 2026-11-26
 
 Full-stack codebase audit, algorithmic upgrades, bug/safety fixes, and structural cleanup across all Rust crates, Tauri backend, build scripts, and React frontend (zero new dependencies).
