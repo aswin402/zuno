@@ -164,6 +164,8 @@ fn command_to_ipc(cmd: Commands) -> Option<IpcRequest> {
             folder,
             limit: Some(limit),
             offset: Some(0),
+            sort_by: None,
+            sort_dir: None,
         },
         Commands::Search { query, limit } => IpcRequest::SearchSongs {
             query,

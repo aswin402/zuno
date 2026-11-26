@@ -3,22 +3,25 @@
 mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
-mod radio;
 mod updater;
 
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
-use zuno_audio::{AudioLevels, ZunoService, ipc_unix};
+use zuno_audio::{AudioLevels, ZunoService, ipc_unix, radio};
 use zuno_core::ZunoPaths;
-use zuno_core::ipc::{IpcRequest, IpcResponse};
+use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
+use zuno_core::settings::{clamp_ui_zoom, extract_ui_zoom};
 
 const ZOOM_MIN_FACTOR: f64 = 0.5;
 const ZOOM_MAX_FACTOR: f64 = 2.0;
@@ -95,10 +98,33 @@ fn percent_decode_segment(input: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| input.to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct UiCommand {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playlist_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    customize_section: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SyncPollResponse {
+    settings_rev: u64,
+    library_rev: u64,
+    radio_store_rev: u64,
+    ui_commands: Vec<UiCommand>,
+}
+
 struct AppState {
     service: Arc<ZunoService>,
     fm_tuner: Arc<radio::FmTunerManager>,
     radio: Arc<radio::RadioPlaybackManager>,
+    ui_commands: Mutex<Vec<UiCommand>>,
     quitting: AtomicBool,
     update_progress: Arc<Mutex<updater::UpdateProgressEvent>>,
     #[cfg(target_os = "linux")]
@@ -129,47 +155,312 @@ impl AppState {
     }
 }
 
+fn apply_zoom_to_live_window(app: &AppHandle, zoom_percent: f64) {
+    let factor = clamp_ui_zoom(zoom_percent) / 100.0;
+    let app_clone = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(win) = app_clone.get_webview_window("main") {
+            let _ = win.set_zoom(factor);
+        }
+    });
+}
+
+fn dispatch_live_ipc(app: &AppHandle, req: IpcRequest) -> IpcResponse {
+    let state = app.state::<AppState>();
+    match req {
+        IpcRequest::Navigate {
+            page,
+            playlist_slug,
+            overlay,
+            search_query,
+            customize_section,
+        } => {
+            let app_clone = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                show_or_create_main_window(&app_clone);
+            });
+            let cmd = UiCommand {
+                page,
+                playlist_slug,
+                overlay,
+                search_query,
+                customize_section,
+            };
+            if let Ok(mut q) = state.ui_commands.lock() {
+                q.push(cmd.clone());
+            }
+            let _ = app.emit("zuno:sync", ());
+            IpcResponse::Ok {
+                data: IpcData::Json(json!({ "ok": true, "command": cmd })),
+            }
+        }
+
+        IpcRequest::WindowControl {
+            action,
+            zoom_percent,
+        } => {
+            let act = action.trim().to_ascii_lowercase();
+            match act.as_str() {
+                "show" => {
+                    let app_clone = app.clone();
+                    let _ = app.run_on_main_thread(move || show_or_create_main_window(&app_clone));
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": "show", "ok": true })),
+                    }
+                }
+                "minimize" => {
+                    let app_clone = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        if let Some(w) = app_clone.get_webview_window("main") {
+                            let _ = w.minimize();
+                        }
+                    });
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": "minimize", "ok": true })),
+                    }
+                }
+                "maximize" | "unmaximize" | "toggle_maximize" => {
+                    let (tx, rx) = mpsc::channel();
+                    let app_clone = app.clone();
+                    let mode = act.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let maximized = if let Some(w) = app_clone.get_webview_window("main") {
+                            let cur = w.is_maximized().unwrap_or(false);
+                            let target = match mode.as_str() {
+                                "maximize" => true,
+                                "unmaximize" => false,
+                                _ => !cur,
+                            };
+                            if target {
+                                let _ = w.maximize();
+                            } else {
+                                let _ = w.unmaximize();
+                            }
+                            target
+                        } else {
+                            false
+                        };
+                        let _ = tx.send(maximized);
+                    });
+                    let maximized = rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": act, "maximized": maximized })),
+                    }
+                }
+                "fullscreen" | "unfullscreen" | "toggle_fullscreen" => {
+                    let (tx, rx) = mpsc::channel();
+                    let app_clone = app.clone();
+                    let mode = act.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let fullscreen = if let Some(w) = app_clone.get_webview_window("main") {
+                            let cur = w.is_fullscreen().unwrap_or(false);
+                            let target = match mode.as_str() {
+                                "fullscreen" => true,
+                                "unfullscreen" => false,
+                                _ => !cur,
+                            };
+                            let _ = w.set_fullscreen(target);
+                            target
+                        } else {
+                            false
+                        };
+                        let _ = tx.send(fullscreen);
+                    });
+                    let fullscreen = rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": act, "fullscreen": fullscreen })),
+                    }
+                }
+                "close_to_tray" | "close" => {
+                    let app_clone = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        if let Some(w) = app_clone.get_webview_window("main") {
+                            let _ = w.close();
+                        }
+                    });
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": "close_to_tray", "ok": true })),
+                    }
+                }
+                "quit" => {
+                    let app_exit = app.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(80));
+                        let st = app_exit.state::<AppState>();
+                        shutdown_app(&app_exit, &st);
+                    });
+                    IpcResponse::Ok {
+                        data: IpcData::Json(json!({ "action": "quit", "ok": true })),
+                    }
+                }
+                "set_zoom" => {
+                    let Some(pct) = zoom_percent else {
+                        return IpcResponse::Err {
+                            message: "missing 'zoom_percent' (50..=200)".into(),
+                        };
+                    };
+                    let clamped = clamp_ui_zoom(pct) as i64;
+                    let resp = state.service.handle_request(IpcRequest::UpdateSettings {
+                        patch: json!({ "uiZoom": clamped }),
+                    });
+                    if matches!(resp, IpcResponse::Ok { .. }) {
+                        apply_zoom_to_live_window(app, clamped as f64);
+                        let _ = app.emit("zuno:sync", ());
+                        IpcResponse::Ok {
+                            data: IpcData::Json(json!({
+                                "action": "set_zoom",
+                                "zoom_percent": clamped,
+                                "live_window": true,
+                            })),
+                        }
+                    } else {
+                        resp
+                    }
+                }
+                "status" => {
+                    let (tx, rx) = mpsc::channel();
+                    let app_clone = app.clone();
+                    let zoom = extract_ui_zoom(&state.service.settings_snapshot());
+                    let _ = app.run_on_main_thread(move || {
+                        let info = if let Some(w) = app_clone.get_webview_window("main") {
+                            json!({
+                                "window_open": true,
+                                "visible": w.is_visible().unwrap_or(true),
+                                "minimized": w.is_minimized().unwrap_or(false),
+                                "maximized": w.is_maximized().unwrap_or(false),
+                                "fullscreen": w.is_fullscreen().unwrap_or(false),
+                                "zoom_percent": zoom as i64,
+                            })
+                        } else {
+                            json!({
+                                "window_open": false,
+                                "visible": false,
+                                "minimized": false,
+                                "maximized": false,
+                                "fullscreen": false,
+                                "zoom_percent": zoom as i64,
+                            })
+                        };
+                        let _ = tx.send(info);
+                    });
+                    let info = rx
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap_or_else(|_| json!({ "window_open": false, "zoom_percent": zoom as i64 }));
+                    IpcResponse::Ok {
+                        data: IpcData::Json(info),
+                    }
+                }
+                other => IpcResponse::Err {
+                    message: format!(
+                        "unknown window action '{other}' (expected show, minimize, maximize, unmaximize, toggle_maximize, fullscreen, unfullscreen, toggle_fullscreen, close_to_tray, quit, set_zoom, status)"
+                    ),
+                },
+            }
+        }
+
+        IpcRequest::CheckUpdate => match updater::check_for_update() {
+            Ok(info) => match serde_json::to_value(&info) {
+                Ok(v) => IpcResponse::Ok {
+                    data: IpcData::Json(v),
+                },
+                Err(e) => IpcResponse::Err {
+                    message: e.to_string(),
+                },
+            },
+            Err(message) => IpcResponse::Err { message },
+        },
+
+        other => {
+            let seek_pos = match &other {
+                IpcRequest::Seek { position_secs } => Some(*position_secs),
+                _ => None,
+            };
+            let is_get_info = matches!(other, IpcRequest::GetInfo);
+            let updates_zoom = matches!(
+                other,
+                IpcRequest::UpdateSettings { .. } | IpcRequest::ResetSettings { .. }
+            );
+            let should_emit_sync = !matches!(
+                other,
+                IpcRequest::Ping
+                    | IpcRequest::GetInfo
+                    | IpcRequest::GetStatus
+                    | IpcRequest::GetAudioLevels
+                    | IpcRequest::ListSongs { .. }
+                    | IpcRequest::SearchSongs { .. }
+                    | IpcRequest::ListFolders
+                    | IpcRequest::ListSources
+                    | IpcRequest::ListPlaylists
+                    | IpcRequest::GetPlaylist { .. }
+                    | IpcRequest::QueueGet
+                    | IpcRequest::GetEq
+                    | IpcRequest::GetTransition
+                    | IpcRequest::GetSettings
+                    | IpcRequest::GetLastPlayed
+                    | IpcRequest::RadioStatus
+                    | IpcRequest::RadioGetStore
+                    | IpcRequest::RadioDiscover { .. }
+                    | IpcRequest::RadioResolveUrl { .. }
+                    | IpcRequest::FmHardwareStatus
+            );
+
+            let mut resp = state.service.handle_request(other);
+            if matches!(resp, IpcResponse::Ok { .. }) {
+                if let Some(pos) = seek_pos {
+                    state.notify_mpris_seeked(pos);
+                }
+                if updates_zoom {
+                    let zoom = extract_ui_zoom(&state.service.settings_snapshot());
+                    apply_zoom_to_live_window(app, zoom);
+                }
+                if is_get_info {
+                    if let IpcResponse::Ok {
+                        data: IpcData::Json(ref mut val),
+                    } = resp
+                    {
+                        if let Some(obj) = val.as_object_mut() {
+                            obj.insert("live_gui".into(), json!(true));
+                            obj.insert(
+                                "window_open".into(),
+                                json!(app.get_webview_window("main").is_some()),
+                            );
+                        }
+                    }
+                }
+                if should_emit_sync {
+                    let _ = app.emit("zuno:sync", ());
+                }
+            }
+            resp
+        }
+    }
+}
+
+#[tauri::command]
+fn zuno_sync_poll(state: tauri::State<'_, AppState>) -> SyncPollResponse {
+    let (settings_rev, library_rev, radio_store_rev) = state.service.revisions();
+    let ui_commands = state
+        .ui_commands
+        .lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default();
+    SyncPollResponse {
+        settings_rev,
+        library_rev,
+        radio_store_rev,
+        ui_commands,
+    }
+}
+
 #[tauri::command]
 fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
     let seek_pos = match &req {
         IpcRequest::Seek { position_secs } => Some(*position_secs),
         _ => None,
     };
-    let affects_mpris = matches!(
-        req,
-        IpcRequest::Play { .. }
-            | IpcRequest::Pause
-            | IpcRequest::Resume
-            | IpcRequest::TogglePause
-            | IpcRequest::Stop
-            | IpcRequest::Next
-            | IpcRequest::Previous
-            | IpcRequest::SetVolume { .. }
-            | IpcRequest::SetQueue { .. }
-            | IpcRequest::JumpQueue { .. }
-            | IpcRequest::SetMode { .. }
-            | IpcRequest::QueueClear
-            | IpcRequest::RemoveSource { .. }
-            | IpcRequest::DeleteSong { .. }
-    );
-    let stops_radio = matches!(
-        req,
-        IpcRequest::Play { .. }
-            | IpcRequest::Resume
-            | IpcRequest::Stop
-            | IpcRequest::SetQueue { .. }
-            | IpcRequest::JumpQueue { .. }
-            | IpcRequest::Next
-            | IpcRequest::Previous
-    );
-    if stops_radio {
-        state.radio.clear(None, &state.fm_tuner);
-    }
     let resp = state.service.handle_request(req);
     if matches!(resp, IpcResponse::Ok { .. }) {
-        if affects_mpris {
-            state.notify_mpris();
-        } else if let Some(pos) = seek_pos {
+        if let Some(pos) = seek_pos {
             state.notify_mpris_seeked(pos);
         }
     }
@@ -542,22 +833,18 @@ fn main() {
         }
     };
 
-    // Expose live Unix Domain Socket IPC so `zuno-mcp` CLI & AI agents share live state
-    // with the running native desktop app at ~0 extra overhead.
     let sock_path = paths.socket_path();
-    let ipc_service = Arc::clone(&service);
-    let _ = ipc_unix::spawn_unix_ipc_server(ipc_service, sock_path);
-
     let cover_server = Arc::new(cover_cache::CoverServer::start(Arc::clone(&service)));
 
-    let fm_tuner = Arc::new(radio::FmTunerManager::new());
-    let radio_mgr = Arc::new(radio::RadioPlaybackManager::new());
+    let fm_tuner = Arc::clone(service.fm_tuner());
+    let radio_mgr = Arc::clone(service.radio());
 
     let app = tauri::Builder::default()
         .manage(AppState {
             service,
             fm_tuner,
             radio: radio_mgr,
+            ui_commands: Mutex::new(Vec::new()),
             quitting: AtomicBool::new(false),
             update_progress: Arc::new(Mutex::new(updater::UpdateProgressEvent::default())),
             #[cfg(target_os = "linux")]
@@ -589,6 +876,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             zuno_ipc,
+            zuno_sync_poll,
             zuno_audio_levels,
             zuno_info,
             zuno_check_update,
@@ -617,7 +905,7 @@ fn main() {
             app_quit,
             pick_music_folder
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Native Linux MPRIS2 D-Bus media integration (GNOME/KDE notification banner,
             // lock screen controls, hardware media keys, Bluetooth buttons & playerctl).
             #[cfg(target_os = "linux")]
@@ -638,7 +926,17 @@ fn main() {
                     },
                 );
                 let _ = st.mpris.set(handle);
+                st.service.set_change_callback(st.mpris_notify_cb());
             }
+
+            // Expose live Unix Domain Socket IPC wired directly into the live Tauri AppHandle
+            // so `zuno-mcp` & AI agents have full real-time control over audio, EQ, FM radio,
+            // appearance settings, display zoom, navigation, window controls, and backups.
+            let ipc_app = app.handle().clone();
+            let _ = ipc_unix::spawn_unix_ipc_server_with_handler(
+                move |req| dispatch_live_ipc(&ipc_app, req),
+                sock_path,
+            );
 
             // Minimalist B&W Zuno system tray icon with Play/Pause/Next/Prev & Destroy-WebView support
             let show_i = MenuItem::with_id(app, TrayAction::Show.id(), "Show Zuno", true, None::<&str>)?;

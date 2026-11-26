@@ -23,6 +23,9 @@ pub enum ZunoError {
     #[error("track not found: {0}")]
     TrackNotFound(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("audio error: {0}")]
     Audio(String),
 

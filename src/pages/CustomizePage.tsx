@@ -467,8 +467,31 @@ function isAppearanceModified(settings: AppearanceSettings): boolean {
   return false
 }
 
+const SECTION_ALIASES: Record<string, StudioPageId> = {
+  themes: 'theme_presets',
+  theme: 'theme_presets',
+  colors: 'custom_palette',
+  palette: 'custom_palette',
+  fonts: 'typography_fonts',
+  typography: 'typography_fonts',
+  window_radius: 'window_corners',
+  corners: 'window_corners',
+  titlebar: 'top_titlebar',
+  navigation: 'desktop_nav',
+  nav: 'desktop_nav',
+  zoom: 'display_zoom',
+  surfaces: 'surface_materials',
+  background: 'canvas_background',
+  scroll: 'scroll_progress',
+  layout: 'layout_geometry',
+  visualizer: 'now_playing_visualizer',
+  crossfade: 'audio_crossfade',
+  icons: 'icon_packs',
+}
+
 interface CustomizePageProps {
   settings: AppearanceSettings
+  section?: string | null
   onChange: (patch: Partial<AppearanceSettings>) => void
   onReset: () => void
   onBack: () => void
@@ -480,6 +503,7 @@ interface CustomizePageProps {
  */
 export function CustomizePage({
   settings,
+  section,
   onChange,
   onReset,
   onBack,
@@ -495,6 +519,23 @@ export function CustomizePage({
   const [previewScrub, setPreviewScrub] = useState(42)
   const [previewPlaying, setPreviewPlaying] = useState(true)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!section) return
+    const key = section.trim().toLowerCase()
+    const resolved =
+      SECTION_ALIASES[key] ??
+      (ALL_STUDIO_PAGES.find((p) => p.id === key)?.id as StudioPageId | undefined)
+    if (resolved) {
+      setActivePage(resolved)
+      const node = ALL_STUDIO_PAGES.find((p) => p.id === resolved)
+      if (node) {
+        setExpanded((prev) =>
+          prev[node.categoryId] ? prev : { ...prev, [node.categoryId]: true },
+        )
+      }
+    }
+  }, [section])
 
   const currentIdx = ALL_STUDIO_PAGES.findIndex((p) => p.id === activePage)
   const currentMeta = ALL_STUDIO_PAGES[currentIdx] ?? ALL_STUDIO_PAGES[0]

@@ -48,6 +48,7 @@ import {
 import { CUSTOM_FONT_STORAGE_KEY, hydrateSavedCustomFonts } from '@/lib/fonts'
 import {
   applyEqualizerToAudio,
+  DEFAULT_EQ_SETTINGS,
   EQ_BANDS,
   EQ_STORAGE_KEY,
   findActivePreset,
@@ -84,10 +85,12 @@ import {
   zunoWindow,
   type MusicSource,
   type NativeRadioInfo,
+  type PersistedAppSettings,
   type PlaybackStatus,
   type Playlist,
   type RepeatMode,
   type Track,
+  type UiCommand,
   type UpdateInfo,
 } from '@/lib/zunoApi'
 
@@ -208,6 +211,7 @@ function sameActiveRadio(
 export default function App() {
   const nativeAudio = isTauriRuntime()
   const [page, setPage] = useState<AppPage>('home')
+  const [customizeSection, setCustomizeSection] = useState<string | null>(null)
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false)
   const [windowMaximized, setWindowMaximized] = useState(false)
   const [listCtx, setListCtx] = useState<ListContext>({ kind: 'all' })
@@ -1049,9 +1053,20 @@ export default function App() {
     }
   }, [searchQuery])
 
+  const remoteVolumeRef = useRef<number | null>(null)
+  const volumeRef = useRef<number>(volume)
+  volumeRef.current = volume
+
   useEffect(() => {
     if (nativeAudio) {
-      zunoApi.setVolume(volume).catch(() => {})
+      if (
+        remoteVolumeRef.current !== null &&
+        Math.abs(remoteVolumeRef.current - volume) < 0.005
+      ) {
+        remoteVolumeRef.current = null
+      } else {
+        zunoApi.setVolume(volume).catch(() => {})
+      }
     } else if (audioRef.current) {
       audioRef.current.volume = volume
     }
@@ -1064,16 +1079,264 @@ export default function App() {
   const queueIdsRef = useRef<string[]>([])
   queueIdsRef.current = queueIds
 
+  // Live two-way sync refs between React UI and ~/zuno/.zuno/settings.json (for MCP control)
+  const settingsReadyRef = useRef(false)
+  const applyingRemoteSettingsRef = useRef(false)
+  const lastSettingsRevRef = useRef(0)
+  const lastLibraryRevRef = useRef(0)
+  const lastRadioStoreRevRef = useRef(0)
+  const appearanceRef = useRef(appearance)
+  appearanceRef.current = appearance
+  const eqSettingsRef = useRef(eqSettings)
+  eqSettingsRef.current = eqSettings
+  const sortPrefRef = useRef(sortPref)
+  sortPrefRef.current = sortPref
+  const lastPlayedIdsRef = useRef(lastPlayedIds)
+  lastPlayedIdsRef.current = lastPlayedIds
+  const autoCheckUpdatesRef = useRef(autoCheckUpdates)
+  autoCheckUpdatesRef.current = autoCheckUpdates
+  const skippedVersionRef = useRef(skippedVersion)
+  skippedVersionRef.current = skippedVersion
+
+  const hydrateFromBackendSettings = useCallback((remote: PersistedAppSettings) => {
+    applyingRemoteSettingsRef.current = true
+    lastSettingsRevRef.current = remote.revision
+
+    if (remote.appearance && typeof remote.appearance === 'object') {
+      const nextApp: AppearanceSettings = {
+        ...DEFAULT_APPEARANCE,
+        ...(remote.appearance as Partial<AppearanceSettings>),
+        customColors:
+          remote.appearance.customColors &&
+          typeof remote.appearance.customColors === 'object'
+            ? (remote.appearance.customColors as AppearanceSettings['customColors'])
+            : {},
+        uiZoom:
+          typeof remote.appearance.uiZoom === 'number'
+            ? clampUiZoom(remote.appearance.uiZoom)
+            : DEFAULT_APPEARANCE.uiZoom,
+      }
+      if (JSON.stringify(nextApp) !== JSON.stringify(appearanceRef.current)) {
+        setAppearance(nextApp)
+      }
+    }
+
+    if (remote.eq && typeof remote.eq === 'object') {
+      const rawEq = remote.eq as Partial<EqSettings>
+      const nextEq: EqSettings = {
+        ...DEFAULT_EQ_SETTINGS,
+        ...rawEq,
+        bands:
+          Array.isArray(rawEq.bands) && rawEq.bands.length === EQ_BANDS.length
+            ? rawEq.bands
+            : DEFAULT_EQ_SETTINGS.bands,
+        customPresets: Array.isArray(rawEq.customPresets) ? rawEq.customPresets : [],
+      }
+      if (JSON.stringify(nextEq) !== JSON.stringify(eqSettingsRef.current)) {
+        setEqSettings(nextEq)
+      }
+    }
+
+    if (remote.sort_pref && typeof remote.sort_pref === 'object') {
+      const f = remote.sort_pref.field as SortField | undefined
+      const d = remote.sort_pref.dir as SortDir | undefined
+      if (
+        f &&
+        VALID_SORT_FIELDS.includes(f) &&
+        (d === 'asc' || d === 'desc') &&
+        (f !== sortPrefRef.current.field || d !== sortPrefRef.current.dir)
+      ) {
+        const nextSort = { field: f, dir: d }
+        setSortPref(nextSort)
+        try {
+          localStorage.setItem(SORT_PREF_KEY, JSON.stringify(nextSort))
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (Array.isArray(remote.last_played_ids)) {
+      const nextIds = remote.last_played_ids.filter((x): x is string => typeof x === 'string')
+      if (JSON.stringify(nextIds) !== JSON.stringify(lastPlayedIdsRef.current)) {
+        setLastPlayedIds(nextIds)
+        try {
+          localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(nextIds))
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (
+      typeof remote.auto_check_updates === 'boolean' &&
+      remote.auto_check_updates !== autoCheckUpdatesRef.current
+    ) {
+      setAutoCheckUpdates(remote.auto_check_updates)
+      try {
+        localStorage.setItem(AUTO_CHECK_UPDATES_KEY, String(remote.auto_check_updates))
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const nextSkipped = remote.skipped_update_version ?? null
+    if (nextSkipped !== skippedVersionRef.current) {
+      setSkippedVersion(nextSkipped)
+      try {
+        if (nextSkipped) localStorage.setItem(SKIPPED_UPDATE_KEY, nextSkipped)
+        else localStorage.removeItem(SKIPPED_UPDATE_KEY)
+      } catch {
+        /* ignore */
+      }
+    }
+
+    window.setTimeout(() => {
+      applyingRemoteSettingsRef.current = false
+    }, 0)
+  }, [])
+
+  // Boot hydration: sync ~/zuno/.zuno/settings.json <-> React UI (preserving existing localStorage on first upgrade)
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([zunoApi.getSettings().catch(() => null), zunoApi.syncPoll().catch(() => null)])
+      .then(([res, sync]) => {
+        if (cancelled) return
+        if (sync) {
+          lastLibraryRevRef.current = sync.library_rev
+          lastRadioStoreRevRef.current = sync.radio_store_rev
+        }
+        if (res?.settings) {
+          if (res.settings.revision > 0) {
+            hydrateFromBackendSettings(res.settings)
+          } else {
+            // Seed ~/zuno/.zuno/settings.json from existing localStorage on first run
+            zunoApi
+              .updateSettings({
+                appearance: appearanceRef.current as unknown as Record<string, unknown>,
+                eq: eqSettingsRef.current as unknown as Record<string, unknown>,
+                sort_pref: sortPrefRef.current,
+                last_played_ids: lastPlayedIdsRef.current,
+                auto_check_updates: autoCheckUpdatesRef.current,
+                skipped_update_version: skippedVersionRef.current,
+              })
+              .then((saved) => {
+                if (!cancelled && saved?.settings) {
+                  lastSettingsRevRef.current = saved.settings.revision
+                }
+              })
+              .catch(() => {})
+          }
+        }
+        settingsReadyRef.current = true
+      })
+      .catch(() => {
+        settingsReadyRef.current = true
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hydrateFromBackendSettings])
+
+  // Persist user-driven UI settings changes into ~/zuno/.zuno/settings.json so MCP agents always read current state
+  useEffect(() => {
+    if (!settingsReadyRef.current || applyingRemoteSettingsRef.current) return
+    const timer = window.setTimeout(() => {
+      if (applyingRemoteSettingsRef.current) return
+      zunoApi
+        .updateSettings({
+          appearance: appearance as unknown as Record<string, unknown>,
+          eq: eqSettings as unknown as Record<string, unknown>,
+          sort_pref: sortPref,
+          auto_check_updates: autoCheckUpdates,
+          skipped_update_version: skippedVersion,
+        })
+        .then((res) => {
+          if (res?.settings) {
+            lastSettingsRevRef.current = Math.max(
+              lastSettingsRevRef.current,
+              res.settings.revision,
+            )
+          }
+        })
+        .catch(() => {})
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [appearance, eqSettings, sortPref, autoCheckUpdates, skippedVersion])
+
+  const applyUiCommands = useCallback(
+    (commands: UiCommand[]) => {
+      for (const cmd of commands) {
+        if (cmd.overlay) {
+          const ov = cmd.overlay.toLowerCase()
+          if (ov === 'search') {
+            setMobilePlayerOpen(false)
+            setFoldersOpen(false)
+            setUpdateDialogOpen(false)
+            if (typeof cmd.search_query === 'string') {
+              setSearchQuery(cmd.search_query)
+            }
+            setSearchOpen(true)
+          } else if (ov === 'folders') {
+            setSearchOpen(false)
+            setUpdateDialogOpen(false)
+            setFoldersOpen(true)
+          } else if (ov === 'update_dialog') {
+            setSearchOpen(false)
+            setFoldersOpen(false)
+            setUpdateDialogOpen(true)
+          } else if (ov === 'close') {
+            setSearchOpen(false)
+            setFoldersOpen(false)
+            setUpdateDialogOpen(false)
+            setMobilePlayerOpen(false)
+          }
+        }
+        if (cmd.page) {
+          const target = cmd.page.toLowerCase()
+          setSearchOpen(false)
+          if (target === 'playing') {
+            setMobilePlayerOpen(true)
+          } else if (target === 'playlist' && cmd.playlist_slug) {
+            setMobilePlayerOpen(false)
+            setListCtx({ kind: 'playlist', slug: cmd.playlist_slug })
+            setPlaylistSort({ field: 'default', dir: 'asc' })
+            setPage('playlist')
+          } else if (target === 'customize') {
+            setMobilePlayerOpen(false)
+            setCustomizeSection(cmd.customize_section ?? null)
+            setPage('customize')
+          } else if (
+            target === 'home' ||
+            target === 'recent' ||
+            target === 'playlists' ||
+            target === 'radio' ||
+            target === 'equalizer'
+          ) {
+            setMobilePlayerOpen(false)
+            if (target === 'home') setListCtx({ kind: 'all' })
+            setPage(target)
+          }
+        }
+      }
+    },
+    [],
+  )
+
   const applyNativeStatus = useCallback((st: PlaybackStatus) => {
     setIsPlaying(st.state === 'playing')
     setPosition(st.position_secs)
     if (st.duration_secs > 0) setDuration(st.duration_secs)
+    if (Math.abs(st.volume - volumeRef.current) > 0.005) {
+      remoteVolumeRef.current = st.volume
+      setVolume(st.volume)
+    }
     setShuffle(st.shuffle)
     setRepeat(st.repeat)
     if (st.queue_index !== null) setQueueIndex(st.queue_index)
     if (st.active_playlist) setActivePlaylistLabel(st.active_playlist)
     const tid = st.current_track?.id ?? null
-    // If playback changed externally (MPRIS media keys, GNOME banner, tray, CLI), sync queue!
+    // If playback changed externally (MPRIS media keys, GNOME banner, tray, CLI, MCP), sync queue!
     if (
       tid &&
       (st.queue_len !== queueIdsRef.current.length ||
@@ -1111,6 +1374,7 @@ export default function App() {
     Promise.all([zunoApi.getStatus(), zunoApi.queueGet(), zunoApi.radioPoll()])
       .then(([st, q, radioRes]) => {
         if (cancelled) return
+        remoteVolumeRef.current = st.volume
         setVolume(st.volume)
         if (q.tracks.length > 0) {
           const ids = q.tracks.map((t) => t.id)
@@ -1131,7 +1395,7 @@ export default function App() {
   const hasLiveNativePlayback =
     isPlaying || Boolean(activeRadio?.isPlaying || activeRadio?.isBuffering)
 
-  // Lightweight in-process status + radio sync while visible in Tauri mode (pauses when hidden)
+  // Lightweight in-process status + radio + MCP settings/UI sync while visible in Tauri mode
   useEffect(() => {
     if (!nativeAudio) return
     let cancelled = false
@@ -1142,8 +1406,8 @@ export default function App() {
         timer = window.setTimeout(poll, 1200)
         return
       }
-      Promise.all([zunoApi.getStatus(), zunoApi.radioPoll()])
-        .then(([st, radioRes]) => {
+      Promise.all([zunoApi.getStatus(), zunoApi.radioPoll(), zunoApi.syncPoll()])
+        .then(([st, radioRes, syncRes]) => {
           if (cancelled) return
           applyNativeStatus(st)
           if (radioRes && !usingHtmlRadioFallbackRef.current) {
@@ -1153,23 +1417,58 @@ export default function App() {
               stepRadioStationRef.current(radioRes.step_delta > 0 ? 1 : -1)
             }
           }
+          if (syncRes) {
+            if (syncRes.settings_rev > lastSettingsRevRef.current) {
+              lastSettingsRevRef.current = syncRes.settings_rev
+              zunoApi
+                .getSettings()
+                .then((res) => {
+                  if (!cancelled && res?.settings) {
+                    hydrateFromBackendSettings(res.settings)
+                  }
+                })
+                .catch(() => {})
+            }
+            if (syncRes.library_rev > lastLibraryRevRef.current) {
+              lastLibraryRevRef.current = syncRes.library_rev
+              refreshLibrary()
+            }
+            if (syncRes.radio_store_rev > lastRadioStoreRevRef.current) {
+              lastRadioStoreRevRef.current = syncRes.radio_store_rev
+              loadRadioStore()
+                .then((store) => {
+                  if (!cancelled) setRadioStore(store)
+                })
+                .catch(() => {})
+            }
+            if (syncRes.ui_commands.length > 0) {
+              applyUiCommands(syncRes.ui_commands)
+            }
+          }
           const fast =
             st.state === 'playing' ||
             radioRes?.active?.state === 'playing' ||
             radioRes?.active?.state === 'connecting'
-          timer = window.setTimeout(poll, fast ? 350 : 1500)
+          timer = window.setTimeout(poll, fast ? 350 : 900)
         })
         .catch(() => {
           if (cancelled) return
           timer = window.setTimeout(poll, 2000)
         })
     }
-    timer = window.setTimeout(poll, hasLiveNativePlayback ? 350 : 1500)
+    timer = window.setTimeout(poll, hasLiveNativePlayback ? 350 : 900)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [nativeAudio, hasLiveNativePlayback, applyNativeStatus])
+  }, [
+    nativeAudio,
+    hasLiveNativePlayback,
+    applyNativeStatus,
+    hydrateFromBackendSettings,
+    refreshLibrary,
+    applyUiCommands,
+  ])
 
   const currentTrack: Track | null = useMemo(() => {
     if (queueIndex === null) return null
@@ -1428,6 +1727,17 @@ export default function App() {
         } catch {
           /* ignore */
         }
+        zunoApi
+          .updateSettings({ last_played_ids: next })
+          .then((res) => {
+            if (res?.settings) {
+              lastSettingsRevRef.current = Math.max(
+                lastSettingsRevRef.current,
+                res.settings.revision,
+              )
+            }
+          })
+          .catch(() => {})
         return next
       })
       notify('Removed from Last Played')
@@ -1442,6 +1752,7 @@ export default function App() {
     } catch {
       /* ignore */
     }
+    zunoApi.clearLastPlayed().catch(() => {})
     notify('Cleared Last Played history')
   }, [notify])
 
@@ -2845,9 +3156,13 @@ export default function App() {
         <div className="absolute inset-0 z-30 h-full w-full bg-background animate-sheet-up">
           <CustomizePage
             settings={appearance}
+            section={customizeSection}
             onChange={updateAppearance}
             onReset={resetAppearance}
-            onBack={() => setPage(lastNonCustomizePageRef.current)}
+            onBack={() => {
+              setCustomizeSection(null)
+              setPage(lastNonCustomizePageRef.current)
+            }}
           />
         </div>
       )}

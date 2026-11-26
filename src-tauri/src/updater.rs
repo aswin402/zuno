@@ -306,6 +306,7 @@ pub fn backup_user_data(
         paths.state_path(),
         paths.index_path(),
         paths.radio_path(),
+        paths.settings_path(),
     ] {
         if let Some(name) = src.file_name() {
             if src.is_file() && fs::copy(&src, backup_dir.join(name)).is_ok() {

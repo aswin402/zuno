@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod eq;
 pub mod ipc_unix;
+pub mod radio;
 pub mod service;
 pub mod spectrum;
 

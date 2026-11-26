@@ -1,12 +1,23 @@
 use crate::engine::{AudioEngine, CROSSFADE_MAX_SECS, CROSSFADE_MIN_ACTIVE_SECS, RodioEngine};
 use crate::eq::{EQ_BANDS, EQ_MAX_DB, EQ_MIN_DB, EqConfig};
+use crate::radio::{
+    self, ActiveRadioInfo, FmTunerManager, RadioPlayState, RadioPlaybackManager,
+    RADIO_DISCOVER_DEFAULT_LIMIT,
+};
 use crate::spectrum::{AudioLevels, SharedSpectrum};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
+use zuno_core::settings::{
+    self, AppSettings, appearance_options_catalog, apply_eq_preset, apply_settings_patch,
+    backup_user_data_core, builtin_eq_presets, delete_custom_eq_preset, extract_crossfade_secs,
+    extract_eq_tuple, load_app_settings, record_last_played, reset_eq, save_app_settings,
+    save_custom_eq_preset,
+};
 use zuno_core::{
     CoverArt, Library, PersistedState, PlayState, PlaybackStatus, Playlist, QueueManager,
     ROOT_FOLDER_LABEL, Result, Track, ZunoError, ZunoPaths,
@@ -83,6 +94,7 @@ struct InnerState {
     queue: QueueManager,
     play_state: PlayState,
     volume: f32,
+    settings: AppSettings,
 }
 
 /// Thread-safe unified Zuno music engine shared by Tauri GUI, CLI, Daemon, and MCP server.
@@ -91,6 +103,12 @@ pub struct ZunoService {
     audio_tx: mpsc::Sender<AudioCmd>,
     position_bits: Arc<AtomicU64>,
     spectrum: Option<Arc<SharedSpectrum>>,
+    radio: Arc<RadioPlaybackManager>,
+    fm_tuner: Arc<FmTunerManager>,
+    self_weak: OnceLock<Weak<Self>>,
+    library_rev: AtomicU64,
+    radio_store_rev: AtomicU64,
+    on_change: Mutex<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl ZunoService {
@@ -101,8 +119,12 @@ impl ZunoService {
 
     /// Start Zuno with a custom `AudioEngine` (e.g. `MockAudioEngine` in tests).
     pub fn open_with_engine<E: AudioEngine>(paths: ZunoPaths, mut engine: E) -> Result<Arc<Self>> {
-        let library = Library::open(paths)?;
+        let library = Library::open(paths.clone())?;
         let persisted = library.load_state();
+        let app_settings = load_app_settings(&paths);
+        let initial_has_settings = app_settings.revision > 0;
+        let initial_eq = extract_eq_tuple(&app_settings);
+        let initial_crossfade = extract_crossfade_secs(&app_settings);
 
         let mut queue = QueueManager::new();
         queue.set_repeat(persisted.repeat);
@@ -126,6 +148,7 @@ impl ZunoService {
             queue,
             play_state: PlayState::Stopped,
             volume: persisted.volume.clamp(0.0, 1.0),
+            settings: app_settings,
         }));
 
         let (tx, rx) = mpsc::channel::<AudioCmd>();
@@ -136,7 +159,14 @@ impl ZunoService {
             audio_tx: tx.clone(),
             position_bits: Arc::clone(&position_bits),
             spectrum,
+            radio: Arc::new(RadioPlaybackManager::new()),
+            fm_tuner: Arc::new(FmTunerManager::new()),
+            self_weak: OnceLock::new(),
+            library_rev: AtomicU64::new(0),
+            radio_store_rev: AtomicU64::new(0),
+            on_change: Mutex::new(Arc::new(|| {})),
         });
+        let _ = service.self_weak.set(Arc::downgrade(&service));
 
         let weak_service = Arc::downgrade(&service);
         let thread_inner = Arc::clone(&inner);
@@ -325,11 +355,77 @@ impl ZunoService {
             })
             .map_err(|e| ZunoError::Audio(format!("failed to spawn audio thread: {e}")))?;
 
+        // Apply saved EQ & crossfade settings immediately on engine startup.
+        if initial_has_settings {
+            let (enabled, preamp_db, limiter, bands_db) = initial_eq;
+            let _ = service.audio_tx.send(AudioCmd::SetEq(EqConfig {
+                enabled,
+                preamp_db,
+                limiter,
+                bands_db,
+            }));
+            if initial_crossfade > 0.0 {
+                let _ = service
+                    .audio_tx
+                    .send(AudioCmd::SetTransition(initial_crossfade));
+            }
+        }
+
         Ok(service)
     }
 
     pub fn paths(&self) -> ZunoPaths {
         self.inner.lock().unwrap().library.paths().clone()
+    }
+
+    pub fn radio(&self) -> &Arc<RadioPlaybackManager> {
+        &self.radio
+    }
+
+    pub fn fm_tuner(&self) -> &Arc<FmTunerManager> {
+        &self.fm_tuner
+    }
+
+    pub fn set_change_callback(&self, cb: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut guard) = self.on_change.lock() {
+            *guard = cb;
+        }
+    }
+
+    fn change_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
+        self.on_change
+            .lock()
+            .map(|g| Arc::clone(&g))
+            .unwrap_or_else(|_| Arc::new(|| {}))
+    }
+
+    fn notify_change(&self) {
+        (self.change_callback())();
+    }
+
+    fn arc_self(&self) -> Result<Arc<Self>> {
+        self.self_weak
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| ZunoError::Audio("service reference unavailable".into()))
+    }
+
+    /// Monotonic revision counters `(settings_rev, library_rev, radio_store_rev)` for O(1) live GUI sync.
+    pub fn revisions(&self) -> (u64, u64, u64) {
+        let settings_rev = self.inner.lock().map(|s| s.settings.revision).unwrap_or(0);
+        (
+            settings_rev,
+            self.library_rev.load(Ordering::Relaxed),
+            self.radio_store_rev.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn bump_radio_store_rev(&self) {
+        self.radio_store_rev.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn settings_snapshot(&self) -> AppSettings {
+        self.inner.lock().unwrap().settings.clone()
     }
 
     /// Lock-free real-time 24-band audio spectrum + bass/mid/treble/energy snapshot for visualizers.
@@ -398,6 +494,17 @@ impl ZunoService {
         let _ = self.audio_tx.send(AudioCmd::Stop);
     }
 
+    /// Pause local file playback without touching active FM radio state (used when switching to FM).
+    pub fn pause_local_playback(&self) {
+        let _ = self.audio_tx.send(AudioCmd::Pause);
+        let pos = self.audio_position();
+        let mut st = self.inner.lock().unwrap();
+        if st.play_state == PlayState::Playing {
+            st.play_state = PlayState::Paused;
+            Self::persist_locked(&st, pos);
+        }
+    }
+
     /// Execute any `IpcRequest` and return a structured `IpcResponse`.
     pub fn handle_request(&self, req: IpcRequest) -> IpcResponse {
         match self.dispatch(req) {
@@ -408,11 +515,70 @@ impl ZunoService {
         }
     }
 
+    fn apply_eq_to_audio(&self, settings: &AppSettings) {
+        let (enabled, preamp_db, limiter, bands_db) = extract_eq_tuple(settings);
+        let _ = self.audio_tx.send(AudioCmd::SetEq(EqConfig {
+            enabled,
+            preamp_db,
+            limiter,
+            bands_db,
+        }));
+    }
+
+    fn apply_crossfade_to_audio(&self, settings: &AppSettings) {
+        let cf = extract_crossfade_secs(settings);
+        let _ = self.audio_tx.send(AudioCmd::SetTransition(cf));
+    }
+
+    fn eq_payload(settings: &AppSettings) -> Value {
+        json!({
+            "eq": settings.eq,
+            "revision": settings.revision,
+            "builtin_presets": builtin_eq_presets(),
+            "band_frequencies_hz": [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000],
+            "min_db": EQ_MIN_DB,
+            "max_db": EQ_MAX_DB,
+        })
+    }
+
+    fn is_favorites_slug(slug: &str) -> bool {
+        matches!(
+            slug.trim().to_ascii_lowercase().as_str(),
+            "favorites" | "fav" | "favourites" | "liked" | "liked-songs"
+        )
+    }
+
     fn dispatch(&self, req: IpcRequest) -> Result<IpcData> {
         match req {
             IpcRequest::Ping => Ok(IpcData::Pong {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             }),
+
+            IpcRequest::GetInfo => {
+                let paths = self.paths();
+                let st = self.inner.lock().unwrap();
+                Ok(IpcData::Json(json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "root_dir": paths.root().display().to_string(),
+                    "songs_dir": paths.songs_dir().display().to_string(),
+                    "playlists_dir": paths.playlists_dir().display().to_string(),
+                    "settings_path": paths.settings_path().display().to_string(),
+                    "radio_path": paths.radio_path().display().to_string(),
+                    "socket_path": paths.socket_path().display().to_string(),
+                    "home_dir": zuno_core::user_home_dir().map(|h| h.display().to_string()),
+                    "suggested_dirs": paths.suggested_music_dirs(),
+                    "track_count": st.library.tracks().len(),
+                    "playlist_count": st.library.playlists().len(),
+                    "source_count": st.library.sources().len(),
+                    "radio_active": self.radio.active(),
+                    "fm_hardware": self.fm_tuner.hardware_status(),
+                    "revisions": {
+                        "settings": st.settings.revision,
+                        "library": self.library_rev.load(Ordering::Relaxed),
+                        "radio_store": self.radio_store_rev.load(Ordering::Relaxed),
+                    },
+                })))
+            }
 
             IpcRequest::Rescan => {
                 let mut st = self.inner.lock().unwrap();
@@ -420,6 +586,8 @@ impl ZunoService {
                 Self::prune_queue_locked(&mut st);
                 let count = st.library.tracks().len();
                 let pl_count = st.library.playlists().len();
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
                 Ok(IpcData::Message(format!(
                     "Indexed {count} tracks and {pl_count} playlists"
                 )))
@@ -427,13 +595,20 @@ impl ZunoService {
 
             IpcRequest::GetStatus => Ok(IpcData::Status(self.status())),
 
+            IpcRequest::GetAudioLevels => {
+                let levels = self.audio_levels();
+                Ok(IpcData::Json(serde_json::to_value(&levels)?))
+            }
+
             IpcRequest::ListSongs {
                 folder,
                 limit,
                 offset,
+                sort_by,
+                sort_dir,
             } => {
                 let st = self.inner.lock().unwrap();
-                let refs: Vec<&Track> = match folder.as_deref().map(str::trim) {
+                let mut refs: Vec<&Track> = match folder.as_deref().map(str::trim) {
                     Some(f) if !f.is_empty() && f != ROOT_FOLDER_LABEL => {
                         st.library.tracks_in_folder(f)
                     }
@@ -445,6 +620,35 @@ impl ZunoService {
                         .collect(),
                     _ => st.library.tracks().iter().collect(),
                 };
+                if let Some(field) = sort_by.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    let desc = sort_dir
+                        .as_deref()
+                        .map(|d| d.eq_ignore_ascii_case("desc"))
+                        .unwrap_or(false);
+                    refs.sort_by(|a, b| {
+                        let ord = match field {
+                            "artist" => a
+                                .artist
+                                .to_ascii_lowercase()
+                                .cmp(&b.artist.to_ascii_lowercase())
+                                .then_with(|| {
+                                    a.title.to_ascii_lowercase().cmp(&b.title.to_ascii_lowercase())
+                                }),
+                            "album" => a
+                                .album
+                                .to_ascii_lowercase()
+                                .cmp(&b.album.to_ascii_lowercase())
+                                .then_with(|| {
+                                    a.title.to_ascii_lowercase().cmp(&b.title.to_ascii_lowercase())
+                                }),
+                            "time" | "date" => a.modified_secs.cmp(&b.modified_secs),
+                            "size" => a.file_size.cmp(&b.file_size),
+                            "duration" => a.duration_secs.cmp(&b.duration_secs),
+                            _ => a.title.to_ascii_lowercase().cmp(&b.title.to_ascii_lowercase()),
+                        };
+                        if desc { ord.reverse() } else { ord }
+                    });
+                }
                 let total = refs.len();
                 let start = offset.unwrap_or(0).min(total);
                 let lim = limit.unwrap_or(200);
@@ -481,6 +685,8 @@ impl ZunoService {
             IpcRequest::AddSource { path } => {
                 let mut st = self.inner.lock().unwrap();
                 let sources = st.library.add_source(&path)?;
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
                 Ok(IpcData::Sources(sources))
             }
 
@@ -497,6 +703,8 @@ impl ZunoService {
                     st.play_state = PlayState::Stopped;
                     let _ = self.audio_tx.send(AudioCmd::Stop);
                 }
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
                 Ok(IpcData::Sources(sources))
             }
 
@@ -514,25 +722,89 @@ impl ZunoService {
             IpcRequest::CreatePlaylist { name, track_ids } => {
                 let mut st = self.inner.lock().unwrap();
                 let playlist = st.library.create_playlist(&name, &track_ids)?;
-                Ok(Self::playlist_detail_locked(&st, playlist))
+                let detail = Self::playlist_detail_locked(&st, playlist);
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(detail)
             }
 
             IpcRequest::DeletePlaylist { name } => {
                 let mut st = self.inner.lock().unwrap();
                 let slug = st.library.delete_playlist(&name)?;
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
                 Ok(IpcData::Message(format!("Deleted playlist '{slug}'")))
             }
 
             IpcRequest::AddToPlaylist { name, track_ids } => {
                 let mut st = self.inner.lock().unwrap();
                 let playlist = st.library.add_to_playlist(&name, &track_ids)?;
-                Ok(Self::playlist_detail_locked(&st, playlist))
+                let detail = Self::playlist_detail_locked(&st, playlist);
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(detail)
             }
 
             IpcRequest::RemoveFromPlaylist { name, track_id } => {
                 let mut st = self.inner.lock().unwrap();
                 let playlist = st.library.remove_from_playlist(&name, &track_id)?;
-                Ok(Self::playlist_detail_locked(&st, playlist))
+                let detail = Self::playlist_detail_locked(&st, playlist);
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(detail)
+            }
+
+            IpcRequest::ToggleFavorite { track_id } => {
+                let mut st = self.inner.lock().unwrap();
+                let target_id = match track_id.filter(|s| !s.trim().is_empty()) {
+                    Some(id) => id,
+                    None => st
+                        .queue
+                        .current_track_id()
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            ZunoError::TrackNotFound(
+                                "no track playing; pass 'track_id' explicitly".into(),
+                            )
+                        })?,
+                };
+                if !st.library.has_track(&target_id) {
+                    return Err(ZunoError::TrackNotFound(target_id));
+                }
+                let fav = st
+                    .library
+                    .playlists()
+                    .iter()
+                    .find(|p| Self::is_favorites_slug(&p.slug))
+                    .cloned();
+                let (favorited, playlist) = match fav {
+                    Some(existing) => {
+                        if existing.track_ids.iter().any(|id| id == &target_id) {
+                            let pl = st
+                                .library
+                                .remove_from_playlist(&existing.slug, &target_id)?;
+                            (false, pl)
+                        } else {
+                            let pl = st
+                                .library
+                                .add_to_playlist(&existing.slug, std::slice::from_ref(&target_id))?;
+                            (true, pl)
+                        }
+                    }
+                    None => {
+                        let pl = st
+                            .library
+                            .create_playlist("Favorites", std::slice::from_ref(&target_id))?;
+                        (true, pl)
+                    }
+                };
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(IpcData::Json(json!({
+                    "track_id": target_id,
+                    "favorited": favorited,
+                    "playlist": playlist,
+                })))
             }
 
             IpcRequest::DeleteSong { track_id } => {
@@ -544,6 +816,8 @@ impl ZunoService {
                     st.play_state = PlayState::Stopped;
                     let _ = self.audio_tx.send(AudioCmd::Stop);
                 }
+                drop(st);
+                self.library_rev.fetch_add(1, Ordering::Relaxed);
                 Ok(IpcData::Message(format!("Deleted {title}")))
             }
 
@@ -553,13 +827,23 @@ impl ZunoService {
                 folder,
                 playlist,
             } => {
+                self.radio.clear(None, &self.fm_tuner);
                 let target = PlayTarget::from_opts(track_id, query, folder, playlist);
                 let (abs_path, volume) = self.prepare_play(target)?;
                 self.start_loaded_track(abs_path, volume)?;
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::Pause => {
+                if self.radio.is_active() {
+                    let info = self.radio.disconnect(self, &self.fm_tuner);
+                    self.notify_change();
+                    return Ok(IpcData::Json(json!({
+                        "radio": info,
+                        "playback": self.status(),
+                    })));
+                }
                 let _ = self.audio_tx.send(AudioCmd::Pause);
                 let pos = self.audio_position();
                 {
@@ -569,10 +853,23 @@ impl ZunoService {
                         Self::persist_locked(&st, pos);
                     }
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::Resume => {
+                if let Some(active) = self.radio.active() {
+                    if active.state == RadioPlayState::Disconnected {
+                        let svc = self.arc_self()?;
+                        self.radio
+                            .reconnect(&svc, &self.fm_tuner, self.change_callback());
+                    }
+                    self.notify_change();
+                    return Ok(IpcData::Json(json!({
+                        "radio": self.radio.active(),
+                        "playback": self.status(),
+                    })));
+                }
                 let needs_load = {
                     let st = self.inner.lock().unwrap();
                     st.play_state == PlayState::Stopped
@@ -589,10 +886,28 @@ impl ZunoService {
                         st.play_state = PlayState::Playing;
                     }
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::TogglePause => {
+                if let Some(active) = self.radio.active() {
+                    if matches!(
+                        active.state,
+                        RadioPlayState::Playing | RadioPlayState::Connecting
+                    ) {
+                        self.radio.disconnect(self, &self.fm_tuner);
+                    } else {
+                        let svc = self.arc_self()?;
+                        self.radio
+                            .reconnect(&svc, &self.fm_tuner, self.change_callback());
+                    }
+                    self.notify_change();
+                    return Ok(IpcData::Json(json!({
+                        "radio": self.radio.active(),
+                        "playback": self.status(),
+                    })));
+                }
                 let state = self.inner.lock().unwrap().play_state;
                 match state {
                     PlayState::Playing => self.dispatch(IpcRequest::Pause),
@@ -601,16 +916,26 @@ impl ZunoService {
             }
 
             IpcRequest::Stop => {
+                self.radio.clear(None, &self.fm_tuner);
                 let _ = self.audio_tx.send(AudioCmd::Stop);
                 {
                     let mut st = self.inner.lock().unwrap();
                     st.play_state = PlayState::Stopped;
                     Self::persist_locked(&st, 0.0);
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::Next => {
+                if self.radio.is_active() {
+                    self.radio.queue_step(1);
+                    self.notify_change();
+                    return Ok(IpcData::Json(json!({
+                        "radio": self.radio.active(),
+                        "stepped": "next",
+                    })));
+                }
                 if let Some((path, vol)) = self.advance_internal(false) {
                     self.start_loaded_track(path, vol)?;
                 } else {
@@ -618,10 +943,19 @@ impl ZunoService {
                     let mut st = self.inner.lock().unwrap();
                     st.play_state = PlayState::Stopped;
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::Previous => {
+                if self.radio.is_active() {
+                    self.radio.queue_step(-1);
+                    self.notify_change();
+                    return Ok(IpcData::Json(json!({
+                        "radio": self.radio.active(),
+                        "stepped": "previous",
+                    })));
+                }
                 let next_pair = {
                     let mut st = self.inner.lock().unwrap();
                     let id = st.queue.previous();
@@ -634,6 +968,7 @@ impl ZunoService {
                 if let Some((path, vol)) = next_pair {
                     self.start_loaded_track(path, vol)?;
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
@@ -659,7 +994,13 @@ impl ZunoService {
                     st.volume = v;
                     Self::persist_locked(&st, pos);
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
+            }
+
+            IpcRequest::GetEq => {
+                let st = self.inner.lock().unwrap();
+                Ok(IpcData::Json(Self::eq_payload(&st.settings)))
             }
 
             IpcRequest::SetEq {
@@ -670,20 +1011,112 @@ impl ZunoService {
             } => {
                 let mut arr = [0.0f32; EQ_BANDS];
                 for (i, v) in bands.into_iter().take(EQ_BANDS).enumerate() {
-                    arr[i] = v.clamp(EQ_MIN_DB, EQ_MAX_DB);
+                    arr[i] = settings::clamp_db(v);
                 }
+                let clean_preamp = settings::clamp_db(preamp);
                 let _ = self.audio_tx.send(AudioCmd::SetEq(EqConfig {
                     enabled,
-                    preamp_db: preamp.clamp(EQ_MIN_DB, EQ_MAX_DB),
+                    preamp_db: clean_preamp,
                     limiter,
                     bands_db: arr,
                 }));
+                let mut st = self.inner.lock().unwrap();
+                let current = extract_eq_tuple(&st.settings);
+                let changed = current.0 != enabled
+                    || (current.1 - clean_preamp).abs() > 0.01
+                    || current.2 != limiter
+                    || current
+                        .3
+                        .iter()
+                        .zip(arr.iter())
+                        .any(|(a, b)| (a - b).abs() > 0.01);
+                if changed {
+                    if let Some(obj) = st.settings.eq.as_object_mut() {
+                        obj.insert("enabled".into(), json!(enabled));
+                        obj.insert("preamp".into(), json!(clean_preamp));
+                        obj.insert("limiter".into(), json!(limiter));
+                        obj.insert("bands".into(), json!(arr.to_vec()));
+                        obj.insert("presetId".into(), Value::Null);
+                    }
+                    let paths = st.library.paths().clone();
+                    let _ = save_app_settings(&paths, &mut st.settings);
+                }
                 Ok(IpcData::Message("EQ updated".into()))
             }
 
+            IpcRequest::ApplyEqPreset { preset_id } => {
+                let mut st = self.inner.lock().unwrap();
+                let preset = apply_eq_preset(&mut st.settings, &preset_id)?;
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                self.apply_eq_to_audio(&st.settings);
+                Ok(IpcData::Json(json!({
+                    "applied_preset": preset,
+                    "eq": st.settings.eq,
+                    "revision": st.settings.revision,
+                })))
+            }
+
+            IpcRequest::SaveEqPreset {
+                name,
+                bands,
+                preamp,
+            } => {
+                let mut st = self.inner.lock().unwrap();
+                let preset = save_custom_eq_preset(&mut st.settings, &name, bands, preamp)?;
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                self.apply_eq_to_audio(&st.settings);
+                Ok(IpcData::Json(json!({
+                    "saved_preset": preset,
+                    "eq": st.settings.eq,
+                    "revision": st.settings.revision,
+                })))
+            }
+
+            IpcRequest::DeleteEqPreset { id } => {
+                let mut st = self.inner.lock().unwrap();
+                let removed = delete_custom_eq_preset(&mut st.settings, &id);
+                if !removed {
+                    return Err(ZunoError::NotFound(format!("custom EQ preset '{id}' not found")));
+                }
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                Ok(IpcData::Json(json!({
+                    "deleted_id": id,
+                    "eq": st.settings.eq,
+                    "revision": st.settings.revision,
+                })))
+            }
+
+            IpcRequest::ResetEq => {
+                let mut st = self.inner.lock().unwrap();
+                reset_eq(&mut st.settings);
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                self.apply_eq_to_audio(&st.settings);
+                Ok(IpcData::Json(Self::eq_payload(&st.settings)))
+            }
+
+            IpcRequest::GetTransition => {
+                let st = self.inner.lock().unwrap();
+                Ok(IpcData::Json(json!({
+                    "crossfade_secs": extract_crossfade_secs(&st.settings),
+                    "max_secs": CROSSFADE_MAX_SECS,
+                })))
+            }
+
             IpcRequest::SetTransition { crossfade_secs } => {
-                let clamped = crossfade_secs.clamp(0.0, CROSSFADE_MAX_SECS);
+                let clamped = settings::clamp_crossfade(crossfade_secs);
                 let _ = self.audio_tx.send(AudioCmd::SetTransition(clamped));
+                let mut st = self.inner.lock().unwrap();
+                if (extract_crossfade_secs(&st.settings) - clamped).abs() > 0.01 {
+                    if let Some(obj) = st.settings.appearance.as_object_mut() {
+                        obj.insert("crossfadeSecs".into(), json!(clamped));
+                    }
+                    let paths = st.library.paths().clone();
+                    let _ = save_app_settings(&paths, &mut st.settings);
+                }
                 Ok(IpcData::Message(if clamped > CROSSFADE_MIN_ACTIVE_SECS {
                     format!("Audio crossfade set to {:.1}s", clamped)
                 } else {
@@ -697,6 +1130,7 @@ impl ZunoService {
                 label,
                 shuffle,
             } => {
+                self.radio.clear(None, &self.fm_tuner);
                 let target = {
                     let mut st = self.inner.lock().unwrap();
                     if let Some(s) = shuffle {
@@ -716,10 +1150,12 @@ impl ZunoService {
                 if let Some((path, vol)) = target {
                     self.start_loaded_track(path, vol)?;
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
             IpcRequest::JumpQueue { index } => {
+                self.radio.clear(None, &self.fm_tuner);
                 let target = {
                     let mut st = self.inner.lock().unwrap();
                     st.queue.jump_to(index).and_then(|id| {
@@ -731,6 +1167,7 @@ impl ZunoService {
                 if let Some((path, vol)) = target {
                     self.start_loaded_track(path, vol)?;
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
@@ -746,6 +1183,7 @@ impl ZunoService {
                     }
                     Self::persist_locked(&st, pos);
                 }
+                self.notify_change();
                 Ok(IpcData::Status(self.status()))
             }
 
@@ -787,18 +1225,298 @@ impl ZunoService {
             }
 
             IpcRequest::QueueClear => {
+                self.radio.clear(None, &self.fm_tuner);
                 let _ = self.audio_tx.send(AudioCmd::Stop);
                 let mut st = self.inner.lock().unwrap();
                 st.queue.clear();
                 st.play_state = PlayState::Stopped;
                 Self::persist_locked(&st, 0.0);
-                Ok(IpcData::Status(PlaybackStatus {
+                let status = PlaybackStatus {
                     volume: st.volume,
                     shuffle: st.queue.shuffle(),
                     repeat: st.queue.repeat(),
                     ..PlaybackStatus::default()
-                }))
+                };
+                drop(st);
+                self.notify_change();
+                Ok(IpcData::Status(status))
             }
+
+            IpcRequest::GetSettings => {
+                let st = self.inner.lock().unwrap();
+                Ok(IpcData::Json(json!({
+                    "settings": st.settings,
+                    "options": appearance_options_catalog(),
+                })))
+            }
+
+            IpcRequest::UpdateSettings { patch } => {
+                let mut st = self.inner.lock().unwrap();
+                apply_settings_patch(&mut st.settings, &patch);
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                self.apply_eq_to_audio(&st.settings);
+                self.apply_crossfade_to_audio(&st.settings);
+                let snap = st.settings.clone();
+                drop(st);
+                Ok(IpcData::Json(json!({
+                    "settings": snap,
+                })))
+            }
+
+            IpcRequest::ResetSettings { scope } => {
+                let mut st = self.inner.lock().unwrap();
+                let reset_all = scope
+                    .as_deref()
+                    .map(|s| s.eq_ignore_ascii_case("all"))
+                    .unwrap_or(false);
+                if reset_all {
+                    let rev = st.settings.revision;
+                    st.settings = AppSettings {
+                        revision: rev,
+                        ..AppSettings::default()
+                    };
+                } else {
+                    st.settings.appearance = settings::default_appearance_json();
+                }
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                self.apply_eq_to_audio(&st.settings);
+                self.apply_crossfade_to_audio(&st.settings);
+                let snap = st.settings.clone();
+                drop(st);
+                Ok(IpcData::Json(json!({
+                    "settings": snap,
+                })))
+            }
+
+            IpcRequest::GetLastPlayed => {
+                let st = self.inner.lock().unwrap();
+                let tracks: Vec<Track> = st
+                    .settings
+                    .last_played_ids
+                    .iter()
+                    .filter_map(|id| st.library.track_by_id(id).cloned())
+                    .collect();
+                Ok(IpcData::Json(json!({
+                    "track_ids": st.settings.last_played_ids,
+                    "tracks": tracks,
+                })))
+            }
+
+            IpcRequest::ClearLastPlayed => {
+                let mut st = self.inner.lock().unwrap();
+                st.settings.last_played_ids.clear();
+                let paths = st.library.paths().clone();
+                save_app_settings(&paths, &mut st.settings)?;
+                Ok(IpcData::Message("Cleared last played history".into()))
+            }
+
+            IpcRequest::RadioStatus => Ok(IpcData::Json(json!({
+                "active": self.radio.active(),
+                "hardware": self.fm_tuner.hardware_status(),
+            }))),
+
+            IpcRequest::RadioGetStore => {
+                let store = radio::load_radio_store(&self.paths());
+                Ok(IpcData::Json(serde_json::to_value(&store)?))
+            }
+
+            IpcRequest::RadioSaveStore { store } => {
+                let parsed: radio::RadioStoreData = serde_json::from_value(store)?;
+                radio::save_radio_store(&self.paths(), &parsed)
+                    .map_err(ZunoError::Ipc)?;
+                self.radio_store_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(IpcData::Json(serde_json::to_value(&parsed)?))
+            }
+
+            IpcRequest::RadioManageBookmark { action, payload } => {
+                let updated = radio::manage_radio_bookmark(&self.paths(), &action, &payload)
+                    .map_err(ZunoError::Ipc)?;
+                self.radio_store_rev.fetch_add(1, Ordering::Relaxed);
+                Ok(IpcData::Json(serde_json::to_value(&updated)?))
+            }
+
+            IpcRequest::RadioDiscover {
+                query,
+                tag,
+                country,
+                language,
+                limit,
+            } => {
+                let stations = radio::discover_online_stations(
+                    query.as_deref(),
+                    tag.as_deref(),
+                    country.as_deref(),
+                    language.as_deref(),
+                    limit.unwrap_or(RADIO_DISCOVER_DEFAULT_LIMIT),
+                )
+                .map_err(ZunoError::Ipc)?;
+                Ok(IpcData::Json(json!({
+                    "total": stations.len(),
+                    "stations": stations,
+                })))
+            }
+
+            IpcRequest::RadioResolveUrl { url } => {
+                let info = radio::resolve_stream_url(&url).map_err(ZunoError::Ipc)?;
+                Ok(IpcData::Json(serde_json::to_value(&info)?))
+            }
+
+            IpcRequest::RadioPlayOnline {
+                id,
+                name,
+                subtitle,
+                url,
+            } => {
+                let svc = self.arc_self()?;
+                let resolved_name = name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "Online FM".to_string());
+                let resolved_sub = subtitle
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "Online FM Stream".to_string());
+                let resolved_id = id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "online-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        )
+                    });
+                let active: ActiveRadioInfo = self
+                    .radio
+                    .play_online(
+                        resolved_id,
+                        resolved_name,
+                        resolved_sub,
+                        url,
+                        &svc,
+                        &self.fm_tuner,
+                        self.change_callback(),
+                    )
+                    .map_err(ZunoError::Audio)?;
+                Ok(IpcData::Json(serde_json::to_value(&active)?))
+            }
+
+            IpcRequest::RadioDisconnect => {
+                let next = self.radio.disconnect(self, &self.fm_tuner);
+                self.notify_change();
+                Ok(IpcData::Json(json!({ "active": next })))
+            }
+
+            IpcRequest::RadioReconnect => {
+                let svc = self.arc_self()?;
+                let active = self.radio.active().ok_or_else(|| {
+                    ZunoError::NotFound("no previous FM station to reconnect".into())
+                })?;
+                if matches!(
+                    active.state,
+                    RadioPlayState::Playing | RadioPlayState::Connecting
+                ) {
+                    self.radio.disconnect(self, &self.fm_tuner);
+                }
+                self.radio
+                    .reconnect(&svc, &self.fm_tuner, self.change_callback());
+                self.notify_change();
+                Ok(IpcData::Json(json!({ "active": self.radio.active() })))
+            }
+
+            IpcRequest::RadioStop => {
+                self.radio.clear(Some(self), &self.fm_tuner);
+                self.notify_change();
+                Ok(IpcData::Message("FM radio stopped".into()))
+            }
+
+            IpcRequest::FmHardwareStatus => {
+                let hw = self.fm_tuner.hardware_status();
+                Ok(IpcData::Json(serde_json::to_value(&hw)?))
+            }
+
+            IpcRequest::FmTune {
+                freq_mhz,
+                name,
+                signal_id,
+            } => {
+                self.radio.clear(None, &self.fm_tuner);
+                let hw = self
+                    .fm_tuner
+                    .tune(freq_mhz, self)
+                    .map_err(ZunoError::Audio)?;
+                let rounded = (freq_mhz * 10.0).round() / 10.0;
+                let id = signal_id.unwrap_or_else(|| format!("freq-{rounded:.1}"));
+                let display_name = name
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| format!("{rounded:.1} MHz"));
+                let subtitle = format!("{rounded:.1} MHz · Offline FM Signal");
+                self.radio
+                    .set_offline_active(id, display_name, subtitle, rounded);
+                self.notify_change();
+                Ok(IpcData::Json(json!({
+                    "active": self.radio.active(),
+                    "hardware": hw,
+                })))
+            }
+
+            IpcRequest::FmStop => {
+                self.radio.disconnect(self, &self.fm_tuner);
+                self.notify_change();
+                Ok(IpcData::Json(serde_json::to_value(
+                    &self.fm_tuner.hardware_status(),
+                )?))
+            }
+
+            IpcRequest::BackupData => {
+                let report =
+                    backup_user_data_core(&self.paths(), env!("CARGO_PKG_VERSION"), None)?;
+                Ok(IpcData::Json(serde_json::to_value(&report)?))
+            }
+
+            IpcRequest::Navigate { .. } => Err(ZunoError::Ipc(
+                "GUI navigation requires the Zuno desktop app to be running".into(),
+            )),
+
+            IpcRequest::WindowControl {
+                action,
+                zoom_percent,
+            } => {
+                // Allow persisting Display Zoom even when GUI is closed so it takes effect on next open.
+                if action.eq_ignore_ascii_case("set_zoom") {
+                    if let Some(pct) = zoom_percent {
+                        let clamped = settings::clamp_ui_zoom(pct) as i64;
+                        let mut st = self.inner.lock().unwrap();
+                        if let Some(obj) = st.settings.appearance.as_object_mut() {
+                            obj.insert("uiZoom".into(), json!(clamped));
+                        }
+                        let paths = st.library.paths().clone();
+                        save_app_settings(&paths, &mut st.settings)?;
+                        return Ok(IpcData::Json(json!({
+                            "zoom_percent": clamped,
+                            "live_window": false,
+                            "revision": st.settings.revision,
+                        })));
+                    }
+                }
+                Err(ZunoError::Ipc(
+                    "window control requires the Zuno desktop app to be running".into(),
+                ))
+            }
+
+            IpcRequest::CheckUpdate => Err(ZunoError::Ipc(
+                "update check requires the Zuno desktop app to be running (or run `zuno-mcp doctor`)".into(),
+            )),
         }
     }
 
@@ -849,6 +1567,11 @@ impl ZunoService {
         self.load_audio(path, volume)?;
         let mut st = self.inner.lock().unwrap();
         st.play_state = PlayState::Playing;
+        if let Some(tid) = st.queue.current_track_id().map(str::to_string) {
+            record_last_played(&mut st.settings, &tid);
+            let paths = st.library.paths().clone();
+            let _ = save_app_settings(&paths, &mut st.settings);
+        }
         Self::persist_locked(&st, 0.0);
         Ok(())
     }
@@ -1000,6 +1723,8 @@ mod tests {
             folder: None,
             limit: None,
             offset: None,
+            sort_by: None,
+            sort_dir: None,
         })
         else {
             panic!("expected tracks");
@@ -1105,6 +1830,8 @@ mod tests {
             folder: None,
             limit: None,
             offset: None,
+            sort_by: None,
+            sort_dir: None,
         })
         else {
             panic!("expected tracks");

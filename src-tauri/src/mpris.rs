@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use crate::radio::{
+use zuno_audio::radio::{
     ActiveRadioInfo, FmTunerManager, RadioKind, RadioPlayState, RadioPlaybackManager,
 };
 use gio::prelude::*;

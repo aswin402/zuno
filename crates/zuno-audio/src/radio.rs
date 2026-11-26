@@ -5,8 +5,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, Weak, mpsc};
-use zuno_audio::ZunoService;
-use zuno_core::ipc::IpcRequest;
+use crate::service::ZunoService;
 use zuno_core::{ZunoPaths, atomic_write};
 
 const RADIO_BROWSER_MIRRORS: &[&str] = &[
@@ -23,6 +22,7 @@ const RTL_FM_SAMPLE_RATE: u32 = 48_000;
 const ONLINE_STREAM_SAMPLE_RATE: u32 = 48_000;
 const ONLINE_STREAM_CHANNELS: u16 = 2;
 const ONLINE_HANDSHAKE_BYTES: usize = 4096;
+const ONLINE_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 pub const NO_NATIVE_DECODER_ERR: &str = "NO_NATIVE_STREAM_DECODER";
 pub const RADIO_DISCOVER_DEFAULT_LIMIT: usize = 40;
 const RADIO_DISCOVER_MAX_LIMIT: usize = 60;
@@ -418,7 +418,7 @@ impl RadioPlaybackManager {
             let _ = c.wait();
         }
         fm_tuner.stop(None);
-        let _ = service.handle_request(IpcRequest::Pause);
+        service.pause_local_playback();
         service.stop_pcm_stream();
         on_change();
 
@@ -454,7 +454,35 @@ impl RadioPlaybackManager {
             st.child = Some(child);
         }
 
-        // Read the first small PCM chunk (~21 ms) to confirm real decoded audio before marking Live.
+        // Read the first small PCM chunk (~21 ms) with a hard timeout watchdog so dead/stalled
+        // stream URLs never hang playback or MCP calls indefinitely.
+        let (handshake_tx, handshake_rx) = mpsc::channel::<()>();
+        let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wd_timed_out = Arc::clone(&timed_out);
+        let wd_mgr = Arc::clone(self);
+        std::thread::spawn(move || {
+            if matches!(
+                handshake_rx.recv_timeout(std::time::Duration::from_secs(
+                    ONLINE_HANDSHAKE_TIMEOUT_SECS
+                )),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                wd_timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
+                let killed = {
+                    let mut st = wd_mgr.inner.lock().unwrap();
+                    if st.generation == my_gen {
+                        st.child.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(mut c) = killed {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+        });
+
         let mut first_chunk = vec![0u8; ONLINE_HANDSHAKE_BYTES];
         let mut filled = 0usize;
         while filled < ONLINE_HANDSHAKE_BYTES {
@@ -464,6 +492,7 @@ impl RadioPlaybackManager {
                 Err(_) => break,
             }
         }
+        let _ = handshake_tx.send(());
         // Keep stereo 16-bit (4 bytes/frame) alignment intact.
         filled -= filled % 4;
         first_chunk.truncate(filled);
@@ -473,12 +502,17 @@ impl RadioPlaybackManager {
         }
 
         if first_chunk.is_empty() {
+            let reason = if timed_out.load(std::sync::atomic::Ordering::SeqCst) {
+                "Stream connection timed out"
+            } else {
+                "Stream unavailable"
+            };
             let dead_child = {
                 let mut st = self.inner.lock().unwrap();
                 if st.generation == my_gen {
                     if let Some(ref mut info) = st.active {
                         info.state = RadioPlayState::Disconnected;
-                        info.error = Some("Stream unavailable".to_string());
+                        info.error = Some(reason.to_string());
                     }
                     st.child.take()
                 } else {
@@ -490,7 +524,7 @@ impl RadioPlaybackManager {
                 let _ = c.wait();
             }
             on_change();
-            return Err("Stream unavailable".to_string());
+            return Err(reason.to_string());
         }
 
         let chained = Cursor::new(first_chunk).chain(stdout);
@@ -709,12 +743,16 @@ fn build_decoder_command(decoder: StreamDecoder, url: &str) -> Command {
                 "error",
                 "-user_agent",
                 &ua,
+                "-timeout",
+                "8000000",
                 "-reconnect",
                 "1",
                 "-reconnect_on_network_error",
                 "1",
                 "-reconnect_delay_max",
                 "3",
+                "-reconnect_delay_total_max",
+                "5",
                 "-reconnect_max_retries",
                 "2",
             ]);
@@ -736,7 +774,7 @@ fn build_decoder_command(decoder: StreamDecoder, url: &str) -> Command {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-            crate::configure_hidden_command(&mut cmd);
+            configure_hidden_command(&mut cmd);
             cmd
         }
         StreamDecoder::GstLaunch => {
@@ -754,7 +792,7 @@ fn build_decoder_command(decoder: StreamDecoder, url: &str) -> Command {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-            crate::configure_hidden_command(&mut cmd);
+            configure_hidden_command(&mut cmd);
             cmd
         }
     }
@@ -887,7 +925,7 @@ impl FmTunerManager {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null());
-                crate::configure_hidden_command(&mut cmd);
+                configure_hidden_command(&mut cmd);
 
                 let mut child = cmd
                     .spawn()
@@ -1357,7 +1395,7 @@ fn curl_get_text(url: &str, timeout_secs: u64) -> Result<String, String> {
         &format!("User-Agent: Zuno/{}", env!("CARGO_PKG_VERSION")),
         url,
     ]);
-    crate::configure_hidden_command(&mut cmd);
+    configure_hidden_command(&mut cmd);
 
     let out = cmd
         .output()
@@ -1388,7 +1426,7 @@ fn curl_probe_headers(url: &str, timeout_secs: u64) -> Result<String, String> {
         &format!("User-Agent: Zuno/{}", env!("CARGO_PKG_VERSION")),
         url,
     ]);
-    crate::configure_hidden_command(&mut cmd);
+    configure_hidden_command(&mut cmd);
 
     let out = cmd
         .output()
@@ -1486,6 +1524,251 @@ fn detect_usb_rtl_sdr() -> bool {
     {
         false
     }
+}
+
+
+fn configure_hidden_command(_cmd: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        _cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// Apply a structured bookmark/store mutation to `~/zuno/.zuno/radio.json` atomically.
+/// Supported actions:
+/// - `add_custom_online` (`name`, `url`, optional `category`, `country`, `language`, `tags`, `bitrate`, `codec`, `homepage`, `mark`)
+/// - `delete_custom_online` (`id`)
+/// - `toggle_mark_online` (`id`, optional `marked`: bool)
+/// - `upsert_offline_signal` (`freq_mhz`, `name`, optional `id`, `region`, `genre`, `notes`, `band`, `marked`)
+/// - `delete_offline_signal` (`id`)
+/// - `set_band` (`band`: "global" | "japan" | "oirt" | "all")
+/// - `set_dial_freq` (`freq_mhz`)
+pub fn manage_radio_bookmark(
+    paths: &ZunoPaths,
+    action: &str,
+    payload: &serde_json::Value,
+) -> Result<RadioStoreData, String> {
+    let mut store = load_radio_store(paths);
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    match action.trim() {
+        "add_custom_online" => {
+            let url = payload
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if !is_valid_http_url(url) {
+                return Err("valid http:// or https:// 'url' is required".into());
+            }
+            let name = payload
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Custom Station")
+                .to_string();
+            let id = payload
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("custom-{now_ms}"));
+            let record = OnlineStationRecord {
+                id: id.clone(),
+                name,
+                url: url.to_string(),
+                category: payload
+                    .get("category")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Custom")
+                    .to_string(),
+                country: payload
+                    .get("country")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Custom Link")
+                    .to_string(),
+                language: payload
+                    .get("language")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                tags: payload
+                    .get("tags")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                bitrate: payload
+                    .get("bitrate")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32,
+                codec: payload
+                    .get("codec")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("STREAM")
+                    .to_string(),
+                homepage: payload
+                    .get("homepage")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                added_at: now_secs,
+            };
+            store
+                .custom_online
+                .retain(|s| s.id != id && !s.url.eq_ignore_ascii_case(url));
+            store.custom_online.insert(0, record);
+            let mark = payload
+                .get("mark")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            if mark && !store.marked_online_ids.contains(&id) {
+                store.marked_online_ids.insert(0, id);
+            }
+        }
+        "delete_custom_online" => {
+            let id = payload
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "missing 'id'".to_string())?;
+            store.custom_online.retain(|s| s.id != id);
+            store.marked_online_ids.retain(|m| m != id);
+        }
+        "toggle_mark_online" => {
+            let id = payload
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "missing 'id'".to_string())?;
+            let exists = store.marked_online_ids.iter().any(|m| m == id);
+            let want = payload
+                .get("marked")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(!exists);
+            if want && !exists {
+                store.marked_online_ids.insert(0, id.to_string());
+            } else if !want && exists {
+                store.marked_online_ids.retain(|m| m != id);
+            }
+        }
+        "upsert_offline_signal" => {
+            let freq_mhz = payload
+                .get("freq_mhz")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| "missing 'freq_mhz'".to_string())?;
+            validate_fm_frequency(freq_mhz)?;
+            let clean_freq = (freq_mhz * 10.0).round() / 10.0;
+            let name = payload
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{clean_freq:.1} MHz"));
+            let existing_id = payload
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty());
+            if let Some(eid) = existing_id {
+                if let Some(sig) = store.offline_signals.iter_mut().find(|s| s.id == eid) {
+                    sig.freq_mhz = clean_freq;
+                    sig.name = name;
+                    if let Some(v) = payload.get("region").and_then(serde_json::Value::as_str) {
+                        sig.region = v.to_string();
+                    }
+                    if let Some(v) = payload.get("genre").and_then(serde_json::Value::as_str) {
+                        sig.genre = v.to_string();
+                    }
+                    if let Some(v) = payload.get("notes").and_then(serde_json::Value::as_str) {
+                        sig.notes = v.to_string();
+                    }
+                    if let Some(v) = payload.get("band").and_then(serde_json::Value::as_str) {
+                        sig.band = v.to_string();
+                    }
+                    if let Some(v) = payload.get("marked").and_then(serde_json::Value::as_bool) {
+                        sig.marked = v;
+                    }
+                } else {
+                    store.offline_signals.insert(
+                        0,
+                        OfflineSignalRecord {
+                            id: eid.to_string(),
+                            freq_mhz: clean_freq,
+                            name,
+                            region: payload.get("region").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                            genre: payload.get("genre").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                            notes: payload.get("notes").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                            band: payload.get("band").and_then(serde_json::Value::as_str).unwrap_or(&store.band).to_string(),
+                            marked: payload.get("marked").and_then(serde_json::Value::as_bool).unwrap_or(true),
+                            created_at: now_secs,
+                        },
+                    );
+                }
+            } else {
+                store.offline_signals.insert(
+                    0,
+                    OfflineSignalRecord {
+                        id: format!("sig-{now_ms}"),
+                        freq_mhz: clean_freq,
+                        name,
+                        region: payload.get("region").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                        genre: payload.get("genre").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                        notes: payload.get("notes").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                        band: payload.get("band").and_then(serde_json::Value::as_str).unwrap_or(&store.band).to_string(),
+                        marked: payload.get("marked").and_then(serde_json::Value::as_bool).unwrap_or(true),
+                        created_at: now_secs,
+                    },
+                );
+            }
+        }
+        "delete_offline_signal" => {
+            let id = payload
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "missing 'id'".to_string())?;
+            store.offline_signals.retain(|s| s.id != id);
+        }
+        "set_band" => {
+            let band = payload
+                .get("band")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "missing 'band'".to_string())?;
+            if !matches!(band, "global" | "japan" | "oirt" | "all") {
+                return Err("invalid band (expected 'global', 'japan', 'oirt', or 'all')".into());
+            }
+            store.band = band.to_string();
+        }
+        "set_dial_freq" => {
+            let freq_mhz = payload
+                .get("freq_mhz")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| "missing 'freq_mhz'".to_string())?;
+            validate_fm_frequency(freq_mhz)?;
+            store.last_freq_mhz = (freq_mhz * 10.0).round() / 10.0;
+        }
+        other => {
+            return Err(format!(
+                "unknown radio bookmark action '{other}' (expected add_custom_online, delete_custom_online, toggle_mark_online, upsert_offline_signal, delete_offline_signal, set_band, set_dial_freq)"
+            ));
+        }
+    }
+
+    save_radio_store(paths, &store)?;
+    Ok(store)
 }
 
 #[cfg(test)]

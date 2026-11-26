@@ -21,6 +21,16 @@ use zuno_core::{Result, ZunoError};
 /// drive the live running Zuno GUI or background daemon in real time.
 #[cfg(unix)]
 pub fn spawn_unix_ipc_server(service: Arc<ZunoService>, socket_path: PathBuf) -> Result<()> {
+    spawn_unix_ipc_server_with_handler(move |req| service.handle_request(req), socket_path)
+}
+
+/// Start a Unix Domain Socket IPC server with a custom request handler (used by the Tauri GUI
+/// to intercept live window/navigation/MPRIS/sync actions while delegating core operations to `ZunoService`).
+#[cfg(unix)]
+pub fn spawn_unix_ipc_server_with_handler<F>(handler: F, socket_path: PathBuf) -> Result<()>
+where
+    F: Fn(IpcRequest) -> IpcResponse + Send + Sync + 'static,
+{
     if socket_path.exists() {
         // Remove stale socket if no listener answers.
         if UnixStream::connect(&socket_path).is_ok() {
@@ -35,6 +45,7 @@ pub fn spawn_unix_ipc_server(service: Arc<ZunoService>, socket_path: PathBuf) ->
         fs::create_dir_all(parent)?;
     }
 
+    let handler = Arc::new(handler);
     let listener = UnixListener::bind(&socket_path)?;
     std::thread::Builder::new()
         .name("zuno-ipc".into())
@@ -43,9 +54,9 @@ pub fn spawn_unix_ipc_server(service: Arc<ZunoService>, socket_path: PathBuf) ->
                 let Ok(stream) = incoming else {
                     continue;
                 };
-                let svc = Arc::clone(&service);
+                let h = Arc::clone(&handler);
                 std::thread::spawn(move || {
-                    handle_client(stream, svc);
+                    handle_client(stream, h);
                 });
             }
         })
@@ -55,7 +66,10 @@ pub fn spawn_unix_ipc_server(service: Arc<ZunoService>, socket_path: PathBuf) ->
 }
 
 #[cfg(unix)]
-fn handle_client(stream: UnixStream, service: Arc<ZunoService>) {
+fn handle_client<F>(stream: UnixStream, handler: Arc<F>)
+where
+    F: Fn(IpcRequest) -> IpcResponse + Send + Sync + 'static,
+{
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -69,7 +83,7 @@ fn handle_client(stream: UnixStream, service: Arc<ZunoService>) {
             continue;
         }
         let resp = match serde_json::from_str::<IpcRequest>(trimmed) {
-            Ok(req) => service.handle_request(req),
+            Ok(req) => handler(req),
             Err(e) => IpcResponse::Err {
                 message: format!("invalid IPC request JSON: {e}"),
             },
@@ -83,21 +97,45 @@ fn handle_client(stream: UnixStream, service: Arc<ZunoService>) {
 }
 
 /// Send one IPC request to an already-running Zuno GUI/daemon over its Unix socket.
-/// Returns `None` if no live instance is currently listening.
+/// Returns `None` ONLY if no live instance is currently listening on `socket_path`.
+/// Once connected, any I/O or timeout failure returns `Some(IpcResponse::Err { .. })` so callers
+/// never silently spawn a duplicate headless player alongside a live GUI.
 #[cfg(unix)]
 pub fn try_send_unix_ipc(socket_path: &Path, req: &IpcRequest) -> Option<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).ok()?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
-    let encoded = serde_json::to_string(req).ok()?;
-    writeln!(stream, "{encoded}").ok()?;
-    stream.flush().ok()?;
+    let encoded = match serde_json::to_string(req) {
+        Ok(s) => s,
+        Err(e) => {
+            return Some(IpcResponse::Err {
+                message: format!("failed to serialize IPC request: {e}"),
+            });
+        }
+    };
+    if let Err(e) = writeln!(stream, "{encoded}").and_then(|_| stream.flush()) {
+        return Some(IpcResponse::Err {
+            message: format!("failed writing to live Zuno IPC socket: {e}"),
+        });
+    }
 
     let mut reader = BufReader::new(stream);
     let mut reply = String::new();
-    reader.read_line(&mut reply).ok()?;
-    serde_json::from_str::<IpcResponse>(reply.trim()).ok()
+    match reader.read_line(&mut reply) {
+        Ok(0) => Some(IpcResponse::Err {
+            message: "live Zuno instance closed IPC connection".into(),
+        }),
+        Ok(_) => match serde_json::from_str::<IpcResponse>(reply.trim()) {
+            Ok(resp) => Some(resp),
+            Err(e) => Some(IpcResponse::Err {
+                message: format!("invalid IPC reply from live Zuno instance: {e}"),
+            }),
+        },
+        Err(e) => Some(IpcResponse::Err {
+            message: format!("live Zuno IPC read failed: {e}"),
+        }),
+    }
 }
 
 /// Check if a live Zuno GUI/daemon is accepting IPC commands on `socket_path`.
@@ -114,6 +152,17 @@ pub fn spawn_unix_ipc_server(
     _service: std::sync::Arc<crate::service::ZunoService>,
     _socket_path: std::path::PathBuf,
 ) -> zuno_core::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn spawn_unix_ipc_server_with_handler<F>(
+    _handler: F,
+    _socket_path: std::path::PathBuf,
+) -> zuno_core::Result<()>
+where
+    F: Fn(zuno_core::ipc::IpcRequest) -> zuno_core::ipc::IpcResponse + Send + Sync + 'static,
+{
     Ok(())
 }
 

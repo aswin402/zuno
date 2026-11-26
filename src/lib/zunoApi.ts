@@ -131,6 +131,31 @@ export interface NativeRadioPollStatus {
   step_delta: number
 }
 
+export interface PersistedAppSettings {
+  revision: number
+  appearance: Record<string, unknown>
+  eq: Record<string, unknown>
+  sort_pref: { field?: string; dir?: string }
+  last_played_ids: string[]
+  auto_check_updates: boolean
+  skipped_update_version: string | null
+}
+
+export interface UiCommand {
+  page?: string
+  playlist_slug?: string
+  overlay?: string
+  search_query?: string
+  customize_section?: string
+}
+
+export interface SyncPollResponse {
+  settings_rev: number
+  library_rev: number
+  radio_store_rev: number
+  ui_commands: UiCommand[]
+}
+
 type IpcRequest =
   | { op: 'ping' }
   | { op: 'rescan' }
@@ -183,6 +208,10 @@ type IpcRequest =
   | { op: 'queue_get' }
   | { op: 'queue_add'; track_ids: string[]; play_next: boolean }
   | { op: 'queue_clear' }
+  | { op: 'get_settings' }
+  | { op: 'update_settings'; patch: Record<string, unknown> }
+  | { op: 'reset_settings'; scope?: string | null }
+  | { op: 'clear_last_played' }
 
 type IpcResponse<T = unknown> =
   | { status: 'ok'; data: { type: string; value: T } }
@@ -556,6 +585,35 @@ export const zunoApi = {
       return null
     }
   },
+
+  async syncPoll(): Promise<SyncPollResponse | null> {
+    const tauri = getTauriInternals()
+    if (!tauri) return null
+    try {
+      return await tauri.invoke<SyncPollResponse>('zuno_sync_poll')
+    } catch {
+      return null
+    }
+  },
+
+  getSettings: () =>
+    callApi<{ settings: PersistedAppSettings; options?: Record<string, unknown> }>({
+      op: 'get_settings',
+    }),
+
+  updateSettings: (patch: Record<string, unknown>) =>
+    callApi<{ settings: PersistedAppSettings }>({
+      op: 'update_settings',
+      patch,
+    }),
+
+  resetSettings: (scope?: 'appearance' | 'all') =>
+    callApi<{ settings: PersistedAppSettings }>({
+      op: 'reset_settings',
+      scope: scope ?? 'appearance',
+    }),
+
+  clearLastPlayed: () => callApi<string>({ op: 'clear_last_played' }),
 
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,
   coverUrl: (trackId: string, size?: number) => {

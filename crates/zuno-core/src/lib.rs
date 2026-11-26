@@ -7,6 +7,7 @@ pub mod playlist;
 pub mod queue;
 pub mod scanner;
 pub mod search;
+pub mod settings;
 
 #[cfg(feature = "watch")]
 pub mod watcher;
@@ -19,3 +20,4 @@ pub use models::{
     PlaybackStatus, Playlist, ROOT_FOLDER_LABEL, RepeatMode, Track, UNKNOWN_ARTIST,
 };
 pub use queue::QueueManager;
+pub use settings::AppSettings;

@@ -5,6 +5,22 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.23] — 2026-11-26
+
+Full human-parity Model Context Protocol (MCP) control (**63 tools & 9 resources**) with live two-way GUI sync across every Zuno feature, setting, equalizer preset, FM radio control, navigation view, and desktop window action.
+
+### Added
+- **Full-Control MCP Server (`crates/zuno-mcp/src/mcp.rs`, `crates/zuno-core/src/ipc.rs`)**: Expanded `zuno-mcp` from 23 to **63 tools** and **9 resources** (`zuno://now-playing`, `zuno://queue`, `zuno://library`, `zuno://playlists`, `zuno://settings`, `zuno://equalizer`, `zuno://radio`, `zuno://sources`, `zuno://last-played`), exposing:
+  - **Audio, Queue & Library**: `toggle_pause`, `get_crossfade`, `set_crossfade`, `get_audio_levels` (live 24-band FFT), `queue_set`, `queue_jump`, `list_songs` sorting, `delete_song` (with `confirm: true` guard), `list_sources`, `add_source`, `remove_source`, `toggle_favorite`, `get_last_played`, `clear_last_played`.
+  - **10-Band Studio Equalizer**: `get_equalizer`, `set_equalizer`, `apply_eq_preset` (all 16 built-in presets + custom presets), `save_eq_preset`, `delete_eq_preset`, `reset_equalizer`.
+  - **Online & Offline FM Radio**: `radio_status`, `radio_discover`, `radio_resolve_url`, `radio_play_online`, `radio_disconnect`, `radio_reconnect`, `radio_stop`, `fm_hardware_status`, `fm_tune`, `fm_stop`, `radio_get_store`, `radio_manage_bookmarks`.
+  - **Customize Studio, Zoom, Navigation, Window & Maintenance**: `get_settings` (with full valid option catalog), `update_settings`, `reset_settings`, `set_zoom`, `navigate` (any page, playlist, Customize section, or search/folders/update overlay), `window_control` (show, minimize, maximize, fullscreen, close to tray, zoom, quit, status), `get_app_info`, `check_update`, `backup_data`.
+- **Portable Live-Synced Settings Store (`crates/zuno-core/src/settings.rs`, `src/App.tsx`, `src/lib/zunoApi.ts`, `src/pages/CustomizePage.tsx`)**: Added atomic `~/zuno/.zuno/settings.json` with monotonic revision sync, automatic first-run migration from `localStorage`, and live bidirectional updates between the React GUI and connected MCP agents.
+- **Shared Audio & Radio Engine (`crates/zuno-audio/src/radio.rs`, `crates/zuno-audio/src/service.rs`, `crates/zuno-audio/src/ipc_unix.rs`, `src-tauri/src/main.rs`)**: Moved the native Online/Offline FM engine into `zuno-audio` and wired live Tauri main-thread-safe IPC dispatch (`spawn_unix_ipc_server_with_handler`, `zuno_sync_poll`, `zuno:sync`).
+
+### Fixed
+- **Online FM Handshake & IPC Reliability (`crates/zuno-audio/src/radio.rs`, `crates/zuno-audio/src/service.rs`, `crates/zuno-audio/src/ipc_unix.rs`)**: Added `pause_local_playback()` so starting Online FM never self-cancels via FM-aware `Pause`, added a 10-second handshake watchdog + `ffmpeg` socket timeout flags so dead radio links fail fast, and prevented `try_send_unix_ipc` from silently spawning a duplicate headless engine when a live GUI socket times out.
+
 ## [0.0.22] — 2026-11-26
 
 Unified single OS media notification across local songs, Online FM, and Offline FM via native Rust Online FM streaming, plus a new glossy musical-note app icon with the classic four-bar icon promoted to default music fallback artwork.
