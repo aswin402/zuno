@@ -268,6 +268,18 @@ impl ZunoPaths {
             candidates.push(home.join("Music"));
             candidates.push(home.join("Downloads"));
         }
+        #[cfg(target_os = "android")]
+        {
+            for p in [
+                "/storage/emulated/0/zuno/songs",
+                "/storage/emulated/0/Music",
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/Audiobooks",
+                "/storage/emulated/0/Podcasts",
+            ] {
+                candidates.push(PathBuf::from(p));
+            }
+        }
         let default_canon = fs::canonicalize(self.songs_dir()).unwrap_or_else(|_| self.songs_dir());
         for cand in candidates {
             if !cand.is_dir() {

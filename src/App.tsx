@@ -80,6 +80,7 @@ import {
   type RadioStoreData,
 } from '@/lib/radioStore'
 import {
+  isDesktopTauriRuntime,
   isTauriRuntime,
   zunoApi,
   zunoWindow,
@@ -210,6 +211,7 @@ function sameActiveRadio(
 
 export default function App() {
   const nativeAudio = isTauriRuntime()
+  const desktopNative = isDesktopTauriRuntime()
   const [page, setPage] = useState<AppPage>('home')
   const [customizeSection, setCustomizeSection] = useState<string | null>(null)
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false)
@@ -597,6 +599,18 @@ export default function App() {
 
   useEffect(() => {
     refreshLibrary()
+  }, [refreshLibrary])
+
+  // Auto-rescan phone music folders right after the user grants Android audio storage permission
+  useEffect(() => {
+    const onGranted = () => {
+      zunoApi
+        .rescan()
+        .then(() => refreshLibrary())
+        .catch(() => {})
+    }
+    window.addEventListener('zuno:android-permission-granted', onGranted)
+    return () => window.removeEventListener('zuno:android-permission-granted', onGranted)
   }, [refreshLibrary])
 
   // Load persisted FM Radio bookmarks (offline signal frequencies + online station marks & custom links)
@@ -1926,7 +1940,7 @@ export default function App() {
           setSearchOpen((v) => !v)
           return
         }
-        if (lower === 'q' && nativeAudio) {
+        if (lower === 'q' && desktopNative) {
           e.preventDefault()
           zunoWindow.quit()
           return
@@ -1952,7 +1966,7 @@ export default function App() {
       // Never intercept Alt / Super system window manager shortcuts (Alt+Space, Alt+Tab, Alt+F4, etc.)
       if (hasModifier) return
 
-      if (e.key === 'F11' && nativeAudio) {
+      if (e.key === 'F11' && desktopNative) {
         e.preventDefault()
         zunoWindow.toggleFullscreen()
         return
@@ -2548,7 +2562,7 @@ export default function App() {
     },
   }
 
-  const roundedFrame = nativeAudio && !windowMaximized
+  const roundedFrame = desktopNative && !windowMaximized
 
   return (
     <div

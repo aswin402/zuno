@@ -5,7 +5,7 @@ import { ZunoLogo } from '@/components/ZunoLogo'
 import { UNKNOWN_ARTIST } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
-  isTauriRuntime,
+  isDesktopTauriRuntime,
   zunoWindow,
   type Track,
   type WindowResizeDir,
@@ -53,7 +53,7 @@ export function WindowTitlebar({
   onMaximizedChange,
   className,
 }: WindowTitlebarProps) {
-  const native = !preview && isTauriRuntime()
+  const native = !preview && isDesktopTauriRuntime()
   const [maximized, setMaximized] = useState(false)
 
   useEffect(() => {

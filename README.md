@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.24-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.25-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -112,6 +112,9 @@ curl -fsSL https://raw.githubusercontent.com/aswin402/zuno/main/install.sh | bas
 ```powershell
 irm https://raw.githubusercontent.com/aswin402/zuno/main/install.ps1 | iex
 ```
+
+### Android (APK)
+Download the latest signed **`zuno-android-arm64.apk`** directly from [GitHub Releases](https://github.com/aswin402/zuno/releases/latest) (Android 7.0+ / API 24+, ARM64). On first launch, allow audio storage access so Zuno automatically scans your phone's `Music`, `Download`, and `zuno/songs` folders with zero-copy playback, 10-band Rust EQ, FFT visualizers, and Online FM radio.
 
 **Installer options:**
 - Install a specific release: `... | bash -s -- --version v0.0.15` (Linux/macOS) or `-Version v0.0.15` (Windows)
@@ -233,6 +236,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.22** — Unified single OS media notification for songs & FM (native Rust Online FM streaming via `ffmpeg`/`gst-launch-1.0` into `ZunoService` with real EQ, FFT visualizer, and tray background playback, eliminating duplicate WebKitGTK MPRIS cards), new glossy musical-note app icon across desktop/tray/web/installers, and classic four-bar acoustic icon as default fallback thumbnail for songs without cover art.
 - [x] **v0.0.23** — Full human-parity MCP control (**63 tools & 9 resources**): real-time live GUI sync via portable `~/zuno/.zuno/settings.json` and Unix IPC covering playback, queue, library, external folders, playlists, favorites, Last Played, 10-band EQ & custom presets, crossfade, 24-band FFT levels, Online/Offline FM radio (with 10s handshake watchdog), all Customize Studio settings & Display Zoom, live page/overlay navigation, main-thread-safe window controls, update checks, and zero-copy backups.
 - [x] **v0.0.24** — Cross-platform GitHub Releases & universal installer overhaul: added multi-resolution `icon.ico` & `icon.icns`, updated macOS CI runners (`macos-15`), fixed broken UTF-8 progress bar (`tr` corruption on Linux) & PowerShell 5.1 BOM/UTF-8 mojibake, replaced `Start-Job` with real-time in-process streaming progress, and added GitHub Releases REST API fallback across `install.sh` and `install.ps1`.
+- [x] **v0.0.25** — Official **Android APK** (`zuno-android-arm64.apk`) release via Tauri v2 mobile (`zuno_lib` + Rust Rodio/Oboe audio + 10-band EQ + FFT visualizers + Online FM), automatic runtime audio permission prompt & shared `Music`/`Download`/`zuno/songs` auto-scanning, cross-platform `zuno.localhost` cover art URLs (Android & Windows), mobile chrome gating, and automated signed APK publishing in GitHub Releases.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

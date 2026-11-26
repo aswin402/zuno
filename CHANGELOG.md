@@ -5,6 +5,24 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.25] — 2026-11-26
+
+Added native **Android APK** (`zuno-android-arm64.apk`) support and automated signed APK publishing alongside Linux, macOS, and Windows in GitHub Releases.
+
+### Added
+- **Tauri v2 Android Support (`src-tauri/src/lib.rs`, `src-tauri/src/main.rs`, `src-tauri/Cargo.toml`, `src-tauri/capabilities/desktop.json`)**:
+  - Refactored `src-tauri` into a `zuno_lib` (`staticlib` + `cdylib` + `rlib`) library with `#[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run()`, gating desktop-only tray, window controls, and Unix IPC cleanly under `#[cfg(desktop)]`.
+  - Resolved Android writable app storage via `app.path().app_data_dir()` and automatically linked readable shared storage music folders (`/storage/emulated/0/zuno/songs`, `/storage/emulated/0/Music`, `/storage/emulated/0/Download`) once audio permission is granted.
+  - Added Android target recognition (`android-arm64`) and APK download manifest wiring in `src-tauri/src/updater.rs`.
+- **Android Runtime Permissions & Automated APK Release Pipeline (`scripts/patch-android-project.py`, `.github/workflows/release.yml`)**:
+  - Added `scripts/patch-android-project.py` to configure `READ_MEDIA_AUDIO`, `READ_EXTERNAL_STORAGE` (API ≤32), `INTERNET`, `WAKE_LOCK`, cleartext/mixed-content WebView playback for HTTP Online FM streams, and automatic runtime audio permission prompt with immediate `zuno:android-permission-granted` library rescan.
+  - Added `build-android` CI job (`ubuntu-latest` + Java 17 + Android SDK/NDK 26.1 + `aarch64-linux-android` + `zipalign` + `apksigner`) publishing a signed, verified `zuno-android-arm64.apk` and SHA-256 entry in `latest.json` and `SHA256SUMS.txt`.
+
+### Fixed
+- **Android & Windows Album Cover URLs and Mobile Window Chrome (`src/lib/zunoApi.ts`, `src-tauri/src/cover_cache.rs`, `src/components/WindowTitlebar.tsx`, `src/App.tsx`)**:
+  - Updated `zunoApi.coverUrl()` to resolve `http://zuno.localhost/cover/...` / `https://zuno.localhost/cover/...` on Android and Windows WebViews (keeping `zuno://localhost/cover/...` on Linux/macOS) and added `Access-Control-Allow-Origin: *` to custom protocol responses.
+  - Separated `isDesktopTauriRuntime()` from `isTauriRuntime()` so Android keeps pure-Rust audio, 10-band EQ, and FFT visualizers while never rendering desktop window chrome, resize handles, or rounded desktop window frames.
+
 ## [0.0.24] — 2026-11-26
 
 Fixed cross-platform GitHub Release publishing (Linux, macOS Apple Silicon & Intel, Windows) and overhauled the `install.sh` and `install.ps1` CLI installers so animations, progress bars, terminal compatibility, and version resolution work reliably on every device.

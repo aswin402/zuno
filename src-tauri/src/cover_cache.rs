@@ -126,12 +126,14 @@ impl CoverServer {
                             Some(art) => tauri::http::Response::builder()
                                 .status(200)
                                 .header("Content-Type", art.mime_type.as_str())
+                                .header("Access-Control-Allow-Origin", "*")
                                 .header("Cache-Control", "public, max-age=31536000, immutable")
                                 .body(art.bytes.clone())
                                 .unwrap(),
                             None => tauri::http::Response::builder()
                                 .status(404)
                                 .header("Content-Type", "text/plain")
+                                .header("Access-Control-Allow-Origin", "*")
                                 .header("Cache-Control", "public, max-age=3600")
                                 .body(Vec::new())
                                 .unwrap(),

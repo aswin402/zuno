@@ -227,9 +227,20 @@ function getTauriInternals(): TauriInternals | null {
   return w.__TAURI_INTERNALS__ ?? null
 }
 
-/** True when running inside the native Tauri v2 desktop window (direct Rust IPC + Rodio audio). */
+/** True when running inside the native Tauri v2 runtime (desktop or Android/iOS). */
 export function isTauriRuntime(): boolean {
   return getTauriInternals() !== null
+}
+
+/** True on Android or iOS mobile devices (including inside the Tauri mobile WebView). */
+export function isMobilePlatform(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+/** True only inside the desktop Tauri window (frameless titlebar, tray, native zoom). */
+export function isDesktopTauriRuntime(): boolean {
+  return isTauriRuntime() && !isMobilePlatform()
 }
 
 async function callApi<T>(req: IpcRequest): Promise<T> {
@@ -618,9 +629,17 @@ export const zunoApi = {
   audioUrl: (trackId: string) => `/api/audio/${encodeURIComponent(trackId)}`,
   coverUrl: (trackId: string, size?: number) => {
     const q = size ? `?s=${size}` : ''
-    return isTauriRuntime()
-      ? `zuno://localhost/cover/${encodeURIComponent(trackId)}${q}`
-      : `/api/cover/${encodeURIComponent(trackId)}${q}`
+    if (!isTauriRuntime()) {
+      return `/api/cover/${encodeURIComponent(trackId)}${q}`
+    }
+    const proto = typeof window !== 'undefined' ? window.location.protocol : ''
+    const base =
+      proto === 'https:'
+        ? 'https://zuno.localhost'
+        : proto === 'http:'
+          ? 'http://zuno.localhost'
+          : 'zuno://localhost'
+    return `${base}/cover/${encodeURIComponent(trackId)}${q}`
   },
 
   async mcpRpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -681,7 +700,7 @@ export const zunoWindow = {
     const clamped = clampUiZoom(percent)
     const factor = clamped / 100
     const tauri = getTauriInternals()
-    if (tauri) {
+    if (tauri && isDesktopTauriRuntime()) {
       if (typeof document !== 'undefined') {
         document.documentElement.style.zoom = ''
       }

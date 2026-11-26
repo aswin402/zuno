@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -113,6 +114,9 @@ pub fn current_target() -> &'static str {
         ("macos", "x86_64") => "macos-x86_64",
         ("windows", "x86_64") => "windows-x86_64",
         ("windows", "aarch64") => "windows-aarch64",
+        ("android", "aarch64") => "android-arm64",
+        ("android", "arm") => "android-armv7",
+        ("android", "x86_64") => "android-x86_64",
         _ => "unknown",
     }
 }
@@ -481,7 +485,7 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
     let target = current_target().to_string();
     let repo = repo_slug();
     let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("zuno"));
-    let writable = can_write_install_dir(&exe_path);
+    let writable = !cfg!(target_os = "android") && can_write_install_dir(&exe_path);
 
     // 1. Try Zuno's lightweight `latest.json` release manifest first
     let manifest_url = format!("https://github.com/{repo}/releases/latest/download/latest.json");
@@ -523,7 +527,9 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
     let release: GitHubApiRelease =
         serde_json::from_str(&raw).map_err(|e| format!("failed to parse GitHub release: {e}"))?;
 
-    let expected_archive = if cfg!(target_os = "windows") {
+    let expected_archive = if cfg!(target_os = "android") {
+        format!("zuno-{target}.apk")
+    } else if cfg!(target_os = "windows") {
         format!("zuno-{target}.zip")
     } else {
         format!("zuno-{target}.tar.gz")
@@ -689,6 +695,26 @@ pub fn install_update(
     create_backup: bool,
     ui_settings_json: Option<&str>,
 ) -> Result<UpdateInstallResult, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (
+            progress,
+            paths,
+            download_url,
+            expected_sha256,
+            expected_size,
+            target_version,
+            create_backup,
+            ui_settings_json,
+        );
+        return Err(
+            "Self-update is not supported in-place on Android. Download the latest APK from GitHub Releases."
+                .to_string(),
+        );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("cannot locate running Zuno binary: {e}"))?;
     if !can_write_install_dir(&exe_path) {
@@ -848,6 +874,7 @@ pub fn install_update(
         backup_path,
         backup_files,
     })
+    }
 }
 
 /// Spawn the newly installed Zuno binary in the background so the app can exit cleanly.

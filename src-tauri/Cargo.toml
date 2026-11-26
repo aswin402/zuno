@@ -3,7 +3,11 @@ name = "zuno"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Zuno — ultra-lightweight native Linux desktop music player (Tauri v2 + Rust audio)"
+description = "Zuno — ultra-lightweight native music player (Tauri v2 + Rust audio)"
+
+[lib]
+name = "zuno_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
 name = "zuno"
@@ -19,9 +23,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["image-png"] }
 zuno-audio = { path = "../crates/zuno-audio" }
 zuno-core = { path = "../crates/zuno-core" }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gdk-pixbuf = "0.18"

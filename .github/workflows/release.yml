@@ -139,10 +139,144 @@ jobs:
           path: release-dist/*
           if-no-files-found: error
 
+  build-android:
+    name: Build (android-arm64 APK)
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: '26.1.10909125'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platforms, build-tools & NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "platforms;android-35" \
+            "build-tools;34.0.0" \
+            "build-tools;35.0.0" \
+            "ndk;${NDK_VERSION}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Setup Rust toolchain (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+
+      - name: Build production Web UI
+        run: |
+          npm ci
+          npm run build
+
+      - name: Initialize & patch Tauri Android project
+        run: |
+          npx --yes @tauri-apps/cli@2 android init --ci
+          python3 scripts/patch-android-project.py src-tauri/gen/android
+
+      - name: Build Android release APK (arm64-v8a)
+        run: npx --yes @tauri-apps/cli@2 android build --apk --target aarch64
+
+      - name: Verify native library linkage, sign & package APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(ls -1d "${ANDROID_HOME}/build-tools"/* | sort -V | tail -n 1)"
+          ZIPALIGN="${BUILD_TOOLS}/zipalign"
+          APKSIGNER="${BUILD_TOOLS}/apksigner"
+
+          # Verify compiled libzuno_lib.so shared library dependencies
+          SO_PATH="$(find src-tauri/gen/android/app/src/main/jniLibs -name 'libzuno_lib.so' | head -n 1 || true)"
+          if [ -n "$SO_PATH" ]; then
+            echo "==> Inspecting NEEDED libraries for $SO_PATH:"
+            readelf -d "$SO_PATH" | grep NEEDED || true
+          fi
+
+          RAW_APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | sort | head -n 1)"
+          if [ -z "$RAW_APK" ]; then
+            echo "Error: no APK found under src-tauri/gen/android/app/build/outputs/apk" >&2
+            exit 1
+          fi
+          echo "==> Found built APK: $RAW_APK"
+
+          mkdir -p release-dist
+          ALIGNED_APK="release-dist/zuno-android-arm64-aligned.apk"
+          SIGNED_APK="release-dist/zuno-android-arm64.apk"
+          "$ZIPALIGN" -p -f 4 "$RAW_APK" "$ALIGNED_APK"
+
+          KEYSTORE_PATH="/tmp/zuno-release.jks"
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+            KEY_ALIAS="${ANDROID_KEY_ALIAS:-zuno}"
+            KEY_PASS="${ANDROID_KEY_PASSWORD:-$KS_PASS}"
+          else
+            KS_PASS="zuno-release-signing-key"
+            KEY_ALIAS="zuno"
+            KEY_PASS="$KS_PASS"
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass "$KS_PASS" \
+              -keypass "$KEY_PASS" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Zuno, OU=Zuno Player, O=Zuno, C=US"
+          fi
+
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-pass "pass:${KS_PASS}" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:${KEY_PASS}" \
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
+          "$APKSIGNER" verify --verbose "$SIGNED_APK"
+          rm -f "$ALIGNED_APK" "$KEYSTORE_PATH" "${SIGNED_APK}.idsig"
+
+          (cd release-dist && sha256sum "zuno-android-arm64.apk" > "zuno-android-arm64.apk.sha256")
+          ls -lh release-dist
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zuno-android-arm64
+          path: release-dist/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
-    needs: build
-    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'failure') }}
+    needs: [build, build-android]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'failure' || needs.build-android.result == 'success' || needs.build-android.result == 'failure') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -217,6 +351,7 @@ jobs:
             { key: 'macos-aarch64', archive: 'zuno-macos-aarch64.tar.gz' },
             { key: 'macos-x86_64', archive: 'zuno-macos-x86_64.tar.gz' },
             { key: 'windows-x86_64', archive: 'zuno-windows-x86_64.zip' },
+            { key: 'android-arm64', archive: 'zuno-android-arm64.apk' },
           ];
 
           for (const item of entries) {
@@ -266,6 +401,9 @@ jobs:
             `irm https://raw.githubusercontent.com/${repo}/main/install.ps1 | iex`,
             '```',
             '',
+            '**Android (ARM64 APK):**',
+            `Download \`zuno-android-arm64.apk\` directly from the release assets below and install on Android 7.0+ (API 24+).`,
+            '',
             '> Already running Zuno? The app detects this release automatically and offers 1-click **Backup & Install** inside Zuno.',
           ].join('\n');
 
@@ -284,6 +422,7 @@ jobs:
           ASSETS=(
             release-assets/zuno-*.tar.gz
             release-assets/zuno-*.zip
+            release-assets/zuno-*.apk
             release-assets/SHA256SUMS.txt
             release-assets/latest.json
           )
