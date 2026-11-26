@@ -196,12 +196,12 @@ jobs:
 
       - name: Initialize & patch Tauri Android project
         run: |
-          npm install -g @tauri-apps/cli@2
-          tauri android init --ci
+          npm install --no-save @tauri-apps/cli@2
+          npm run tauri -- android init --ci
           python3 scripts/patch-android-project.py src-tauri/gen/android
 
       - name: Build Android release APK (arm64-v8a)
-        run: tauri android build --apk --target aarch64
+        run: npm run tauri -- android build --apk --target aarch64
 
       - name: Verify native library linkage, sign & package APK
         env:
