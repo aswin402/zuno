@@ -5,6 +5,25 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.24] — 2026-11-26
+
+Fixed cross-platform GitHub Release publishing (Linux, macOS Apple Silicon & Intel, Windows) and overhauled the `install.sh` and `install.ps1` CLI installers so animations, progress bars, terminal compatibility, and version resolution work reliably on every device.
+
+### Fixed
+- **GitHub Releases CI Pipeline (`.github/workflows/release.yml`, `src-tauri/icons/icon.ico`, `src-tauri/icons/icon.icns`, `src-tauri/tauri.conf.json`)**:
+  - Generated multi-resolution Windows `icon.ico` (16–256px) and Apple `icon.icns` (16–512px) from the glossy Zuno app icon, fixing `tauri-build` failures on Windows (`icon.ico not found`).
+  - Migrated retired `macos-14` GitHub Actions runners to `macos-15` with `MACOSX_DEPLOYMENT_TARGET=11.0`, fixing immediate macOS release workflow failures that previously prevented GitHub Releases from publishing (`no releases found`).
+  - Made the `publish` job resilient with safe `nullglob` asset collection and bundled `zuno.icns` / `zuno.ico` into release archives.
+  - Cleaned up non-Linux Rust compiler warnings in `crates/zuno-audio/src/radio.rs`, `src-tauri/src/main.rs`, and `Cargo.toml`.
+- **Linux & macOS Installer (`install.sh`)**:
+  - Fixed corrupted download progress bar on GNU Linux caused by `tr ' ' '█'` / `tr ' ' '░'` mangling multibyte UTF-8 characters into raw `0xe2` bytes; replaced with a zero-fork pure-bash `repeat_char` helper.
+  - Replaced background subshell spinners and per-tick `wc -c` / `awk` forks with foreground-driven ~13 FPS equalizer animations, O(1) `stat` byte polling, pure-bash MB formatting, `\033[K` line clearing, and portable fractional sleep fallback (BusyBox/BSD/non-C locales).
+  - Switched from hardcoded bright-white ANSI codes (invisible on light terminals like default macOS Terminal.app) to terminal-adaptive bold/dim/inverse ANSI styling, with automatic pure-ASCII fallback on non-UTF-8 locales and a POSIX `sh` guard that auto-reexecs `bash`.
+  - Added automatic fallback from `latest.json` to the GitHub Releases REST API (`/releases/latest`) with clear actionable diagnostics (404 / rate limit / missing target architecture) and included `radio.json` + `settings.json` in automatic pre-install backups.
+- **Windows PowerShell Installer (`install.ps1`)**:
+  - Rewrote `install.ps1` as pure 7-bit ASCII (no UTF-8 BOM, runtime `[char]0x...` glyphs) so `irm ... | iex` renders crisp animations without mojibake on both Windows PowerShell 5.1 and PowerShell 7+.
+  - Replaced `Start-Job` downloads (slow startup and frozen progress in PowerShell 5.1) with in-process streaming `HttpWebRequest` (`BeginRead` / `EndRead`) for smooth real-time equalizer and progress bar animation, plus GitHub Releases API fallback, `radio.json`/`settings.json` backup, and Start Menu `.ico` wiring.
+
 ## [0.0.23] — 2026-11-26
 
 Full human-parity Model Context Protocol (MCP) control (**63 tools & 9 resources**) with live two-way GUI sync across every Zuno feature, setting, equalizer preset, FM radio control, navigation view, and desktop window action.

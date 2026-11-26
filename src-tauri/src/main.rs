@@ -152,6 +152,8 @@ impl AppState {
         if let Some(handle) = self.mpris.get() {
             handle.notify_seeked(position_secs);
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = position_secs;
     }
 }
 
