@@ -1,7 +1,7 @@
 // easeui.dev/components/motion/dropdown-menu
 // Adapted zero-bloat for Zuno with exact EaseUI timing/easing ([0.23, 1, 0.32, 1],
-// 150ms open / 100ms close), auto-flipping upward when room below is limited,
-// full keyboard navigation, and theme-mapped Zuno popover & destructive tokens.
+// portaled fixed positioning (immune to row CSS stacking contexts / contain / blur animations),
+// auto-flipping across top/bottom/right/left edges, full keyboard navigation, and Zuno tokens.
 
 import {
   type ButtonHTMLAttributes,
@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { prefersReducedMotion } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -25,6 +26,8 @@ const EASE_CURVE = 'var(--dropdown-ease, cubic-bezier(0.22, 1, 0.36, 1))'
 // Matches transitions.dev Menu dropdown: asymmetric 250ms open (0.97 -> 1), 150ms close (1 -> 0.99).
 const OPEN_MS = 250
 const CLOSE_MS = 150
+const VIEWPORT_PAD = 10
+const SIDE_GAP = 6
 
 interface DropdownMenuContextValue {
   open: boolean
@@ -81,14 +84,18 @@ export function DropdownMenu({
     [openProp, onOpenChange],
   )
 
-  // A press anywhere outside the menu closes it.
+  // A press anywhere outside the trigger AND portaled menu closes it.
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node | null
+      if (!target) return
+      if (rootRef.current?.contains(target)) return
+      if (listRef.current?.contains(target)) return
+      setOpen(false)
     }
-    window.addEventListener('pointerdown', onPointerDown)
-    return () => window.removeEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => window.removeEventListener('pointerdown', onPointerDown, true)
   }, [open, setOpen])
 
   const ctx = useMemo<DropdownMenuContextValue>(
@@ -143,7 +150,10 @@ export function DropdownMenuTrigger({
       aria-haspopup="menu"
       aria-expanded={m.open}
       aria-controls={m.listId}
-      onClick={() => m.setOpen(!m.open)}
+      onClick={(e) => {
+        e.stopPropagation()
+        m.setOpen(!m.open)
+      }}
       onKeyDown={onKeyDown}
       className={cn(
         !unstyled &&
@@ -158,14 +168,25 @@ export function DropdownMenuTrigger({
 }
 
 export interface DropdownMenuContentProps {
-  /** Which trigger edge the menu hangs from. Default "start". */
+  /** Which trigger edge the menu hangs from (for top/bottom placement). Default "start". */
   align?: 'start' | 'end'
-  /** Force opening above or below, or "auto" to flip upward when room below is limited. */
-  side?: 'auto' | 'top' | 'bottom'
-  /** Skip auto-focusing the first menu item (useful for non-item controls like volume slider). */
+  /** Preferred side relative to trigger: auto (top/bottom), top, bottom, right, or left. */
+  side?: 'auto' | 'top' | 'bottom' | 'right' | 'left'
+  /** Skip auto-focusing the first menu item (useful for non-item controls). */
   autoFocusFirst?: boolean
   className?: string
   children: ReactNode
+}
+
+interface FloatingPos {
+  top: number
+  left: number
+  origin: string
+}
+
+function clamp(n: number, min: number, max: number) {
+  if (max < min) return min
+  return Math.max(min, Math.min(max, n))
 }
 
 export function DropdownMenuContent({
@@ -176,14 +197,12 @@ export function DropdownMenuContent({
   children,
 }: DropdownMenuContentProps) {
   const m = useDropdownMenu('DropdownMenuContent')
-  const { open, triggerRef, listRef } = m
+  const { open, setOpen, triggerRef, listRef } = m
   const [mounted, setMounted] = useState(open)
   const [shown, setShown] = useState(open)
-  const [placement, setPlacement] = useState<'top' | 'bottom'>(
-    side === 'top' ? 'top' : 'bottom',
-  )
+  const [pos, setPos] = useState<FloatingPos | null>(null)
 
-  // Mount on open, keep mounted during the 100ms EaseUI exit transition, then clean up.
+  // Mount on open, keep mounted during the exit transition, then clean up.
   useEffect(() => {
     if (open) {
       setMounted(true)
@@ -193,28 +212,111 @@ export function DropdownMenuContent({
     setShown(false)
     if (!mounted) return
     const timer = window.setTimeout(
-      () => setMounted(false),
+      () => {
+        setMounted(false)
+        setPos(null)
+      },
       prefersReducedMotion() ? 0 : CLOSE_MS + 20,
     )
     return () => window.clearTimeout(timer)
   }, [open, mounted])
 
-  // Open upward when there is not enough room below the trigger.
-  useLayoutEffect(() => {
-    if (!open || !mounted) return
-    if (side === 'top' || side === 'bottom') {
-      setPlacement(side)
-      return
-    }
+  const computePosition = useCallback(() => {
     const trigger = triggerRef.current
     const list = listRef.current
     if (!trigger || !list) return
+
     const rect = trigger.getBoundingClientRect()
-    const below = window.innerHeight - rect.bottom
-    setPlacement(
-      below < list.offsetHeight + 16 && rect.top > below ? 'top' : 'bottom',
+    const menuW = list.offsetWidth || 208
+    const menuH = list.offsetHeight || 96
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+
+    let left = VIEWPORT_PAD
+    let top = VIEWPORT_PAD
+    let origin = 'top left'
+
+    if (side === 'right' || side === 'left') {
+      const fitsRight = rect.right + SIDE_GAP + menuW <= vw - VIEWPORT_PAD
+      const fitsLeft = rect.left - SIDE_GAP - menuW >= VIEWPORT_PAD
+
+      if (side === 'right' && fitsRight) {
+        left = rect.right + SIDE_GAP
+        top = clamp(rect.top - 4, VIEWPORT_PAD, vh - menuH - VIEWPORT_PAD)
+        origin = 'top left'
+      } else if ((side === 'left' && fitsLeft) || (side === 'right' && fitsLeft)) {
+        // When near the right viewport edge, open beside the trigger on its left so it stays
+        // on the right side of the row without covering tracks underneath or clipping off-screen.
+        left = rect.left - SIDE_GAP - menuW
+        top = clamp(rect.top - 4, VIEWPORT_PAD, vh - menuH - VIEWPORT_PAD)
+        origin = 'top right'
+      } else if (fitsRight) {
+        left = rect.right + SIDE_GAP
+        top = clamp(rect.top - 4, VIEWPORT_PAD, vh - menuH - VIEWPORT_PAD)
+        origin = 'top left'
+      } else {
+        // Narrow screen fallback: right-aligned above or below the trigger.
+        const below = vh - rect.bottom
+        const placeTop = below < menuH + SIDE_GAP + VIEWPORT_PAD && rect.top > below
+        left = clamp(rect.right - menuW, VIEWPORT_PAD, vw - menuW - VIEWPORT_PAD)
+        top = placeTop
+          ? Math.max(VIEWPORT_PAD, rect.top - SIDE_GAP - menuH)
+          : Math.min(vh - menuH - VIEWPORT_PAD, rect.bottom + SIDE_GAP)
+        origin = `${placeTop ? 'bottom' : 'top'} right`
+      }
+    } else {
+      const below = vh - rect.bottom
+      const placeTop =
+        side === 'top'
+          ? true
+          : side === 'bottom'
+            ? false
+            : below < menuH + SIDE_GAP + VIEWPORT_PAD && rect.top > below
+      const rawLeft = align === 'end' ? rect.right - menuW : rect.left
+      left = clamp(rawLeft, VIEWPORT_PAD, vw - menuW - VIEWPORT_PAD)
+      top = placeTop
+        ? Math.max(VIEWPORT_PAD, rect.top - SIDE_GAP - menuH)
+        : Math.min(vh - menuH - VIEWPORT_PAD, rect.bottom + SIDE_GAP)
+      origin = `${placeTop ? 'bottom' : 'top'} ${align === 'end' ? 'right' : 'left'}`
+    }
+
+    setPos((prev) =>
+      prev &&
+      Math.abs(prev.top - top) < 0.5 &&
+      Math.abs(prev.left - left) < 0.5 &&
+      prev.origin === origin
+        ? prev
+        : { top, left, origin },
     )
-  }, [open, mounted, side, triggerRef, listRef])
+  }, [align, side, triggerRef, listRef])
+
+  useLayoutEffect(() => {
+    if (!open || !mounted) return
+    computePosition()
+
+    const list = listRef.current
+    const ro =
+      typeof ResizeObserver !== 'undefined' && list
+        ? new ResizeObserver(() => computePosition())
+        : null
+    if (list && ro) ro.observe(list)
+
+    const onResize = () => computePosition()
+    const onScroll = (event: Event) => {
+      const target = event.target as Node | null
+      // Allow scrolling inside a long playlist submenu without closing the menu.
+      if (target && listRef.current?.contains(target)) return
+      setOpen(false)
+    }
+
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open, mounted, computePosition, listRef, setOpen])
 
   useEffect(() => {
     if (!open || !mounted || !autoFocusFirst) return
@@ -224,17 +326,17 @@ export function DropdownMenuContent({
     return () => cancelAnimationFrame(raf)
   }, [open, mounted, autoFocusFirst, listRef])
 
-  if (!mounted) return null
+  if (!mounted || typeof document === 'undefined') return null
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault()
-      m.setOpen(false)
+      setOpen(false)
       triggerRef.current?.focus()
       return
     }
     if (event.key === 'Tab') {
-      m.setOpen(false)
+      setOpen(false)
       return
     }
     const items = enabledItems(listRef.current)
@@ -255,11 +357,11 @@ export function DropdownMenuContent({
     items[(next + items.length) % items.length].focus()
   }
 
-  const isTop = placement === 'top'
   const reduce = prefersReducedMotion()
   const durationMs = reduce ? 0 : open ? OPEN_MS : CLOSE_MS
+  const ready = pos !== null
 
-  return (
+  return createPortal(
     <div
       ref={listRef}
       id={m.listId}
@@ -267,30 +369,38 @@ export function DropdownMenuContent({
       aria-labelledby={m.triggerId}
       aria-hidden={!open}
       inert={!open}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
       style={{
-        transformOrigin: `${isTop ? 'bottom' : 'top'} ${align === 'end' ? 'right' : 'left'}`,
-        pointerEvents: open ? 'auto' : 'none',
-        opacity: shown ? 1 : 0,
+        position: 'fixed',
+        top: pos ? `${pos.top}px` : '-9999px',
+        left: pos ? `${pos.left}px` : '-9999px',
+        zIndex: 9999,
+        transformOrigin: pos?.origin ?? 'top right',
+        pointerEvents: open && ready ? 'auto' : 'none',
+        opacity: shown && ready ? 1 : 0,
         transform: reduce
           ? 'none'
-          : shown
+          : shown && ready
             ? 'scale(1)'
             : open
               ? 'scale(var(--dropdown-pre-scale, 0.97))'
               : 'scale(var(--dropdown-closing-scale, 0.99))',
-        transition: `opacity ${durationMs}ms ${EASE_CURVE}, transform ${durationMs}ms ${EASE_CURVE}`,
+        transition: ready
+          ? `opacity ${durationMs}ms ${EASE_CURVE}, transform ${durationMs}ms ${EASE_CURVE}`
+          : 'none',
       }}
       className={cn(
-        'absolute z-40 flex min-w-44 max-w-[calc(100vw-2rem)] flex-col gap-0.5 rounded-xl bg-popover p-1 text-popover-foreground',
-        'shadow-[0_0_0_1px_var(--border),0_14px_28px_-12px_rgb(0_0_0/0.42)]',
-        isTop ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
-        align === 'end' ? 'right-0' : 'left-0',
+        'flex min-w-44 max-w-[calc(100vw-1.5rem)] flex-col gap-0.5 rounded-xl bg-popover p-1 text-popover-foreground',
+        'shadow-[0_0_0_1px_var(--border),0_14px_28px_-12px_rgb(0_0_0/0.55)]',
         className,
       )}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -321,7 +431,8 @@ export function DropdownMenuItem({
       role="menuitem"
       disabled={disabled}
       tabIndex={-1}
-      onClick={() => {
+      onClick={(e) => {
+        e.stopPropagation()
         onSelect?.()
         if (!keepOpen) {
           m.setOpen(false)

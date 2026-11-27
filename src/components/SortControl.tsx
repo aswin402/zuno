@@ -123,37 +123,6 @@ export function SortControl({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {/* Dedicated 1-click Ascending / Descending toggle */}
-      {canToggleDir && (
-        <Tooltip
-          label={
-            dir === 'asc'
-              ? 'Ascending · click for Descending'
-              : 'Descending · click for Ascending'
-          }
-          side="top"
-        >
-          <button
-            type="button"
-            onClick={() => onChange(field, dir === 'asc' ? 'desc' : 'asc')}
-            className="flex h-8 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-            aria-label={dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
-          >
-            {dir === 'asc' ? (
-              <>
-                <ArrowUp className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Asc</span>
-              </>
-            ) : (
-              <>
-                <ArrowDown className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Desc</span>
-              </>
-            )}
-          </button>
-        </Tooltip>
-      )}
     </div>
   )
 }

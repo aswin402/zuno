@@ -1,22 +1,24 @@
 import { useState } from 'react'
-import { LoaderCircle, Radio, RefreshCw, Square } from 'lucide-react'
+import { Check, ListPlus, LoaderCircle, Radio, RefreshCw, Square } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { IconSwap, TextSwap } from '@/components/ui/motion'
-import { Slider } from '@/components/ui/slider'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Loader2 } from '@/components/PulseBarsLoader'
 import { PulseHeart } from '@/components/PulseHeart'
 import { Scrubber } from '@/components/Scrubber'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { ZunoIcon } from '@/components/ZunoIcon'
-import { DEFAULT_VOLUME, displayArtist, MUTE_EPSILON } from '@/lib/format'
+import { displayArtist } from '@/lib/format'
 import { cn, formatTime } from '@/lib/utils'
 import { DEFAULT_APPEARANCE, type AppearanceSettings } from '@/lib/appearance'
-import type { RepeatMode, Track } from '@/lib/zunoApi'
+import type { Playlist, RepeatMode, Track } from '@/lib/zunoApi'
 
 interface DesktopPlayerBarProps {
   track: Track | null
@@ -24,9 +26,9 @@ interface DesktopPlayerBarProps {
   isFavorite: boolean
   position: number
   duration: number
-  volume: number
   shuffle: boolean
   repeat: RepeatMode
+  playlists: Playlist[]
   eqEnabled?: boolean
   eqLabel?: string
   eqOpen?: boolean
@@ -40,10 +42,12 @@ interface DesktopPlayerBarProps {
   onNext: () => void
   onSeekChange: (secs: number) => void
   onSeekCommit: (secs: number) => void
-  onVolumeChange: (vol: number) => void
   onToggleFavorite: () => void
   onToggleShuffle: () => void
   onCycleRepeat: () => void
+  onAddToPlaylist: (playlistSlug: string, trackId: string) => void
+  onRemoveFromPlaylist?: (playlistSlug: string, trackId: string) => void
+  onCreatePlaylistWithTrack: (trackId?: string) => void
   onToggleEqualizer?: () => void
   onExpandPlayer?: () => void
 }
@@ -51,7 +55,7 @@ interface DesktopPlayerBarProps {
 /**
  * Floating sticky horizontal bottom player bar for Desktop (>= 1024px).
  * Supports Skiper25 Waveform Play button option, PulseHeart favorite animation,
- * multi-pack icons, and themed tooltips.
+ * multi-pack icons, Add-to-Playlist quick menu, and themed tooltips.
  */
 export function DesktopPlayerBar({
   track,
@@ -59,9 +63,9 @@ export function DesktopPlayerBar({
   isFavorite,
   position,
   duration,
-  volume,
   shuffle,
   repeat,
+  playlists,
   eqEnabled = false,
   eqLabel = 'Off',
   eqOpen = false,
@@ -75,14 +79,17 @@ export function DesktopPlayerBar({
   onNext,
   onSeekChange,
   onSeekCommit,
-  onVolumeChange,
   onToggleFavorite,
   onToggleShuffle,
   onCycleRepeat,
+  onAddToPlaylist,
+  onRemoveFromPlaylist,
+  onCreatePlaylistWithTrack,
   onToggleEqualizer,
   onExpandPlayer,
 }: DesktopPlayerBarProps) {
-  const [volOpen, setVolOpen] = useState(false)
+  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false)
+  const canAddToPlaylist = Boolean(track && !liveLabel)
   const effectiveDuration = duration > 0 ? duration : (track?.duration_secs ?? 0)
   const iconPack = appearance.iconPack
 
@@ -357,50 +364,81 @@ export function DesktopPlayerBar({
             </Tooltip>
           )}
 
-          <DropdownMenu open={volOpen} onOpenChange={setVolOpen}>
-            <Tooltip label={`Volume: ${Math.round(volume * 100)}%`} side="top" disabled={volOpen}>
+          <DropdownMenu
+            open={playlistMenuOpen && canAddToPlaylist}
+            onOpenChange={(next) => {
+              if (!canAddToPlaylist) {
+                setPlaylistMenuOpen(false)
+                return
+              }
+              setPlaylistMenuOpen(next)
+            }}
+          >
+            <Tooltip
+              label="Add to playlist"
+              side="top"
+              disabled={playlistMenuOpen || !canAddToPlaylist}
+            >
               <DropdownMenuTrigger
-                aria-label="Volume"
+                disabled={!canAddToPlaylist}
+                aria-label="Add to playlist"
                 className={cn(
                   'h-8 w-8 hover:bg-secondary',
-                  volOpen && 'bg-secondary text-foreground',
+                  playlistMenuOpen && 'bg-secondary text-foreground',
                 )}
               >
-                <ZunoIcon
-                  name={volume <= MUTE_EPSILON ? 'mute' : 'volume'}
-                  pack={iconPack}
-                  className="h-4 w-4"
-                />
+                <ListPlus className="h-4 w-4" />
               </DropdownMenuTrigger>
             </Tooltip>
 
-            <DropdownMenuContent
-              align="end"
-              side="top"
-              autoFocusFirst={false}
-              className="min-w-0 w-44 flex-row items-center gap-2.5 px-3 py-2.5"
-            >
-              <button
-                type="button"
-                onClick={() => onVolumeChange(volume > MUTE_EPSILON ? 0 : DEFAULT_VOLUME)}
-                className="text-muted-foreground hover:text-foreground cursor-pointer"
-                aria-label="Mute or unmute"
-              >
-                <ZunoIcon
-                  name={volume <= MUTE_EPSILON ? 'mute' : 'volume'}
-                  pack={iconPack}
-                  className="h-3.5 w-3.5"
-                />
-              </button>
-              <Slider
-                value={volume}
-                max={1}
-                step={0.01}
-                onChange={onVolumeChange}
-                ariaLabel="Volume"
-                alwaysShowThumb
-              />
-            </DropdownMenuContent>
+            {canAddToPlaylist && track && (
+              <DropdownMenuContent align="end" side="top" className="w-56">
+                <DropdownMenuLabel>Add to playlist</DropdownMenuLabel>
+                {playlists.length === 0 ? (
+                  <p className="px-2.5 py-2 text-[11px] text-muted-foreground">
+                    No playlists yet
+                  </p>
+                ) : (
+                  <div className="max-h-52 overflow-y-auto space-y-0.5">
+                    {playlists.map((pl) => {
+                      const exists = pl.track_ids.includes(track.id)
+                      return (
+                        <DropdownMenuItem
+                          key={pl.slug}
+                          onSelect={() => {
+                            if (exists) {
+                              onRemoveFromPlaylist?.(pl.slug, track.id)
+                            } else {
+                              onAddToPlaylist(pl.slug, track.id)
+                            }
+                          }}
+                          className="min-h-8 justify-between"
+                        >
+                          <span className="truncate">{pl.title}</span>
+                          {exists ? (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          ) : (
+                            <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                              {pl.track_ids.length}
+                            </span>
+                          )}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <DropdownMenuSeparator />
+
+                <DropdownMenuItem
+                  onSelect={() => onCreatePlaylistWithTrack(track.id)}
+                  className="min-h-8 gap-1.5 text-muted-foreground"
+                >
+                  <ZunoIcon name="plus" pack={iconPack} className="h-3.5 w-3.5" />
+                  <span>New playlist</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            )}
           </DropdownMenu>
         </div>
       </footer>

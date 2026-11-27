@@ -5,6 +5,21 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.33] — 2026-11-27
+
+Polished the Desktop player bar, song row options menu, and Songs page sort controls.
+
+### Changed
+- **Add-to-Playlist Button on Desktop Player Bar (`src/components/DesktopPlayerBar.tsx`, `src/App.tsx`)**:
+  - Replaced the Volume button in the bottom player bar utility cluster with a 1-click **Add to playlist** button (`ListPlus`) that opens a live playlist picker showing all available playlists (with checkmarks to add/remove the playing song plus `+ New playlist`).
+- **Streamlined Sort Control (`src/components/SortControl.tsx`)**:
+  - Removed the separate `Asc` / `Desc` button next to the `Sort` pill on the Songs page so Ascending and Descending live cleanly inside the Sort dropdown menu alone.
+
+### Fixed
+- **Song `...` Options Menu Hover/Click-Through Bug & Right-Side Positioning (`src/components/ui/dropdown-menu.tsx`, `src/components/TrackRow.tsx`)**:
+  - Portaled `DropdownMenuContent` directly to `document.body` (`position: fixed`, `z-index: 9999`) with `ResizeObserver` viewport clamping and React event propagation isolation so virtualized row stacking contexts (`.zuno-vrow` / `Blur Reveal`) can never paint over menus or intercept hovers/clicks to accidentally play the song underneath.
+  - Positioned the song `...` menu on the right side (`side="right"`, opening to the right of `...` when room exists and neatly beside `...` when near the viewport edge).
+
 ## [0.0.32] — 2026-11-27
 
 Eliminated the playback crash on double-clicking tracks / rapid skipping (`rodio 0.20` Symphonia `SeekError` panic) and hardened desktop, Android, and frontend concurrency, mutex safety, and error recovery across the entire codebase.

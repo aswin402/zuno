@@ -240,7 +240,7 @@ export const TrackRow = memo(function TrackRow({
             </Tooltip>
 
             {menuOpen && (
-            <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuContent side="right" className="w-52">
               {menuView === 'main' ? (
                 <>
                   <DropdownMenuItem

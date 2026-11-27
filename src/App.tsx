@@ -3458,9 +3458,9 @@ export default function App() {
           isBuffering={displayIsBuffering}
           position={position}
           duration={duration}
-          volume={volume}
           shuffle={shuffle}
           repeat={repeat}
+          playlists={playlists}
           eqEnabled={eqSettings.enabled}
           eqLabel={eqLabel}
           eqOpen={page === 'equalizer'}
@@ -3472,10 +3472,12 @@ export default function App() {
           onNext={displayNext}
           onSeekChange={setPosition}
           onSeekCommit={handleSeekCommit}
-          onVolumeChange={setVolume}
           onToggleFavorite={displayToggleFavorite}
           onToggleShuffle={handleToggleShuffle}
           onCycleRepeat={handleCycleRepeat}
+          onAddToPlaylist={handleAddToPlaylist}
+          onRemoveFromPlaylist={handleRemoveFromPlaylist}
+          onCreatePlaylistWithTrack={handleOpenCreatePlaylist}
           onToggleEqualizer={() =>
             setPage((p) => (p === 'equalizer' ? lastNonEqPageRef.current : 'equalizer'))
           }
