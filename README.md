@@ -8,7 +8,7 @@
 
 Built for **Linux & Android** with minimal RAM, CPU, and storage footprint — zero cloud lock-in, zero duplicate audio files, and native **Model Context Protocol (MCP)** support.
 
-[![Version](https://img.shields.io/badge/version-0.0.25-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.26-fafafa?style=flat-square&labelColor=18181b)](./CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-2024-fafafa?style=flat-square&labelColor=18181b)](https://www.rust-lang.org/)
 [![React](https://img.shields.io/badge/React-19-fafafa?style=flat-square&labelColor=18181b)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-fafafa?style=flat-square&labelColor=18181b)](https://tailwindcss.com/)
@@ -237,6 +237,7 @@ zuno-mcp mcp --http 127.0.0.1:47620 --token your-secret-token
 - [x] **v0.0.23** — Full human-parity MCP control (**63 tools & 9 resources**): real-time live GUI sync via portable `~/zuno/.zuno/settings.json` and Unix IPC covering playback, queue, library, external folders, playlists, favorites, Last Played, 10-band EQ & custom presets, crossfade, 24-band FFT levels, Online/Offline FM radio (with 10s handshake watchdog), all Customize Studio settings & Display Zoom, live page/overlay navigation, main-thread-safe window controls, update checks, and zero-copy backups.
 - [x] **v0.0.24** — Cross-platform GitHub Releases & universal installer overhaul: added multi-resolution `icon.ico` & `icon.icns`, updated macOS CI runners (`macos-15`), fixed broken UTF-8 progress bar (`tr` corruption on Linux) & PowerShell 5.1 BOM/UTF-8 mojibake, replaced `Start-Job` with real-time in-process streaming progress, and added GitHub Releases REST API fallback across `install.sh` and `install.ps1`.
 - [x] **v0.0.25** — Official **Android APK** (`zuno-android-arm64.apk`) release via Tauri v2 mobile (`zuno_lib` + Rust Rodio/Oboe audio + 10-band EQ + FFT visualizers + Online FM), automatic runtime audio permission prompt & shared `Music`/`Download`/`zuno/songs` auto-scanning, cross-platform `zuno.localhost` cover art URLs (Android & Windows), mobile chrome gating, and automated signed APK publishing in GitHub Releases.
+- [x] **v0.0.26** — Fixed in-app self-updater **Restart Zuno Now** relaunch bug on Linux/macOS/Windows: resolved Linux `/proc/self/exe` `" (deleted)"` and `".old"` suffix failures after atomic binary swaps, recorded exact installed binary path, added clean socket/audio/MPRIS handoff (`ZUNO_RELAUNCH_WAIT_MS`), and replaced silent frontend error swallowing with live restarting & error states.
 - [ ] **v0.1.0** — Packaged `.deb` / AppImage / Flatpak releases & automated GitHub Releases.
 - [ ] **v0.2.0** — Tauri v2 Android APK with native Media3 ExoPlayer background playback, lock-screen controls, and Scoped Storage `zuno/` picker.
 - [ ] **v0.3.0** — Artist view & offline synced `.lrc` lyrics page.

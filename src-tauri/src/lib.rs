@@ -142,6 +142,7 @@ struct AppState {
     ui_commands: Mutex<Vec<UiCommand>>,
     quitting: AtomicBool,
     update_progress: Arc<Mutex<updater::UpdateProgressEvent>>,
+    updated_exe_path: Mutex<Option<std::path::PathBuf>>,
     #[cfg(target_os = "linux")]
     mpris: OnceLock<mpris::MprisHandle>,
 }
@@ -682,7 +683,7 @@ async fn zuno_install_update(
 ) -> Result<updater::UpdateInstallResult, String> {
     let paths = state.service.paths();
     let progress = Arc::clone(&state.update_progress);
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         updater::install_update(
             &progress,
             &paths,
@@ -695,13 +696,51 @@ async fn zuno_install_update(
         )
     })
     .await
-    .map_err(|e| format!("update install task failed: {e}"))?
+    .map_err(|e| format!("update install task failed: {e}"))??;
+
+    if let Ok(mut guard) = state.updated_exe_path.lock() {
+        *guard = Some(std::path::PathBuf::from(&result.installed_path));
+    }
+    Ok(result)
 }
 
 #[tauri::command]
 fn zuno_relaunch_app(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    updater::spawn_relaunched_app()?;
-    shutdown_app(&app, &state);
+    let preferred = state
+        .updated_exe_path
+        .lock()
+        .ok()
+        .and_then(|g| g.clone());
+
+    // Stop playback & release socket before spawning so the new instance binds IPC/audio cleanly.
+    state.quitting.store(true, Ordering::SeqCst);
+    state.radio.clear(Some(&state.service), &state.fm_tuner);
+    let _ = state.service.handle_request(IpcRequest::Stop);
+    state.notify_mpris();
+
+    #[cfg(unix)]
+    {
+        let sock = state.service.paths().socket_path();
+        let _ = std::fs::remove_file(sock);
+    }
+
+    if let Err(err) = updater::spawn_relaunched_app(preferred.as_deref()) {
+        state.quitting.store(false, Ordering::SeqCst);
+        return Err(err);
+    }
+
+    #[cfg(desktop)]
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+
+    // Exit shortly after returning Ok(()) so the WebView receives the IPC ack cleanly
+    // and the exiting process drops D-Bus MPRIS / tray / file locks before the new process starts.
+    let app_exit = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        app_exit.exit(0);
+    });
     Ok(())
 }
 
@@ -915,7 +954,10 @@ fn show_or_create_main_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
-    updater::cleanup_old_binaries();
+    {
+        updater::wait_if_relaunched();
+        updater::cleanup_old_binaries();
+    }
 
     let builder = tauri::Builder::default()
         // Async zero-TCP custom URI scheme for cached embedded album cover art:
@@ -1010,6 +1052,7 @@ pub fn run() {
                 ui_commands: Mutex::new(Vec::new()),
                 quitting: AtomicBool::new(false),
                 update_progress: Arc::new(Mutex::new(updater::UpdateProgressEvent::default())),
+                updated_exe_path: Mutex::new(None),
                 #[cfg(target_os = "linux")]
                 mpris: OnceLock::new(),
             });

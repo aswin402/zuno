@@ -5,6 +5,17 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.26] — 2026-11-27
+
+Fixed the in-app self-updater **Restart Zuno Now** button failing to relaunch after installing a new version.
+
+### Fixed
+- **Self-Updater Relaunch Path & Handoff (`src-tauri/src/updater.rs`, `src-tauri/src/lib.rs`, `src/components/UpdateDialog.tsx`)**:
+  - Fixed `spawn_relaunched_app` failing on Linux with `No such file or directory` because `std::env::current_exe()` (`/proc/self/exe`) resolves to `.../zuno.old (deleted)` after `atomic_swap_binary` replaces and unlinks the running binary (and could point to `.old` on Windows/macOS).
+  - Stored the exact `installed_path` returned by `install_update()` in `AppState::updated_exe_path`, added `sanitize_exe_path()` / `resolve_current_exe_path()` stripping `" (deleted)"` and `".old"` suffixes, and added unit tests covering atomic swap + deleted-path relaunch.
+  - Stopped playback, unlinked the old Unix IPC socket before spawning, hid the old window immediately, and passed `ZUNO_RELAUNCH_WAIT_MS=350` so the newly launched process acquires D-Bus MPRIS2, system tray, audio output, `zuno.sock`, and cleans up `.old` binaries with zero race conditions.
+  - Replaced silent `.catch(() => {})` on **Restart Zuno Now** in `UpdateDialog.tsx` with a spinning **Restarting…** state and visible error feedback if relaunch ever fails.
+
 ## [0.0.25] — 2026-11-26
 
 Added native **Android APK** (`zuno-android-arm64.apk`) support and automated signed APK publishing alongside Linux, macOS, and Windows in GitHub Releases.

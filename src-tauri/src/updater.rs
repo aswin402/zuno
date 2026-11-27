@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -226,9 +226,46 @@ impl Drop for TempDirGuard {
     }
 }
 
+/// Strip OS suffixes that appear after an in-place binary swap:
+/// - Linux `/proc/self/exe` appends `" (deleted)"` once the old binary is unlinked.
+/// - `atomic_swap_binary` moves the running executable aside as `"<name>.old"`.
+pub fn sanitize_exe_path(raw: &Path) -> PathBuf {
+    let s = raw.to_string_lossy();
+    let trimmed = s.strip_suffix(" (deleted)").unwrap_or(&s);
+    let cleaned = trimmed.strip_suffix(".old").unwrap_or(trimmed);
+    PathBuf::from(cleaned)
+}
+
+/// Resolve the true on-disk path of the Zuno executable even after an in-place swap.
+pub fn resolve_current_exe_path() -> Result<PathBuf, String> {
+    let raw = std::env::current_exe()
+        .map_err(|e| format!("cannot locate running Zuno binary: {e}"))?;
+    let cleaned = sanitize_exe_path(&raw);
+    if cleaned.is_file() {
+        return Ok(cleaned);
+    }
+    if raw.is_file() {
+        return Ok(raw);
+    }
+    Ok(cleaned)
+}
+
+/// Pause briefly when relaunched right after an in-place update so the exiting instance
+/// finishes releasing D-Bus MPRIS, system tray, audio output, and Windows `.old` file locks.
+pub fn wait_if_relaunched() {
+    if let Ok(raw) = std::env::var("ZUNO_RELAUNCH_WAIT_MS") {
+        if let Ok(ms) = raw.trim().parse::<u64>() {
+            let clamped = ms.min(2_000);
+            if clamped > 0 {
+                std::thread::sleep(Duration::from_millis(clamped));
+            }
+        }
+    }
+}
+
 /// Remove any `.old` rollback binaries left over from a previous self-update.
 pub fn cleanup_old_binaries() {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = resolve_current_exe_path() else {
         return;
     };
     let Some(dir) = exe.parent() else {
@@ -484,7 +521,7 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let target = current_target().to_string();
     let repo = repo_slug();
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("zuno"));
+    let exe_path = resolve_current_exe_path().unwrap_or_else(|_| PathBuf::from("zuno"));
     let writable = !cfg!(target_os = "android") && can_write_install_dir(&exe_path);
 
     // 1. Try Zuno's lightweight `latest.json` release manifest first
@@ -715,8 +752,7 @@ pub fn install_update(
 
     #[cfg(not(target_os = "android"))]
     {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("cannot locate running Zuno binary: {e}"))?;
+    let exe_path = resolve_current_exe_path()?;
     if !can_write_install_dir(&exe_path) {
         return Err(format!(
             "No write permission in {}. Reinstall via the CLI installer script instead.",
@@ -877,12 +913,41 @@ pub fn install_update(
     }
 }
 
-/// Spawn the newly installed Zuno binary in the background so the app can exit cleanly.
-pub fn spawn_relaunched_app() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("failed to locate binary: {e}"))?;
-    Command::new(exe)
-        .spawn()
-        .map_err(|e| format!("failed to launch updated Zuno: {e}"))?;
+/// Spawn the newly installed Zuno binary in the background so the old instance can exit cleanly.
+/// Prefers the exact `installed_path` returned by `install_update`, falling back to a sanitized
+/// `current_exe()` so Linux's `/proc/self/exe` `" (deleted)"` and `".old"` suffixes never break restart.
+pub fn spawn_relaunched_app(preferred_exe: Option<&Path>) -> Result<(), String> {
+    let exe = match preferred_exe {
+        Some(p) if p.is_file() => p.to_path_buf(),
+        Some(p) => {
+            let cleaned = sanitize_exe_path(p);
+            if cleaned.is_file() {
+                cleaned
+            } else {
+                resolve_current_exe_path()?
+            }
+        }
+        None => resolve_current_exe_path()?,
+    };
+
+    if !exe.is_file() {
+        return Err(format!(
+            "updated Zuno binary not found at {}",
+            exe.display()
+        ));
+    }
+
+    let mut cmd = Command::new(&exe);
+    cmd.env("ZUNO_RELAUNCH_WAIT_MS", "350")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().map_err(|e| {
+        format!(
+            "failed to launch updated Zuno ({}): {e}",
+            exe.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -1094,6 +1159,72 @@ mod tests {
         assert!(backup_dir.join("manifest.json").is_file());
         // Verify zero-copy: songs/ was NOT duplicated into the backup!
         assert!(!backup_dir.join("songs").exists());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sanitize_exe_path_strips_linux_deleted_and_old_suffixes() {
+        assert_eq!(
+            sanitize_exe_path(Path::new("/home/user/.local/bin/zuno.old (deleted)")),
+            PathBuf::from("/home/user/.local/bin/zuno")
+        );
+        assert_eq!(
+            sanitize_exe_path(Path::new("/home/user/.local/bin/zuno (deleted)")),
+            PathBuf::from("/home/user/.local/bin/zuno")
+        );
+        assert_eq!(
+            sanitize_exe_path(Path::new("/home/user/.local/bin/zuno.old")),
+            PathBuf::from("/home/user/.local/bin/zuno")
+        );
+        assert_eq!(
+            sanitize_exe_path(Path::new("C:\\Users\\zuno\\bin\\zuno.exe.old")),
+            PathBuf::from("C:\\Users\\zuno\\bin\\zuno.exe")
+        );
+        assert_eq!(
+            sanitize_exe_path(Path::new("/home/user/.local/bin/zuno")),
+            PathBuf::from("/home/user/.local/bin/zuno")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_swap_and_relaunch_runs_newly_installed_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("zuno-relaunch-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+
+        let target = base.join("zuno");
+        let new_bin = base.join("zuno-v2");
+        let marker = base.join("ran-v2.txt");
+
+        fs::write(&target, "#!/bin/sh\necho v1\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+
+        fs::write(
+            &new_bin,
+            format!("#!/bin/sh\necho \"$ZUNO_RELAUNCH_WAIT_MS\" > \"{}\"\n", marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&new_bin, fs::Permissions::from_mode(0o755)).unwrap();
+
+        atomic_swap_binary(&new_bin, &target).unwrap();
+
+        // Simulate Linux `/proc/self/exe` after `atomic_swap_binary` unlinked `zuno.old`
+        let deleted_path = PathBuf::from(format!("{}.old (deleted)", target.display()));
+        spawn_relaunched_app(Some(&deleted_path)).unwrap();
+
+        // Wait up to 2s for the spawned script to write the marker
+        for _ in 0..40 {
+            if marker.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let content = fs::read_to_string(&marker).expect("relaunched binary should have run");
+        assert_eq!(content.trim(), "350");
 
         let _ = fs::remove_dir_all(&base);
     }

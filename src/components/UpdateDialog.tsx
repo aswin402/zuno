@@ -112,6 +112,8 @@ export function UpdateDialog({
   })
   const [installResult, setInstallResult] = useState<UpdateInstallResult | null>(null)
   const [installError, setInstallError] = useState<string | null>(null)
+  const [restarting, setRestarting] = useState(false)
+  const [relaunchError, setRelaunchError] = useState<string | null>(null)
   const [manualBackupBusy, setManualBackupBusy] = useState(false)
   const [manualBackup, setManualBackup] = useState<BackupReport | null>(null)
   const [copiedCli, setCopiedCli] = useState(false)
@@ -204,6 +206,18 @@ export function UpdateDialog({
     }
   }
 
+  async function handleRelaunch() {
+    if (restarting) return
+    setRelaunchError(null)
+    setRestarting(true)
+    try {
+      await zunoApi.relaunchApp()
+    } catch (err) {
+      setRestarting(false)
+      setRelaunchError(formatError(err))
+    }
+  }
+
   function handleCopyCli() {
     navigator.clipboard?.writeText(CLI_INSTALL_CMD).catch(() => {})
     setCopiedCli(true)
@@ -266,8 +280,20 @@ export function UpdateDialog({
               </div>
             </div>
 
+            {relaunchError && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {relaunchError}
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={restarting}
+                onClick={onClose}
+              >
                 Restart later
               </Button>
               <Button
@@ -275,10 +301,11 @@ export function UpdateDialog({
                 variant="default"
                 size="sm"
                 className="gap-1.5"
-                onClick={() => zunoApi.relaunchApp().catch(() => {})}
+                disabled={restarting}
+                onClick={handleRelaunch}
               >
-                <RotateCw className="h-3.5 w-3.5" />
-                Restart Zuno Now
+                <RotateCw className={cn('h-3.5 w-3.5', restarting && 'animate-spin')} />
+                {restarting ? 'Restarting…' : 'Restart Zuno Now'}
               </Button>
             </div>
           </div>
