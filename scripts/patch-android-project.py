@@ -641,7 +641,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class ZunoMediaService : Service() {{
   data class NowPlayingState(
@@ -844,10 +846,14 @@ class ZunoMediaService : Service() {{
   private var noisyReceiverRegistered = false
   private var radioPlayer: MediaPlayer? = null
   private var radioActive = false
+  private val radioGeneration = AtomicLong(0L)
   private var cachedArtworkKey: String = ""
   private var cachedArtworkBitmap: Bitmap? = null
   private var fallbackArtworkBitmap: Bitmap? = null
   private val syncLoopRunning = AtomicBoolean(false)
+  private val controlExecutor = Executors.newSingleThreadExecutor {{ r ->
+    Thread(r, "zuno-media-ctl").apply {{ isDaemon = true }}
+  }}
 
   private val noisyReceiver = object : BroadcastReceiver() {{
     override fun onReceive(context: Context?, intent: Intent?) {{
@@ -977,6 +983,10 @@ class ZunoMediaService : Service() {{
   override fun onDestroy() {{
     activeInstance = null
     syncLoopRunning.set(false)
+    try {{
+      controlExecutor.shutdownNow()
+    }} catch (_: Exception) {{
+    }}
     stopNativeRadioPlayer()
     releasePlaybackLocks()
     unregisterNoisyReceiver()
@@ -1087,6 +1097,7 @@ class ZunoMediaService : Service() {{
   private fun startNativeRadioPlayer(url: String, name: String, subtitle: String) {{
     stopNativeRadioPlayer()
     if (url.isBlank()) return
+    val gen = radioGeneration.incrementAndGet()
     radioActive = true
     val connectingState = NowPlayingState(
       trackId = "radio:" + url.hashCode(),
@@ -1114,6 +1125,7 @@ class ZunoMediaService : Service() {{
         setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
         setDataSource(url)
         setOnPreparedListener {{ player ->
+          if (gen != radioGeneration.get() || player !== radioPlayer) return@setOnPreparedListener
           try {{
             player.start()
             radioEventListener?.invoke("playing", "")
@@ -1122,12 +1134,14 @@ class ZunoMediaService : Service() {{
             radioEventListener?.invoke("error", e.message ?: "Stream playback failed")
           }}
         }}
-        setOnErrorListener {{ _, what, extra ->
+        setOnErrorListener {{ player, what, extra ->
+          if (gen != radioGeneration.get() || player !== radioPlayer) return@setOnErrorListener true
           radioEventListener?.invoke("error", "Stream error (" + what + "/" + extra + ")")
           stopNativeRadioPlayer()
           true
         }}
-        setOnCompletionListener {{
+        setOnCompletionListener {{ player ->
+          if (gen != radioGeneration.get() || player !== radioPlayer) return@setOnCompletionListener
           radioEventListener?.invoke("disconnected", "")
           currentState?.let {{ renderMediaNotification(it.copy(isPlaying = false)) }}
         }}
@@ -1135,12 +1149,15 @@ class ZunoMediaService : Service() {{
       }}
       radioPlayer = mp
     }} catch (e: Exception) {{
-      radioActive = false
-      radioEventListener?.invoke("error", e.message ?: "Unable to connect to stream")
+      if (gen == radioGeneration.get()) {{
+        radioActive = false
+        radioEventListener?.invoke("error", e.message ?: "Unable to connect to stream")
+      }}
     }}
   }}
 
   fun stopNativeRadioPlayer() {{
+    radioGeneration.incrementAndGet()
     radioActive = false
     val mp = radioPlayer
     radioPlayer = null
@@ -1206,22 +1223,23 @@ class ZunoMediaService : Service() {{
       return
     }}
 
-    Thread {{
-      val (port, token) = creds
-      val endpoint = if (op == "seek" && seekSecs >= 0.0) {{
-        "/seek/" + (seekSecs * 1000.0).toLong()
-      }} else {{
-        "/control/" + op
+    try {{
+      controlExecutor.execute {{
+        val (port, token) = creds
+        val endpoint = if (op == "seek" && seekSecs >= 0.0) {{
+          "/seek/" + (seekSecs * 1000.0).toLong()
+        }} else {{
+          "/control/" + op
+        }}
+        val body = callRustBridge("POST", port, token, endpoint)
+        if (body != null) {{
+          applyRustStatusJson(body, port, token)
+        }} else {{
+          actionListener?.invoke(op, seekSecs)
+        }}
       }}
-      val body = callRustBridge("POST", port, token, endpoint)
-      if (body != null) {{
-        applyRustStatusJson(body, port, token)
-      }} else {{
-        actionListener?.invoke(op, seekSecs)
-      }}
-    }}.apply {{
-      isDaemon = true
-      start()
+    }} catch (_: Exception) {{
+      actionListener?.invoke(op, seekSecs)
     }}
   }}
 
@@ -1251,12 +1269,12 @@ class ZunoMediaService : Service() {{
 
   private fun refreshFromRustBridgeAsync() {{
     val creds = ensureBridgeCredentials(applicationContext) ?: return
-    Thread {{
-      val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: return@Thread
-      applyRustStatusJson(body, creds.first, creds.second)
-    }}.apply {{
-      isDaemon = true
-      start()
+    try {{
+      controlExecutor.execute {{
+        val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: return@execute
+        applyRustStatusJson(body, creds.first, creds.second)
+      }}
+    }} catch (_: Exception) {{
     }}
   }}
 
@@ -1282,6 +1300,32 @@ class ZunoMediaService : Service() {{
     }}
   }}
 
+  /** Downsample embedded artwork to <= 256px to avoid Android OOM and Binder TransactionTooLargeException. */
+  private fun decodeSampledBitmap(bytes: ByteArray, maxDim: Int = 256): Bitmap? {{
+    if (bytes.isEmpty()) return null
+    return try {{
+      val bounds = BitmapFactory.Options().apply {{ inJustDecodeBounds = true }}
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+      var sampleSize = 1
+      val rawW = bounds.outWidth
+      val rawH = bounds.outHeight
+      if (rawW > maxDim || rawH > maxDim) {{
+        var halfW = rawW / 2
+        var halfH = rawH / 2
+        while (halfW / sampleSize >= maxDim && halfH / sampleSize >= maxDim) {{
+          sampleSize *= 2
+        }}
+      }}
+      val opts = BitmapFactory.Options().apply {{
+        inSampleSize = sampleSize
+        inPreferredConfig = Bitmap.Config.RGB_565
+      }}
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }} catch (_: Throwable) {{
+      null
+    }}
+  }}
+
   private fun fetchCoverBytesFromBridge(port: Int, token: String, trackId: String): Bitmap? {{
     if (trackId.isBlank()) return null
     var conn: HttpURLConnection? = null
@@ -1294,11 +1338,12 @@ class ZunoMediaService : Service() {{
         setRequestProperty("X-Zuno-Token", token)
       }}
       if (conn.responseCode in 200..299) {{
-        conn.inputStream.use {{ BitmapFactory.decodeStream(it) }}
+        val bytes = conn.inputStream.use {{ it.readBytes() }}
+        decodeSampledBitmap(bytes, 256)
       }} else {{
         null
       }}
-    }} catch (_: Exception) {{
+    }} catch (_: Throwable) {{
       null
     }} finally {{
       conn?.disconnect()
@@ -1385,7 +1430,7 @@ class ZunoMediaService : Service() {{
       try {{
         val rawPart = cleaned.substringAfter("base64,", cleaned)
         val bytes = Base64.decode(rawPart, Base64.DEFAULT)
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bmp = decodeSampledBitmap(bytes, 256)
         if (bmp != null) {{
           cachedArtworkKey = if (state.trackId.isNotBlank()) "tid:" + state.trackId else cleaned
           cachedArtworkBitmap = bmp
@@ -1548,7 +1593,10 @@ class ZunoMediaService : Service() {{
     }}
 
     // Keep Home Screen & Lock Screen App Widgets synchronized live
-    ZunoAppWidgetProvider.updateAll(applicationContext, state, art)
+    try {{
+      ZunoAppWidgetProvider.updateAll(applicationContext, state, art)
+    }} catch (_: Throwable) {{
+    }}
   }}
 
   @Synchronized

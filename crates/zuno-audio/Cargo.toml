@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 rodio.workspace = true
+symphonia.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zuno-core = { path = "../zuno-core" }

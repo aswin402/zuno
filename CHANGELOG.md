@@ -5,6 +5,29 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.32] — 2026-11-27
+
+Eliminated the playback crash on double-clicking tracks / rapid skipping (`rodio 0.20` Symphonia `SeekError` panic) and hardened desktop, Android, and frontend concurrency, mutex safety, and error recovery across the entire codebase.
+
+### Fixed
+- **Audio Decoder Crash on Double-Click / Rapid Skip / M4A & FLAC Files (`crates/zuno-audio/src/decoder.rs`, `crates/zuno-audio/src/engine.rs`, `Cargo.toml`)**:
+  - Replaced Rodio 0.20's `Decoder::new` wrapper (whose `ReadSeekSource` hardcoded `byte_len() -> None` and hit `unreachable!("Seek errors should not occur during initialization")` on ISO-MP4/M4A & FLAC files) with a dedicated pure-Rust `SymphoniaFileSource` reporting real OS `byte_len()`, extension hints, native `f32` sample output, accurate `total_duration()`, and overflow-safe `try_seek()`.
+  - Changed `[profile.release]` from `panic = "abort"` to `panic = "unwind"` and wrapped every `zuno-audio` thread engine call in `std::panic::catch_unwind` so a malformed track or third-party decoder error can never kill the audio thread or crash Zuno.
+  - Reordered `RodioEngine::load_and_play` to open and decode the incoming track before stopping/fading out the active sink, and skipped silent crossfade-outs when switching rapidly during a fade-in.
+- **Rapid Double-Click / UI Freeze / Mutex Poison Hardening (`crates/zuno-audio/src/service.rs`, `crates/zuno-audio/src/radio.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/mpris.rs`, `src-tauri/src/cover_cache.rs`, `crates/zuno-core/src/settings.rs`)**:
+  - Added atomic `load_gen` coalescing in `ZunoService` so rapid double-clicks / Next taps skip decoding superseded queued tracks cleanly.
+  - Converted `zuno_ipc`, `zuno_radio_disconnect`, `zuno_radio_stop`, `zuno_fm_stop`, and radio store commands to `async fn` via `spawn_blocking`, and offloaded Linux MPRIS2 D-Bus and system tray actions off the GTK/GLib Main Loop so playback I/O never stalls the UI.
+  - Persisted `last_played_ids` without bumping `settings.revision` on every track change (eliminating redundant frontend settings re-hydration races on every skip).
+  - Replaced `.lock().unwrap()` across `service.rs`, `radio.rs`, `mpris.rs`, and `cover_cache.rs` with poison-safe locking, and sanitized embedded cover art MIME headers so malformed metadata can never panic the cover server.
+- **Android Native Service Race Conditions & Artwork Memory Safety (`scripts/patch-android-project.py`)**:
+  - Serialized `ZunoMediaService` localhost bridge calls on a dedicated single-thread executor (`controlExecutor`) instead of spawning unbounded concurrent threads on rapid notification/widget double-taps.
+  - Added `radioGeneration` stale-callback guards in `startNativeRadioPlayer` so rapidly switching Online FM stations cannot let a dying `MediaPlayer` terminate the newly connected station.
+  - Downsampled decoded album artwork to `<= 256px` (`decodeSampledBitmap`) to prevent Android `OutOfMemoryError` and Binder `TransactionTooLargeException` on lockscreen/widget updates.
+- **Frontend Double-Click Sequencing, Error Surfacing & Recovery (`src/App.tsx`, `src/components/ErrorBoundary.tsx`, `src/main.tsx`)**:
+  - Added monotonic `playbackSeqRef` request sequencing across all playback actions and the 350ms status poller so out-of-order responses never overwrite newer playback state.
+  - Guarded `selectOrToggleTrack` against accidental double-clicks on a just-started track row (`380ms` debounce) so double-clicking a song starts it cleanly instead of immediately pausing or double-queuing.
+  - Fixed `handleUndoAutoNext` in native audio mode (`zunoApi.jumpQueue`), added missing `desktopNative` dependency in `startOnlineRadioStream`, surfaced track load errors via toast notifications, and wrapped the root app in a Pure OLED `ErrorBoundary`.
+
 ## [0.0.31] — 2026-11-27
 
 Fixed Android in-place APK upgrades ("App not installed"), introduced a minimal touch-first mobile Customize experience, and synced all 41 live appearance settings as Zuno's defaults.

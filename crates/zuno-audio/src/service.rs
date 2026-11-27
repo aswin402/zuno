@@ -9,14 +9,14 @@ use serde_json::{Value, json};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
 use zuno_core::settings::{
     self, AppSettings, appearance_options_catalog, apply_eq_preset, apply_settings_patch,
     backup_user_data_core, builtin_eq_presets, delete_custom_eq_preset, extract_crossfade_secs,
     extract_eq_tuple, load_app_settings, record_last_played, reset_eq, save_app_settings,
-    save_custom_eq_preset,
+    save_app_settings_quiet, save_custom_eq_preset,
 };
 use zuno_core::{
     CoverArt, Library, PersistedState, PlayState, PlaybackStatus, Playlist, QueueManager,
@@ -26,6 +26,48 @@ use zuno_core::{
 const TICK_IDLE_MS: u64 = 200;
 const TICK_FADING_MS: u64 = 25;
 const MAX_AUTO_ADVANCE_SKIPS: usize = 5;
+
+fn lock_unpoisoned<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unexpected audio backend panic".to_string()
+    }
+}
+
+fn catch_audio_result<F>(op: &str, f: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(payload) => {
+            let msg = panic_payload_message(payload);
+            eprintln!("[zuno-audio] recovered from panic in {op}: {msg}");
+            Err(ZunoError::Audio(format!("audio backend error during {op}: {msg}")))
+        }
+    }
+}
+
+fn catch_audio_op<T, F>(op: &str, fallback: T, f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(val) => val,
+        Err(payload) => {
+            let msg = panic_payload_message(payload);
+            eprintln!("[zuno-audio] recovered from panic in {op}: {msg}");
+            fallback
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PlaybackLoopMode {
@@ -65,6 +107,7 @@ impl PlayTarget {
 
 enum AudioCmd {
     LoadAndPlay {
+        load_gen: u64,
         path: PathBuf,
         volume: f32,
         reply: mpsc::Sender<Result<()>>,
@@ -101,6 +144,7 @@ struct InnerState {
 pub struct ZunoService {
     inner: Arc<Mutex<InnerState>>,
     audio_tx: mpsc::Sender<AudioCmd>,
+    load_gen: Arc<AtomicU64>,
     position_bits: Arc<AtomicU64>,
     spectrum: Option<Arc<SharedSpectrum>>,
     radio: Arc<RadioPlaybackManager>,
@@ -152,11 +196,13 @@ impl ZunoService {
         }));
 
         let (tx, rx) = mpsc::channel::<AudioCmd>();
+        let load_gen = Arc::new(AtomicU64::new(0));
         let position_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let spectrum = engine.spectrum();
         let service = Arc::new(Self {
             inner: Arc::clone(&inner),
             audio_tx: tx.clone(),
+            load_gen: Arc::clone(&load_gen),
             position_bits: Arc::clone(&position_bits),
             spectrum,
             radio: Arc::new(RadioPlaybackManager::new()),
@@ -171,11 +217,14 @@ impl ZunoService {
         let weak_service = Arc::downgrade(&service);
         let thread_inner = Arc::clone(&inner);
         let thread_pos = Arc::clone(&position_bits);
+        let thread_load_gen = Arc::clone(&load_gen);
 
         // Single dedicated audio thread: owns OutputStream/Sink safely.
         // Blocks with zero CPU wakeups while idle/paused, ticks at 25ms during active crossfades,
         // and uses an absolute `next_tick` deadline (200ms) while playing so frequent status
         // queries never block or starve auto-advance or crossfade envelopes.
+        // Every backend call is guarded by `catch_unwind` so a malformed file or third-party
+        // decoder bug can never kill the audio thread or crash the application.
         std::thread::Builder::new()
             .name("zuno-audio".into())
             .spawn(move || {
@@ -197,21 +246,33 @@ impl ZunoService {
                     let mut timed_out = false;
                     match msg {
                         Ok(AudioCmd::LoadAndPlay {
+                            load_gen: cmd_gen,
                             path,
                             volume,
                             reply,
                         }) => {
-                            let res = engine.load_and_play(&path, volume);
-                            mode = if res.is_ok() {
-                                PlaybackLoopMode::PlayingFile
+                            if cmd_gen < thread_load_gen.load(Ordering::Acquire) {
+                                // A newer track load or stop is already queued — skip decoding stale track.
+                                let _ = reply.send(Ok(()));
                             } else {
-                                PlaybackLoopMode::Idle
-                            };
-                            publish_pos(0.0);
-                            fading = engine.tick_transition();
-                            next_tick = Instant::now()
-                                + Duration::from_millis(if fading { TICK_FADING_MS } else { TICK_IDLE_MS });
-                            let _ = reply.send(res);
+                                let res = catch_audio_result("load_and_play", || {
+                                    engine.load_and_play(&path, volume)
+                                });
+                                if res.is_ok() {
+                                    mode = PlaybackLoopMode::PlayingFile;
+                                    publish_pos(0.0);
+                                }
+                                fading = catch_audio_op("tick_transition", false, || {
+                                    engine.tick_transition()
+                                });
+                                next_tick = Instant::now()
+                                    + Duration::from_millis(if fading {
+                                        TICK_FADING_MS
+                                    } else {
+                                        TICK_IDLE_MS
+                                    });
+                                let _ = reply.send(res);
+                            }
                         }
                         Ok(AudioCmd::LoadPcmStream {
                             reader,
@@ -220,7 +281,9 @@ impl ZunoService {
                             volume,
                             reply,
                         }) => {
-                            let res = engine.load_pcm_stream(reader, sample_rate, channels, volume);
+                            let res = catch_audio_result("load_pcm_stream", || {
+                                engine.load_pcm_stream(reader, sample_rate, channels, volume)
+                            });
                             mode = if res.is_ok() {
                                 PlaybackLoopMode::LivePcm
                             } else {
@@ -231,41 +294,48 @@ impl ZunoService {
                             let _ = reply.send(res);
                         }
                         Ok(AudioCmd::Pause) => {
-                            publish_pos(engine.position_secs());
-                            engine.pause();
+                            let pos = catch_audio_op("position_secs", 0.0, || engine.position_secs());
+                            publish_pos(pos);
+                            catch_audio_op("pause", (), || engine.pause());
                             if mode == PlaybackLoopMode::PlayingFile {
                                 mode = PlaybackLoopMode::Idle;
                             }
                             fading = false;
                         }
                         Ok(AudioCmd::Resume) => {
-                            engine.resume();
+                            catch_audio_op("resume", (), || engine.resume());
                             if mode != PlaybackLoopMode::LivePcm {
                                 mode = PlaybackLoopMode::PlayingFile;
                             }
                             next_tick = Instant::now() + Duration::from_millis(TICK_IDLE_MS);
                         }
                         Ok(AudioCmd::Stop) => {
-                            engine.stop();
+                            catch_audio_op("stop", (), || engine.stop());
                             mode = PlaybackLoopMode::Idle;
                             publish_pos(0.0);
                             fading = false;
                         }
                         Ok(AudioCmd::Seek { pos, reply }) => {
-                            let res = engine.seek(pos);
+                            let res = catch_audio_result("seek", || engine.seek(pos));
                             if res.is_ok() {
                                 publish_pos(pos.as_secs_f64());
                             }
                             let _ = reply.send(res);
                         }
-                        Ok(AudioCmd::SetVolume(v)) => engine.set_volume(v),
-                        Ok(AudioCmd::SetEq(eq)) => engine.set_eq(eq),
+                        Ok(AudioCmd::SetVolume(v)) => {
+                            catch_audio_op("set_volume", (), || engine.set_volume(v));
+                        }
+                        Ok(AudioCmd::SetEq(eq)) => {
+                            catch_audio_op("set_eq", (), || engine.set_eq(eq));
+                        }
                         Ok(AudioCmd::SetTransition(secs)) => {
                             crossfade_secs = secs.clamp(0.0, CROSSFADE_MAX_SECS);
-                            engine.set_crossfade(crossfade_secs);
+                            catch_audio_op("set_crossfade", (), || {
+                                engine.set_crossfade(crossfade_secs)
+                            });
                         }
                         Ok(AudioCmd::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            engine.stop();
+                            catch_audio_op("stop", (), || engine.stop());
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -275,8 +345,9 @@ impl ZunoService {
 
                     let active = mode == PlaybackLoopMode::PlayingFile;
                     if (active || fading) && (timed_out || Instant::now() >= next_tick) {
-                        fading = engine.tick_transition();
-                        let pos = engine.position_secs();
+                        fading =
+                            catch_audio_op("tick_transition", false, || engine.tick_transition());
+                        let pos = catch_audio_op("position_secs", 0.0, || engine.position_secs());
                         if active {
                             publish_pos(pos);
                         }
@@ -284,28 +355,29 @@ impl ZunoService {
                         // Check if current track is approaching end for early overlapping crossfade,
                         // or has finished playing normally.
                         let early_crossfade = if crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS && !fading && active {
-                            let cur_dur = thread_inner
-                                .lock()
-                                .ok()
-                                .and_then(|s| {
-                                    if s.play_state != PlayState::Playing {
-                                        return None;
-                                    }
-                                    let tid = s.queue.current_track_id()?;
-                                    Some(s.library.track_by_id(tid)?.duration_secs as f64)
-                                })
-                                .unwrap_or(0.0);
+                            let cur_dur = {
+                                let s = lock_unpoisoned(&thread_inner);
+                                if s.play_state != PlayState::Playing {
+                                    0.0
+                                } else {
+                                    s.queue
+                                        .current_track_id()
+                                        .and_then(|tid| s.library.track_by_id(tid))
+                                        .map(|t| t.duration_secs as f64)
+                                        .unwrap_or(0.0)
+                                }
+                            };
                             cur_dur > (crossfade_secs as f64) + 1.5
                                 && pos >= cur_dur - (crossfade_secs as f64)
                         } else {
                             false
                         };
 
-                        if active && (early_crossfade || engine.is_finished()) {
-                            let should_advance = thread_inner
-                                .lock()
-                                .map(|s| s.play_state == PlayState::Playing)
-                                .unwrap_or(false);
+                        let finished =
+                            catch_audio_op("is_finished", false, || engine.is_finished());
+                        if active && (early_crossfade || finished) {
+                            let should_advance =
+                                lock_unpoisoned(&thread_inner).play_state == PlayState::Playing;
                             if should_advance {
                                 if let Some(svc) = weak_service.upgrade() {
                                     let mut advanced = false;
@@ -313,11 +385,20 @@ impl ZunoService {
                                     for _ in 0..MAX_AUTO_ADVANCE_SKIPS {
                                         match svc.advance_internal(true) {
                                             Some((path, vol)) => {
-                                                if engine.load_and_play(&path, vol).is_ok() {
+                                                let ok = catch_audio_result("auto_advance", || {
+                                                    engine.load_and_play(&path, vol)
+                                                })
+                                                .is_ok();
+                                                if ok {
                                                     publish_pos(0.0);
-                                                    fading = engine.tick_transition();
+                                                    fading = catch_audio_op(
+                                                        "tick_transition",
+                                                        false,
+                                                        || engine.tick_transition(),
+                                                    );
                                                     advanced = true;
-                                                    if let Ok(st) = thread_inner.lock() {
+                                                    {
+                                                        let st = lock_unpoisoned(&thread_inner);
                                                         Self::persist_locked(&st, 0.0);
                                                     }
                                                     svc.notify_change();
@@ -330,21 +411,25 @@ impl ZunoService {
                                             }
                                         }
                                     }
-                                    if !advanced && (!hit_end || engine.is_finished()) {
+                                    let still_finished = catch_audio_op("is_finished", true, || {
+                                        engine.is_finished()
+                                    });
+                                    if !advanced && (!hit_end || still_finished) {
                                         // If early crossfade fired on the last track with repeat off,
                                         // let the final track finish cleanly instead of cutting it off early!
-                                        engine.stop();
+                                        catch_audio_op("stop", (), || engine.stop());
                                         mode = PlaybackLoopMode::Idle;
                                         publish_pos(0.0);
                                         fading = false;
-                                        if let Ok(mut st) = thread_inner.lock() {
+                                        {
+                                            let mut st = lock_unpoisoned(&thread_inner);
                                             st.play_state = PlayState::Stopped;
                                             Self::persist_locked(&st, 0.0);
                                         }
                                         svc.notify_change();
                                     }
                                 }
-                            } else if engine.is_finished() {
+                            } else if finished {
                                 mode = PlaybackLoopMode::Idle;
                                 fading = false;
                             }
@@ -377,7 +462,7 @@ impl ZunoService {
     }
 
     pub fn paths(&self) -> ZunoPaths {
-        self.inner.lock().unwrap().library.paths().clone()
+        lock_unpoisoned(&self.inner).library.paths().clone()
     }
 
     pub fn radio(&self) -> &Arc<RadioPlaybackManager> {
@@ -427,7 +512,7 @@ impl ZunoService {
     }
 
     pub fn settings_snapshot(&self) -> AppSettings {
-        self.inner.lock().unwrap().settings.clone()
+        lock_unpoisoned(&self.inner).settings.clone()
     }
 
     /// Lock-free real-time 24-band audio spectrum + bass/mid/treble/energy snapshot for visualizers.
@@ -440,7 +525,7 @@ impl ZunoService {
 
     pub fn extract_cover(&self, track_id: &str) -> Option<CoverArt> {
         let abs = {
-            let st = self.inner.lock().unwrap();
+            let st = lock_unpoisoned(&self.inner);
             let track = st.library.track_by_id(track_id)?;
             st.library.resolve_track_path(track).ok()?
         };
@@ -448,7 +533,7 @@ impl ZunoService {
     }
 
     pub fn resolve_track_file(&self, track_id: &str) -> Option<(PathBuf, String)> {
-        let st = self.inner.lock().unwrap();
+        let st = lock_unpoisoned(&self.inner);
         let track = st.library.track_by_id(track_id)?;
         let abs = st.library.resolve_track_path(track).ok()?;
         Some((abs, track.rel_path.clone()))
@@ -470,12 +555,13 @@ impl ZunoService {
         channels: u16,
     ) -> Result<()> {
         let vol = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = lock_unpoisoned(&self.inner);
             if st.play_state == PlayState::Playing {
                 st.play_state = PlayState::Paused;
             }
             st.volume
         };
+        self.load_gen.fetch_add(1, Ordering::AcqRel);
         let (reply_tx, reply_rx) = mpsc::channel();
         self.audio_tx
             .send(AudioCmd::LoadPcmStream {
@@ -493,6 +579,7 @@ impl ZunoService {
 
     /// Stop any live PCM hardware FM stream without clearing the user's song queue.
     pub fn stop_pcm_stream(&self) {
+        self.load_gen.fetch_add(1, Ordering::AcqRel);
         let _ = self.audio_tx.send(AudioCmd::Stop);
     }
 
@@ -500,7 +587,7 @@ impl ZunoService {
     pub fn pause_local_playback(&self) {
         let _ = self.audio_tx.send(AudioCmd::Pause);
         let pos = self.audio_position();
-        let mut st = self.inner.lock().unwrap();
+        let mut st = lock_unpoisoned(&self.inner);
         if st.play_state == PlayState::Playing {
             st.play_state = PlayState::Paused;
             Self::persist_locked(&st, pos);
@@ -558,7 +645,7 @@ impl ZunoService {
 
             IpcRequest::GetInfo => {
                 let paths = self.paths();
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Json(json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "root_dir": paths.root().display().to_string(),
@@ -583,7 +670,7 @@ impl ZunoService {
             }
 
             IpcRequest::Rescan => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 st.library.rescan()?;
                 Self::prune_queue_locked(&mut st);
                 let count = st.library.tracks().len();
@@ -609,7 +696,7 @@ impl ZunoService {
                 sort_by,
                 sort_dir,
             } => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 let mut refs: Vec<&Track> = match folder.as_deref().map(str::trim) {
                     Some(f) if !f.is_empty() && f != ROOT_FOLDER_LABEL => {
                         st.library.tracks_in_folder(f)
@@ -662,7 +749,7 @@ impl ZunoService {
             }
 
             IpcRequest::SearchSongs { query, limit } => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 let lim = limit.unwrap_or(50);
                 let tracks: Vec<Track> = st
                     .library
@@ -675,17 +762,17 @@ impl ZunoService {
             }
 
             IpcRequest::ListFolders => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Folders(st.library.folders()))
             }
 
             IpcRequest::ListSources => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Sources(st.library.sources()))
             }
 
             IpcRequest::AddSource { path } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let sources = st.library.add_source(&path)?;
                 drop(st);
                 self.library_rev.fetch_add(1, Ordering::Relaxed);
@@ -693,7 +780,7 @@ impl ZunoService {
             }
 
             IpcRequest::RemoveSource { path } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let sources = st.library.remove_source(&path)?;
                 let current_gone = st
                     .queue
@@ -711,18 +798,18 @@ impl ZunoService {
             }
 
             IpcRequest::ListPlaylists => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Playlists(st.library.playlists().to_vec()))
             }
 
             IpcRequest::GetPlaylist { name } => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 let (playlist, tracks) = st.library.playlist_tracks(&name)?;
                 Ok(IpcData::PlaylistDetail { playlist, tracks })
             }
 
             IpcRequest::CreatePlaylist { name, track_ids } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let playlist = st.library.create_playlist(&name, &track_ids)?;
                 let detail = Self::playlist_detail_locked(&st, playlist);
                 drop(st);
@@ -731,7 +818,7 @@ impl ZunoService {
             }
 
             IpcRequest::DeletePlaylist { name } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let slug = st.library.delete_playlist(&name)?;
                 drop(st);
                 self.library_rev.fetch_add(1, Ordering::Relaxed);
@@ -739,7 +826,7 @@ impl ZunoService {
             }
 
             IpcRequest::AddToPlaylist { name, track_ids } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let playlist = st.library.add_to_playlist(&name, &track_ids)?;
                 let detail = Self::playlist_detail_locked(&st, playlist);
                 drop(st);
@@ -748,7 +835,7 @@ impl ZunoService {
             }
 
             IpcRequest::RemoveFromPlaylist { name, track_id } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let playlist = st.library.remove_from_playlist(&name, &track_id)?;
                 let detail = Self::playlist_detail_locked(&st, playlist);
                 drop(st);
@@ -757,7 +844,7 @@ impl ZunoService {
             }
 
             IpcRequest::ToggleFavorite { track_id } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let target_id = match track_id.filter(|s| !s.trim().is_empty()) {
                     Some(id) => id,
                     None => st
@@ -810,7 +897,7 @@ impl ZunoService {
             }
 
             IpcRequest::DeleteSong { track_id } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let was_current = st.queue.current_track_id() == Some(track_id.as_str());
                 let title = st.library.delete_song(&track_id)?;
                 Self::prune_queue_locked(&mut st);
@@ -849,7 +936,7 @@ impl ZunoService {
                 let _ = self.audio_tx.send(AudioCmd::Pause);
                 let pos = self.audio_position();
                 {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     if st.play_state == PlayState::Playing {
                         st.play_state = PlayState::Paused;
                         Self::persist_locked(&st, pos);
@@ -873,7 +960,7 @@ impl ZunoService {
                     })));
                 }
                 let needs_load = {
-                    let st = self.inner.lock().unwrap();
+                    let st = lock_unpoisoned(&self.inner);
                     st.play_state == PlayState::Stopped
                 };
                 if needs_load {
@@ -883,7 +970,7 @@ impl ZunoService {
                     let _ = self.audio_tx.send(AudioCmd::Resume);
                 }
                 {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     if st.queue.current_track_id().is_some() {
                         st.play_state = PlayState::Playing;
                     }
@@ -910,7 +997,7 @@ impl ZunoService {
                         "playback": self.status(),
                     })));
                 }
-                let state = self.inner.lock().unwrap().play_state;
+                let state = lock_unpoisoned(&self.inner).play_state;
                 match state {
                     PlayState::Playing => self.dispatch(IpcRequest::Pause),
                     PlayState::Paused | PlayState::Stopped => self.dispatch(IpcRequest::Resume),
@@ -919,9 +1006,10 @@ impl ZunoService {
 
             IpcRequest::Stop => {
                 self.radio.clear(None, &self.fm_tuner);
+                self.load_gen.fetch_add(1, Ordering::AcqRel);
                 let _ = self.audio_tx.send(AudioCmd::Stop);
                 {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     st.play_state = PlayState::Stopped;
                     Self::persist_locked(&st, 0.0);
                 }
@@ -942,7 +1030,7 @@ impl ZunoService {
                     self.start_loaded_track(path, vol)?;
                 } else {
                     let _ = self.audio_tx.send(AudioCmd::Stop);
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     st.play_state = PlayState::Stopped;
                 }
                 self.notify_change();
@@ -959,7 +1047,7 @@ impl ZunoService {
                     })));
                 }
                 let next_pair = {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     let id = st.queue.previous();
                     id.and_then(|tid| {
                         let track = st.library.track_by_id(&tid)?;
@@ -992,7 +1080,7 @@ impl ZunoService {
                 let _ = self.audio_tx.send(AudioCmd::SetVolume(v));
                 let pos = self.audio_position();
                 {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     st.volume = v;
                     Self::persist_locked(&st, pos);
                 }
@@ -1001,7 +1089,7 @@ impl ZunoService {
             }
 
             IpcRequest::GetEq => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Json(Self::eq_payload(&st.settings)))
             }
 
@@ -1022,7 +1110,7 @@ impl ZunoService {
                     limiter,
                     bands_db: arr,
                 }));
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let current = extract_eq_tuple(&st.settings);
                 let changed = current.0 != enabled
                     || (current.1 - clean_preamp).abs() > 0.01
@@ -1047,7 +1135,7 @@ impl ZunoService {
             }
 
             IpcRequest::ApplyEqPreset { preset_id } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let preset = apply_eq_preset(&mut st.settings, &preset_id)?;
                 let paths = st.library.paths().clone();
                 save_app_settings(&paths, &mut st.settings)?;
@@ -1064,7 +1152,7 @@ impl ZunoService {
                 bands,
                 preamp,
             } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let preset = save_custom_eq_preset(&mut st.settings, &name, bands, preamp)?;
                 let paths = st.library.paths().clone();
                 save_app_settings(&paths, &mut st.settings)?;
@@ -1077,7 +1165,7 @@ impl ZunoService {
             }
 
             IpcRequest::DeleteEqPreset { id } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let removed = delete_custom_eq_preset(&mut st.settings, &id);
                 if !removed {
                     return Err(ZunoError::NotFound(format!("custom EQ preset '{id}' not found")));
@@ -1092,7 +1180,7 @@ impl ZunoService {
             }
 
             IpcRequest::ResetEq => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 reset_eq(&mut st.settings);
                 let paths = st.library.paths().clone();
                 save_app_settings(&paths, &mut st.settings)?;
@@ -1101,7 +1189,7 @@ impl ZunoService {
             }
 
             IpcRequest::GetTransition => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Json(json!({
                     "crossfade_secs": extract_crossfade_secs(&st.settings),
                     "max_secs": CROSSFADE_MAX_SECS,
@@ -1111,7 +1199,7 @@ impl ZunoService {
             IpcRequest::SetTransition { crossfade_secs } => {
                 let clamped = settings::clamp_crossfade(crossfade_secs);
                 let _ = self.audio_tx.send(AudioCmd::SetTransition(clamped));
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 if (extract_crossfade_secs(&st.settings) - clamped).abs() > 0.01 {
                     if let Some(obj) = st.settings.appearance.as_object_mut() {
                         obj.insert("crossfadeSecs".into(), json!(clamped));
@@ -1134,7 +1222,7 @@ impl ZunoService {
             } => {
                 self.radio.clear(None, &self.fm_tuner);
                 let target = {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     if let Some(s) = shuffle {
                         st.queue.set_shuffle(s);
                     }
@@ -1159,7 +1247,7 @@ impl ZunoService {
             IpcRequest::JumpQueue { index } => {
                 self.radio.clear(None, &self.fm_tuner);
                 let target = {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     st.queue.jump_to(index).and_then(|id| {
                         let track = st.library.track_by_id(&id)?;
                         let abs = st.library.resolve_track_path(track).ok()?;
@@ -1176,7 +1264,7 @@ impl ZunoService {
             IpcRequest::SetMode { shuffle, repeat } => {
                 let pos = self.audio_position();
                 {
-                    let mut st = self.inner.lock().unwrap();
+                    let mut st = lock_unpoisoned(&self.inner);
                     if let Some(s) = shuffle {
                         st.queue.set_shuffle(s);
                     }
@@ -1190,7 +1278,7 @@ impl ZunoService {
             }
 
             IpcRequest::QueueGet => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 let tracks: Vec<Track> = st
                     .queue
                     .queue_ids()
@@ -1207,7 +1295,7 @@ impl ZunoService {
                 track_ids,
                 play_next,
             } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 for id in &track_ids {
                     if st.library.track_by_id(id).is_none() {
                         return Err(ZunoError::TrackNotFound(id.clone()));
@@ -1228,8 +1316,9 @@ impl ZunoService {
 
             IpcRequest::QueueClear => {
                 self.radio.clear(None, &self.fm_tuner);
+                self.load_gen.fetch_add(1, Ordering::AcqRel);
                 let _ = self.audio_tx.send(AudioCmd::Stop);
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 st.queue.clear();
                 st.play_state = PlayState::Stopped;
                 Self::persist_locked(&st, 0.0);
@@ -1245,7 +1334,7 @@ impl ZunoService {
             }
 
             IpcRequest::GetSettings => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 Ok(IpcData::Json(json!({
                     "settings": st.settings,
                     "options": appearance_options_catalog(),
@@ -1253,7 +1342,7 @@ impl ZunoService {
             }
 
             IpcRequest::UpdateSettings { patch } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 apply_settings_patch(&mut st.settings, &patch);
                 let paths = st.library.paths().clone();
                 save_app_settings(&paths, &mut st.settings)?;
@@ -1267,7 +1356,7 @@ impl ZunoService {
             }
 
             IpcRequest::ResetSettings { scope } => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 let reset_all = scope
                     .as_deref()
                     .map(|s| s.eq_ignore_ascii_case("all"))
@@ -1293,7 +1382,7 @@ impl ZunoService {
             }
 
             IpcRequest::GetLastPlayed => {
-                let st = self.inner.lock().unwrap();
+                let st = lock_unpoisoned(&self.inner);
                 let tracks: Vec<Track> = st
                     .settings
                     .last_played_ids
@@ -1307,7 +1396,7 @@ impl ZunoService {
             }
 
             IpcRequest::ClearLastPlayed => {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = lock_unpoisoned(&self.inner);
                 st.settings.last_played_ids.clear();
                 let paths = st.library.paths().clone();
                 save_app_settings(&paths, &mut st.settings)?;
@@ -1498,7 +1587,7 @@ impl ZunoService {
                 if action.eq_ignore_ascii_case("set_zoom") {
                     if let Some(pct) = zoom_percent {
                         let clamped = settings::clamp_ui_zoom(pct) as i64;
-                        let mut st = self.inner.lock().unwrap();
+                        let mut st = lock_unpoisoned(&self.inner);
                         if let Some(obj) = st.settings.appearance.as_object_mut() {
                             obj.insert("uiZoom".into(), json!(clamped));
                         }
@@ -1524,7 +1613,7 @@ impl ZunoService {
 
     pub fn status(&self) -> PlaybackStatus {
         let pos = self.audio_position();
-        let st = self.inner.lock().unwrap();
+        let st = lock_unpoisoned(&self.inner);
         let current_track = st
             .queue
             .current_track_id()
@@ -1567,19 +1656,19 @@ impl ZunoService {
 
     fn start_loaded_track(&self, path: PathBuf, volume: f32) -> Result<()> {
         self.load_audio(path, volume)?;
-        let mut st = self.inner.lock().unwrap();
+        let mut st = lock_unpoisoned(&self.inner);
         st.play_state = PlayState::Playing;
         if let Some(tid) = st.queue.current_track_id().map(str::to_string) {
             record_last_played(&mut st.settings, &tid);
             let paths = st.library.paths().clone();
-            let _ = save_app_settings(&paths, &mut st.settings);
+            let _ = save_app_settings_quiet(&paths, &mut st.settings);
         }
         Self::persist_locked(&st, 0.0);
         Ok(())
     }
 
     fn prepare_play(&self, target: PlayTarget) -> Result<(PathBuf, f32)> {
-        let mut st = self.inner.lock().unwrap();
+        let mut st = lock_unpoisoned(&self.inner);
 
         let target_id = match target {
             PlayTarget::Playlist { name, start_id } => {
@@ -1653,7 +1742,7 @@ impl ZunoService {
     }
 
     fn advance_internal(&self, auto_advance: bool) -> Option<(PathBuf, f32)> {
-        let mut st = self.inner.lock().unwrap();
+        let mut st = lock_unpoisoned(&self.inner);
         let tid = st.queue.next(auto_advance)?;
         let track = st.library.track_by_id(&tid)?;
         let abs = st.library.resolve_track_path(track).ok()?;
@@ -1661,9 +1750,11 @@ impl ZunoService {
     }
 
     fn load_audio(&self, path: PathBuf, volume: f32) -> Result<()> {
+        let load_gen = self.load_gen.fetch_add(1, Ordering::AcqRel) + 1;
         let (reply_tx, reply_rx) = mpsc::channel();
         self.audio_tx
             .send(AudioCmd::LoadAndPlay {
+                load_gen,
                 path,
                 volume,
                 reply: reply_tx,
@@ -1885,5 +1976,185 @@ mod tests {
             "shuffled auto-advance must not be starved by frequent status() polling"
         );
         assert_eq!(svc.status().state, PlayState::Playing);
+    }
+
+    /// Simulates a decoder panic (such as Rodio 0.20's Symphonia `SeekError` unreachable! bug)
+    /// and verifies `zuno-audio` catches the panic cleanly, stays alive, and plays subsequent tracks.
+    struct PanickingMockEngine {
+        panic_on_filename: String,
+        loads: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AudioEngine for PanickingMockEngine {
+        fn load_and_play(&mut self, path: &std::path::Path, _volume: f32) -> Result<()> {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == self.panic_on_filename)
+            {
+                unreachable!("Seek errors should not occur during initialization");
+            }
+            self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn pause(&mut self) {}
+        fn resume(&mut self) {}
+        fn stop(&mut self) {}
+        fn seek(&mut self, _pos: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn set_volume(&mut self, _volume: f32) {}
+        fn position_secs(&self) -> f64 {
+            0.0
+        }
+        fn is_finished(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn audio_thread_survives_engine_panic_and_continues_playing_next_track() {
+        let tmp = tempdir().unwrap();
+        let paths = ZunoPaths::new(tmp.path());
+        paths.ensure_dirs().unwrap();
+        fs::write(paths.songs_dir().join("01-bad.m4a"), b"bad-m4a").unwrap();
+        fs::write(paths.songs_dir().join("02-good.mp3"), b"good-mp3").unwrap();
+
+        let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let engine = PanickingMockEngine {
+            panic_on_filename: "01-bad.m4a".into(),
+            loads: Arc::clone(&loads),
+        };
+        let svc = ZunoService::open_with_engine(paths, engine).unwrap();
+
+        let IpcResponse::Ok {
+            data: IpcData::Tracks { tracks, .. },
+        } = svc.handle_request(IpcRequest::ListSongs {
+            folder: None,
+            limit: None,
+            offset: None,
+            sort_by: None,
+            sort_dir: None,
+        })
+        else {
+            panic!("expected tracks");
+        };
+        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+
+        // Attempting to play the panicking track must return IpcResponse::Err, NOT crash the process.
+        let bad_resp = svc.handle_request(IpcRequest::SetQueue {
+            track_ids: ids.clone(),
+            start_id: Some(ids[0].clone()),
+            label: Some("Songs".into()),
+            shuffle: Some(false),
+        });
+        assert!(
+            matches!(bad_resp, IpcResponse::Err { .. }),
+            "expected recovered Err response, got {bad_resp:?}"
+        );
+
+        // Immediately skipping to the next valid track must succeed because `zuno-audio` stayed alive!
+        let next_resp = svc.handle_request(IpcRequest::Next);
+        assert!(
+            matches!(
+                next_resp,
+                IpcResponse::Ok {
+                    data: IpcData::Status(ref st)
+                } if st.state == PlayState::Playing && st.queue_index == Some(1)
+            ),
+            "expected healthy Next playback after recovered panic, got {next_resp:?}"
+        );
+        assert_eq!(loads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rapid_concurrent_double_click_next_and_toggle_never_deadlocks_or_crashes() {
+        let tmp = tempdir().unwrap();
+        let paths = ZunoPaths::new(tmp.path());
+        paths.ensure_dirs().unwrap();
+        for i in 1..=8 {
+            fs::write(
+                paths.songs_dir().join(format!("{i:02}-track.mp3")),
+                format!("audio-payload-{i}"),
+            )
+            .unwrap();
+        }
+
+        let svc = ZunoService::open_with_engine(paths, MockAudioEngine::new()).unwrap();
+        let IpcResponse::Ok {
+            data: IpcData::Tracks { tracks, .. },
+        } = svc.handle_request(IpcRequest::ListSongs {
+            folder: None,
+            limit: None,
+            offset: None,
+            sort_by: None,
+            sort_dir: None,
+        })
+        else {
+            panic!("expected tracks");
+        };
+        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+
+        // Start playback then hammer the service concurrently from 4 threads (double-clicks, rapid Next/Prev/Toggle/Seek)
+        let _ = svc.handle_request(IpcRequest::SetQueue {
+            track_ids: ids.clone(),
+            start_id: Some(ids[0].clone()),
+            label: Some("Songs".into()),
+            shuffle: Some(false),
+        });
+
+        let mut handles = Vec::new();
+        for worker in 0..4 {
+            let s = Arc::clone(&svc);
+            let worker_ids = ids.clone();
+            handles.push(std::thread::spawn(move || {
+                for step in 0..25 {
+                    match (worker + step) % 6 {
+                        0 => {
+                            let _ = s.handle_request(IpcRequest::Next);
+                        }
+                        1 => {
+                            let _ = s.handle_request(IpcRequest::TogglePause);
+                        }
+                        2 => {
+                            let _ = s.handle_request(IpcRequest::Previous);
+                        }
+                        3 => {
+                            let _ = s.handle_request(IpcRequest::SetQueue {
+                                track_ids: worker_ids.clone(),
+                                start_id: Some(worker_ids[step % worker_ids.len()].clone()),
+                                label: Some("Songs".into()),
+                                shuffle: None,
+                            });
+                        }
+                        4 => {
+                            let _ = s.handle_request(IpcRequest::Seek {
+                                position_secs: (step as f64) * 0.5,
+                            });
+                        }
+                        _ => {
+                            let _ = s.handle_request(IpcRequest::GetStatus);
+                        }
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread must never panic");
+        }
+
+        // Service must still answer cleanly and play track 0 without error after stress storm.
+        let final_resp = svc.handle_request(IpcRequest::SetQueue {
+            track_ids: ids.clone(),
+            start_id: Some(ids[0].clone()),
+            label: Some("Songs".into()),
+            shuffle: Some(false),
+        });
+        assert!(matches!(
+            final_resp,
+            IpcResponse::Ok {
+                data: IpcData::Status(ref st)
+            } if st.state == PlayState::Playing
+        ));
     }
 }

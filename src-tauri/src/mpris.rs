@@ -8,7 +8,7 @@ use glib::variant::ObjectPath;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use tauri::AppHandle;
 use zuno_audio::ZunoService;
@@ -137,12 +137,13 @@ impl MprisShared {
     }
 
     fn art_url_for_track(&self, track: &Track) -> Option<String> {
-        let mut cache = self.cover_cache.lock().unwrap();
+        let mut cache = self.cover_cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = cache.recent.iter().position(|(id, _, _)| id == &track.id) {
-            let item = cache.recent.remove(pos).unwrap();
-            let url = item.1.clone();
-            cache.recent.push_back(item);
-            return url;
+            if let Some(item) = cache.recent.remove(pos) {
+                let url = item.1.clone();
+                cache.recent.push_back(item);
+                return url;
+            }
         }
 
         let cache_dir = self.service.paths().cache_dir();
@@ -170,7 +171,7 @@ impl MprisShared {
         } else {
             drop(cache);
             let fallback_url = self.default_music_art_url();
-            cache = self.cover_cache.lock().unwrap();
+            cache = self.cover_cache.lock().unwrap_or_else(|e| e.into_inner());
             fallback_url
         };
 
@@ -242,7 +243,7 @@ impl MprisShared {
 
     fn emit_changes(&self) {
         let conn = {
-            let guard = self.connection.lock().unwrap();
+            let guard = self.connection.lock().unwrap_or_else(|e| e.into_inner());
             match guard.as_ref() {
                 Some(c) => c.clone(),
                 None => return,
@@ -281,7 +282,7 @@ impl MprisShared {
         };
 
         let prev = {
-            let mut guard = self.snapshot.lock().unwrap();
+            let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
             if *guard == next {
                 return;
             }
@@ -348,7 +349,7 @@ impl MprisShared {
 
     fn emit_seeked(&self, position_us: i64) {
         let conn = {
-            let guard = self.connection.lock().unwrap();
+            let guard = self.connection.lock().unwrap_or_else(|e| e.into_inner());
             guard.clone()
         };
         if let Some(conn) = conn {
@@ -509,8 +510,21 @@ where
     let on_raise = Arc::new(on_raise);
     let on_quit = Arc::new(on_quit);
 
+    // Serialized off-main-loop worker for MPRIS D-Bus playback commands so rapid media-key or
+    // lockscreen double-taps execute in order without ever blocking the GTK/GLib UI thread.
+    let (action_tx, action_rx) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
+    let _ = std::thread::Builder::new()
+        .name("zuno-mpris-worker".into())
+        .spawn(move || {
+            while let Ok(job) = action_rx.recv() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+            }
+        });
+    let action_tx = Arc::new(Mutex::new(action_tx));
+
     let shared_bus = Arc::clone(&shared);
     let app_bus = app_handle.clone();
+    let action_tx_bus = Arc::clone(&action_tx);
 
     let owner_id = gio::bus_own_name(
         gio::BusType::Session,
@@ -570,77 +584,114 @@ where
             let shared_call = Arc::clone(&shared_bus);
             let shared_get = Arc::clone(&shared_bus);
             let shared_set = Arc::clone(&shared_bus);
+            let action_tx_call = Arc::clone(&action_tx_bus);
             let player_reg = conn.register_object(
                 MPRIS_OBJECT_PATH,
                 &player_info,
                 move |_conn, _sender, _path, _iface, method, params, invocation| {
-                    if let Some(active_radio) = shared_call.radio.active() {
-                        match method {
-                            "Pause" | "Stop" => {
-                                shared_call
-                                    .radio
-                                    .disconnect(&shared_call.service, &shared_call.fm_tuner);
-                                shared_call.emit_changes();
-                            }
-                            "Play" => {
-                                shared_call.radio.reconnect(
-                                    &shared_call.service,
-                                    &shared_call.fm_tuner,
-                                    notify_bg_callback(&shared_call),
-                                );
-                            }
-                            "PlayPause" => {
-                                if matches!(
-                                    active_radio.state,
-                                    RadioPlayState::Playing | RadioPlayState::Connecting
-                                ) {
-                                    shared_call
+                    let shared_job = Arc::clone(&shared_call);
+                    let method_owned = method.to_string();
+                    let seek_arg_0 = if method == "Seek" {
+                        params.child_value(0).get::<i64>()
+                    } else {
+                        None
+                    };
+                    let pos_arg_1 = if method == "SetPosition" {
+                        params.child_value(1).get::<i64>()
+                    } else {
+                        None
+                    };
+                    let tx = action_tx_call
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let _ = tx.send(Box::new(move || {
+                        let notify_glib = |s: &Arc<MprisShared>| {
+                            let s2 = Arc::clone(s);
+                            glib::MainContext::default().invoke(move || {
+                                s2.emit_changes();
+                            });
+                        };
+                        if let Some(active_radio) = shared_job.radio.active() {
+                            match method_owned.as_str() {
+                                "Pause" | "Stop" => {
+                                    shared_job
                                         .radio
-                                        .disconnect(&shared_call.service, &shared_call.fm_tuner);
-                                    shared_call.emit_changes();
-                                } else {
-                                    shared_call.radio.reconnect(
-                                        &shared_call.service,
-                                        &shared_call.fm_tuner,
-                                        notify_bg_callback(&shared_call),
+                                        .disconnect(&shared_job.service, &shared_job.fm_tuner);
+                                    notify_glib(&shared_job);
+                                }
+                                "Play" => {
+                                    shared_job.radio.reconnect(
+                                        &shared_job.service,
+                                        &shared_job.fm_tuner,
+                                        notify_bg_callback(&shared_job),
                                     );
                                 }
+                                "PlayPause" => {
+                                    if matches!(
+                                        active_radio.state,
+                                        RadioPlayState::Playing | RadioPlayState::Connecting
+                                    ) {
+                                        shared_job
+                                            .radio
+                                            .disconnect(&shared_job.service, &shared_job.fm_tuner);
+                                        notify_glib(&shared_job);
+                                    } else {
+                                        shared_job.radio.reconnect(
+                                            &shared_job.service,
+                                            &shared_job.fm_tuner,
+                                            notify_bg_callback(&shared_job),
+                                        );
+                                    }
+                                }
+                                "Next" => shared_job.radio.queue_step(1),
+                                "Previous" => shared_job.radio.queue_step(-1),
+                                _ => {}
                             }
-                            "Next" => shared_call.radio.queue_step(1),
-                            "Previous" => shared_call.radio.queue_step(-1),
-                            _ => {}
+                            return;
                         }
-                        invocation.return_value(None);
-                        return;
-                    }
 
-                    if let Some(req) = transport_ipc_for_method(method) {
-                        let _ = shared_call.service.handle_request(req);
-                        shared_call.emit_changes();
-                    } else {
-                        match method {
-                            "Seek" => {
-                                if let Some(offset_us) = params.child_value(0).get::<i64>() {
-                                    let cur = shared_call.service.status().position_secs;
-                                    let target = (cur + (offset_us as f64) / MICROS_PER_SEC).max(0.0);
-                                    let _ = shared_call
-                                        .service
-                                        .handle_request(IpcRequest::Seek { position_secs: target });
-                                    shared_call.emit_seeked((target * MICROS_PER_SEC) as i64);
+                        if let Some(req) = transport_ipc_for_method(&method_owned) {
+                            let _ = shared_job.service.handle_request(req);
+                            notify_glib(&shared_job);
+                        } else {
+                            match method_owned.as_str() {
+                                "Seek" => {
+                                    if let Some(offset_us) = seek_arg_0 {
+                                        let cur = shared_job.service.status().position_secs;
+                                        let target =
+                                            (cur + (offset_us as f64) / MICROS_PER_SEC).max(0.0);
+                                        let _ = shared_job.service.handle_request(
+                                            IpcRequest::Seek {
+                                                position_secs: target,
+                                            },
+                                        );
+                                        let s2 = Arc::clone(&shared_job);
+                                        let pos_us = (target * MICROS_PER_SEC) as i64;
+                                        glib::MainContext::default().invoke(move || {
+                                            s2.emit_seeked(pos_us);
+                                        });
+                                    }
                                 }
-                            }
-                            "SetPosition" => {
-                                if let Some(pos_us) = params.child_value(1).get::<i64>() {
-                                    let target = ((pos_us as f64) / MICROS_PER_SEC).max(0.0);
-                                    let _ = shared_call
-                                        .service
-                                        .handle_request(IpcRequest::Seek { position_secs: target });
-                                    shared_call.emit_seeked(pos_us.max(0));
+                                "SetPosition" => {
+                                    if let Some(pos_us) = pos_arg_1 {
+                                        let target = ((pos_us as f64) / MICROS_PER_SEC).max(0.0);
+                                        let _ = shared_job.service.handle_request(
+                                            IpcRequest::Seek {
+                                                position_secs: target,
+                                            },
+                                        );
+                                        let s2 = Arc::clone(&shared_job);
+                                        let clamped = pos_us.max(0);
+                                        glib::MainContext::default().invoke(move || {
+                                            s2.emit_seeked(clamped);
+                                        });
+                                    }
                                 }
+                                _ => {}
                             }
-                            _ => {}
                         }
-                    }
+                    }));
                     invocation.return_value(None);
                 },
                 move |_conn, _sender, _path, _iface, prop| {

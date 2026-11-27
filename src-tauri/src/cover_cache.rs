@@ -64,7 +64,34 @@ fn snap_bucket_size(raw: u32) -> u32 {
             return b;
         }
     }
-    *SIZE_BUCKETS.last().unwrap()
+    SIZE_BUCKETS.last().copied().unwrap_or(256)
+}
+
+fn build_http_response(
+    status: u16,
+    content_type: &str,
+    cache_control: Option<&str>,
+    body: Vec<u8>,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut b = tauri::http::Response::builder()
+        .status(status)
+        .header("Content-Type", content_type)
+        .header("Access-Control-Allow-Origin", "*");
+    if let Some(cc) = cache_control {
+        b = b.header("Cache-Control", cc);
+    }
+    b.body(body)
+        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+}
+
+fn safe_image_mime(raw_mime: &str, bytes: &[u8]) -> &'static str {
+    match raw_mime.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "image/png",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        "image/jpeg" | "image/jpg" => "image/jpeg",
+        _ => sniff_image_mime(bytes),
+    }
 }
 
 /// Detect true image MIME type from file header magic bytes (prevents serving PNG/WebP as JPEG).
@@ -110,7 +137,7 @@ impl CoverServer {
                 .spawn(move || {
                     loop {
                         let task = {
-                            let guard = rx.lock().unwrap();
+                            let guard = rx.lock().unwrap_or_else(|e| e.into_inner());
                             guard.recv()
                         };
                         let Ok(task) = task else { break };
@@ -123,20 +150,18 @@ impl CoverServer {
                             task.thumb_size,
                         );
                         let response = match art {
-                            Some(art) => tauri::http::Response::builder()
-                                .status(200)
-                                .header("Content-Type", art.mime_type.as_str())
-                                .header("Access-Control-Allow-Origin", "*")
-                                .header("Cache-Control", "public, max-age=31536000, immutable")
-                                .body(art.bytes.clone())
-                                .unwrap(),
-                            None => tauri::http::Response::builder()
-                                .status(404)
-                                .header("Content-Type", "text/plain")
-                                .header("Access-Control-Allow-Origin", "*")
-                                .header("Cache-Control", "public, max-age=3600")
-                                .body(Vec::new())
-                                .unwrap(),
+                            Some(art) => build_http_response(
+                                200,
+                                safe_image_mime(&art.mime_type, &art.bytes),
+                                Some("public, max-age=31536000, immutable"),
+                                art.bytes.clone(),
+                            ),
+                            None => build_http_response(
+                                404,
+                                "text/plain",
+                                Some("public, max-age=3600"),
+                                Vec::new(),
+                            ),
                         };
                         task.responder.respond(response);
                     }
@@ -157,12 +182,8 @@ impl CoverServer {
             thumb_size,
             responder,
         }) {
-            let _ = task.responder.respond(
-                tauri::http::Response::builder()
-                    .status(503)
-                    .body(Vec::new())
-                    .unwrap(),
-            );
+            task.responder
+                .respond(build_http_response(503, "text/plain", None, Vec::new()));
         }
     }
 }
@@ -190,7 +211,7 @@ fn load_or_build_cover(
 
     // 2. Singleflight: if another worker is already building this key, wait for its result.
     let waiter_rx = {
-        let mut guard = in_flight.lock().unwrap();
+        let mut guard = in_flight.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(waiters) = guard.get_mut(&cache_key) {
             let (tx, rx) = mpsc::channel();
             waiters.push(tx);
@@ -207,7 +228,11 @@ fn load_or_build_cover(
     let result = compute_cover_uncached(service, mem_cache, thumbs_dir, track_id, bucket_size, &cache_key);
 
     // Notify any waiters that arrived while we were extracting/resizing.
-    let waiters = in_flight.lock().unwrap().remove(&cache_key).unwrap_or_default();
+    let waiters = in_flight
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&cache_key)
+        .unwrap_or_default();
     for tx in waiters {
         let _ = tx.send(result.clone());
     }

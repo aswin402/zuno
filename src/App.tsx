@@ -817,7 +817,14 @@ export default function App() {
       pauseLocalSongs()
       startHtmlOnlineStream(opts.id, opts.name, opts.url)
     },
-    [nativeAudio, clearHtmlRadioElement, pauseLocalSongs, startHtmlOnlineStream, notify],
+    [
+      nativeAudio,
+      desktopNative,
+      clearHtmlRadioElement,
+      pauseLocalSongs,
+      startHtmlOnlineStream,
+      notify,
+    ],
   )
 
   const handlePlayOnlineStation = useCallback(
@@ -1485,10 +1492,15 @@ export default function App() {
         timer = window.setTimeout(poll, 1200)
         return
       }
+      const pollSeq = playbackSeqRef.current
       Promise.all([zunoApi.getStatus(), zunoApi.radioPoll(), zunoApi.syncPoll()])
         .then(([st, radioRes, syncRes]) => {
           if (cancelled) return
-          applyNativeStatus(st)
+          // Never let an in-flight poll that started before a rapid Play/Next/Pause click
+          // overwrite fresher state from the user's latest playback command.
+          if (pollSeq === playbackSeqRef.current) {
+            applyNativeStatus(st)
+          }
           if (radioRes && !usingHtmlRadioFallbackRef.current) {
             const nextRadio = radioRes.active ? nativeRadioToActive(radioRes.active) : null
             setActiveRadio((cur) => (sameActiveRadio(cur, nextRadio) ? cur : nextRadio))
@@ -1587,6 +1599,8 @@ export default function App() {
   }, [currentTrack, favoritesPlaylist])
 
   const browserFadeRafRef = useRef<number>(0)
+  const playbackSeqRef = useRef<number>(0)
+  const lastTrackSelectRef = useRef<{ id: string; at: number } | null>(null)
 
   const playTrackById = useCallback(
     (id: string) => {
@@ -1648,6 +1662,7 @@ export default function App() {
       const useShuffle = forceShuffle ?? shuffle
       if (forceShuffle !== undefined) setShuffle(forceShuffle)
       if (nativeAudio) {
+        const seq = ++playbackSeqRef.current
         setBaseQueueIds(ids)
         setActivePlaylistLabel(label)
         setPosition(0)
@@ -1659,11 +1674,16 @@ export default function App() {
             shuffle: forceShuffle ?? null,
           })
           .then(async (st) => {
+            if (seq !== playbackSeqRef.current) return
             const q = await zunoApi.queueGet().catch(() => null)
+            if (seq !== playbackSeqRef.current) return
             if (q) setQueueIds(q.tracks.map((t) => t.id))
             applyNativeStatus(st)
           })
-          .catch(() => {})
+          .catch((err) => {
+            if (seq !== playbackSeqRef.current) return
+            notify(formatError(err, 'Unable to play track'))
+          })
         return
       }
       const ordered = useShuffle ? shuffleIds(ids, startId) : ids
@@ -1675,7 +1695,7 @@ export default function App() {
       setPosition(0)
       playTrackById(ordered[idx])
     },
-    [shuffle, playTrackById, nativeAudio, applyNativeStatus, stopRadioPlayback],
+    [shuffle, playTrackById, nativeAudio, applyNativeStatus, stopRadioPlayback, notify],
   )
 
   const handleTogglePlay = useCallback(() => {
@@ -1700,10 +1720,17 @@ export default function App() {
         }
         return
       }
+      const seq = ++playbackSeqRef.current
       zunoApi
         .togglePause()
-        .then(applyNativeStatus)
-        .catch(() => {})
+        .then((st) => {
+          if (seq === playbackSeqRef.current) applyNativeStatus(st)
+        })
+        .catch((err) => {
+          if (seq === playbackSeqRef.current) {
+            notify(formatError(err, 'Playback control failed'))
+          }
+        })
       return
     }
     const el = audioRef.current
@@ -1744,14 +1771,23 @@ export default function App() {
     startQueue,
     eqSettings,
     applyNativeStatus,
+    notify,
   ])
 
   const selectOrToggleTrack = useCallback(
     (track: Track, subset: Track[], label: string, sourceKey: string) => {
+      const now = performance.now()
+      const recent = lastTrackSelectRef.current
+      // Double-clicking a track row to start it must not fire a duplicate queue load or
+      // immediately pause the song on the second click.
+      if (recent && recent.id === track.id && now - recent.at < 380) {
+        return
+      }
       if (!activeRadio && currentTrack?.id === track.id) {
         handleTogglePlay()
         return
       }
+      lastTrackSelectRef.current = { id: track.id, at: now }
       stopRadioPlayback()
       startQueue(
         subset.map((x) => x.id),
@@ -1792,10 +1828,24 @@ export default function App() {
     const prevIdx = autoNextBanner.prevIndex
     setAutoNextBanner(null)
     if (prevIdx >= 0 && prevIdx < queueIds.length) {
+      if (nativeAudio) {
+        const seq = ++playbackSeqRef.current
+        zunoApi
+          .jumpQueue(prevIdx)
+          .then((st) => {
+            if (seq === playbackSeqRef.current) applyNativeStatus(st)
+          })
+          .catch((err) => {
+            if (seq === playbackSeqRef.current) {
+              notify(formatError(err, 'Unable to return to previous track'))
+            }
+          })
+        return
+      }
       setQueueIndex(prevIdx)
       playTrackById(queueIds[prevIdx])
     }
-  }, [autoNextBanner, queueIds, playTrackById])
+  }, [autoNextBanner, queueIds, nativeAudio, applyNativeStatus, playTrackById, notify])
 
   const handleRemoveLastPlayed = useCallback(
     (trackId: string) => {
@@ -1838,7 +1888,17 @@ export default function App() {
   const handleNext = useCallback(
     (autoAdvance = false) => {
       if (nativeAudio) {
-        zunoApi.next().then(applyNativeStatus).catch(() => {})
+        const seq = ++playbackSeqRef.current
+        zunoApi
+          .next()
+          .then((st) => {
+            if (seq === playbackSeqRef.current) applyNativeStatus(st)
+          })
+          .catch((err) => {
+            if (seq === playbackSeqRef.current) {
+              notify(formatError(err, 'Unable to play next track'))
+            }
+          })
         return
       }
       if (queueIds.length === 0 || queueIndex === null) return
@@ -1879,12 +1939,23 @@ export default function App() {
       playTrackById,
       trackById,
       triggerAutoNextFuse,
+      notify,
     ],
   )
 
   const handlePrev = useCallback(() => {
     if (nativeAudio) {
-      zunoApi.previous().then(applyNativeStatus).catch(() => {})
+      const seq = ++playbackSeqRef.current
+      zunoApi
+        .previous()
+        .then((st) => {
+          if (seq === playbackSeqRef.current) applyNativeStatus(st)
+        })
+        .catch((err) => {
+          if (seq === playbackSeqRef.current) {
+            notify(formatError(err, 'Unable to play previous track'))
+          }
+        })
       return
     }
     if (queueIds.length === 0 || queueIndex === null) return
@@ -1897,16 +1968,17 @@ export default function App() {
       queueIndex > 0 ? queueIndex - 1 : repeat === 'all' ? queueIds.length - 1 : 0
     setQueueIndex(prevIdx)
     playTrackById(queueIds[prevIdx])
-  }, [nativeAudio, applyNativeStatus, queueIds, queueIndex, repeat, playTrackById])
+  }, [nativeAudio, applyNativeStatus, queueIds, queueIndex, repeat, playTrackById, notify])
 
   const handleSeekCommit = useCallback(
     (secs: number) => {
       positionRef.current = secs
       if (nativeAudio) {
+        const seq = ++playbackSeqRef.current
         zunoApi
           .seek(secs)
           .then((st) => {
-            applyNativeStatus(st)
+            if (seq === playbackSeqRef.current) applyNativeStatus(st)
             if (!desktopNative) setAndroidMediaSyncSeq((n) => n + 1)
           })
           .catch(() => {})
@@ -1921,10 +1993,13 @@ export default function App() {
     const next = !shuffle
     setShuffle(next)
     if (nativeAudio) {
+      const seq = ++playbackSeqRef.current
       zunoApi
         .setMode({ shuffle: next })
         .then(async (st) => {
+          if (seq !== playbackSeqRef.current) return
           const q = await zunoApi.queueGet().catch(() => null)
+          if (seq !== playbackSeqRef.current) return
           if (q) setQueueIds(q.tracks.map((t) => t.id))
           applyNativeStatus(st)
         })
@@ -1948,7 +2023,13 @@ export default function App() {
       repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off'
     setRepeat(next)
     if (nativeAudio) {
-      zunoApi.setMode({ repeat: next }).then(applyNativeStatus).catch(() => {})
+      const seq = ++playbackSeqRef.current
+      zunoApi
+        .setMode({ repeat: next })
+        .then((st) => {
+          if (seq === playbackSeqRef.current) applyNativeStatus(st)
+        })
+        .catch(() => {})
     }
   }, [nativeAudio, applyNativeStatus, repeat])
 
@@ -2365,13 +2446,23 @@ export default function App() {
     (idx: number) => {
       if (idx < 0 || idx >= queueIds.length) return
       if (nativeAudio) {
-        zunoApi.jumpQueue(idx).then(applyNativeStatus).catch(() => {})
+        const seq = ++playbackSeqRef.current
+        zunoApi
+          .jumpQueue(idx)
+          .then((st) => {
+            if (seq === playbackSeqRef.current) applyNativeStatus(st)
+          })
+          .catch((err) => {
+            if (seq === playbackSeqRef.current) {
+              notify(formatError(err, 'Unable to play queued track'))
+            }
+          })
         return
       }
       setQueueIndex(idx)
       playTrackById(queueIds[idx])
     },
-    [nativeAudio, applyNativeStatus, queueIds, playTrackById],
+    [nativeAudio, applyNativeStatus, queueIds, playTrackById, notify],
   )
 
   const offlineSignalByFreq = useMemo(

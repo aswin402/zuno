@@ -364,7 +364,7 @@ impl RadioPlaybackManager {
             error: None,
         };
         let old_child = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             st.generation = st.generation.wrapping_add(1);
             st.active = Some(info.clone());
             st.child.take()
@@ -406,7 +406,7 @@ impl RadioPlaybackManager {
         };
 
         let (my_gen, old_child) = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             st.generation = st.generation.wrapping_add(1);
             let next_gen = st.generation;
             let prev = st.child.take();
@@ -445,7 +445,7 @@ impl RadioPlaybackManager {
 
         // Store child before blocking on the first PCM bytes so disconnect/switch kills it instantly.
         {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if st.generation != my_gen {
                 drop(st);
                 let _ = child.kill();
@@ -470,7 +470,7 @@ impl RadioPlaybackManager {
             ) {
                 wd_timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
                 let killed = {
-                    let mut st = wd_mgr.inner.lock().unwrap();
+                    let mut st = wd_mgr.inner.lock().unwrap_or_else(|e| e.into_inner());
                     if st.generation == my_gen {
                         st.child.take()
                     } else {
@@ -509,7 +509,7 @@ impl RadioPlaybackManager {
                 "Stream unavailable"
             };
             let dead_child = {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if st.generation == my_gen {
                     if let Some(ref mut info) = st.active {
                         info.state = RadioPlayState::Disconnected;
@@ -548,7 +548,7 @@ impl RadioPlaybackManager {
         }
 
         let live_info = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if st.generation != my_gen {
                 return Err("cancelled".to_string());
             }
@@ -572,7 +572,7 @@ impl RadioPlaybackManager {
         fm_tuner: &FmTunerManager,
     ) -> Option<ActiveRadioInfo> {
         let (old_child, next_active) = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             st.generation = st.generation.wrapping_add(1);
             let child = st.child.take();
             if let Some(ref mut info) = st.active {
@@ -594,7 +594,7 @@ impl RadioPlaybackManager {
     /// to local music or closing the FM banner).
     pub fn clear(&self, service: Option<&ZunoService>, fm_tuner: &FmTunerManager) {
         let (old_child, was_active) = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             st.generation = st.generation.wrapping_add(1);
             let child = st.child.take();
             let active = st.active.take().is_some();

@@ -503,22 +503,29 @@ fn zuno_sync_poll(state: tauri::State<'_, AppState>) -> SyncPollResponse {
 }
 
 #[tauri::command]
-fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> IpcResponse {
-    #[cfg(target_os = "android")]
-    if matches!(req, IpcRequest::Rescan) {
-        sync_android_default_music_dirs(&state.service.paths());
-    }
+async fn zuno_ipc(req: IpcRequest, state: tauri::State<'_, AppState>) -> Result<IpcResponse, String> {
+    let service = Arc::clone(&state.service);
     let seek_pos = match &req {
         IpcRequest::Seek { position_secs } => Some(*position_secs),
         _ => None,
     };
-    let resp = state.service.handle_request(req);
+    let resp = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "android")]
+        if matches!(req, IpcRequest::Rescan) {
+            sync_android_default_music_dirs(&service.paths());
+        }
+        service.handle_request(req)
+    })
+    .await
+    .unwrap_or_else(|e| IpcResponse::Err {
+        message: format!("IPC task failed: {e}"),
+    });
     if matches!(resp, IpcResponse::Ok { .. }) {
         if let Some(pos) = seek_pos {
             state.notify_mpris_seeked(pos);
         }
     }
-    resp
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -758,16 +765,26 @@ fn zuno_relaunch_app(app: AppHandle, state: tauri::State<'_, AppState>) -> Resul
 }
 
 #[tauri::command]
-fn zuno_radio_load_store(state: tauri::State<'_, AppState>) -> radio::RadioStoreData {
-    radio::load_radio_store(&state.service.paths())
+async fn zuno_radio_load_store(
+    state: tauri::State<'_, AppState>,
+) -> Result<radio::RadioStoreData, String> {
+    let paths = state.service.paths();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || radio::load_radio_store(&paths))
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 #[tauri::command]
-fn zuno_radio_save_store(
+async fn zuno_radio_save_store(
     store: radio::RadioStoreData,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    radio::save_radio_store(&state.service.paths(), &store)
+    let paths = state.service.paths();
+    tauri::async_runtime::spawn_blocking(move || radio::save_radio_store(&paths, &store))
+        .await
+        .map_err(|e| format!("radio save task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -818,16 +835,35 @@ async fn zuno_radio_play_online(
 }
 
 #[tauri::command]
-fn zuno_radio_disconnect(state: tauri::State<'_, AppState>) -> Option<radio::ActiveRadioInfo> {
-    let next = state.radio.disconnect(&state.service, &state.fm_tuner);
-    state.notify_mpris();
-    next
+async fn zuno_radio_disconnect(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<radio::ActiveRadioInfo>, String> {
+    let radio_mgr = Arc::clone(&state.radio);
+    let svc = Arc::clone(&state.service);
+    let fm = Arc::clone(&state.fm_tuner);
+    let on_change = state.mpris_notify_cb();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        let next = radio_mgr.disconnect(&svc, &fm);
+        on_change();
+        next
+    })
+    .await
+    .ok()
+    .flatten())
 }
 
 #[tauri::command]
-fn zuno_radio_stop(state: tauri::State<'_, AppState>) {
-    state.radio.clear(Some(&state.service), &state.fm_tuner);
-    state.notify_mpris();
+async fn zuno_radio_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let radio_mgr = Arc::clone(&state.radio);
+    let svc = Arc::clone(&state.service);
+    let fm = Arc::clone(&state.fm_tuner);
+    let on_change = state.mpris_notify_cb();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        radio_mgr.clear(Some(&svc), &fm);
+        on_change();
+    })
+    .await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -869,10 +905,21 @@ async fn zuno_fm_tune(
 }
 
 #[tauri::command]
-fn zuno_fm_stop(state: tauri::State<'_, AppState>) -> radio::FmHardwareStatus {
-    state.radio.disconnect(&state.service, &state.fm_tuner);
-    state.notify_mpris();
-    state.fm_tuner.hardware_status()
+async fn zuno_fm_stop(
+    state: tauri::State<'_, AppState>,
+) -> Result<radio::FmHardwareStatus, String> {
+    let radio_mgr = Arc::clone(&state.radio);
+    let svc = Arc::clone(&state.service);
+    let fm = Arc::clone(&state.fm_tuner);
+    let on_change = state.mpris_notify_cb();
+    let fm_fallback = Arc::clone(&state.fm_tuner);
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        radio_mgr.disconnect(&svc, &fm);
+        on_change();
+        fm.hardware_status()
+    })
+    .await
+    .unwrap_or_else(|_| fm_fallback.hardware_status()))
 }
 
 #[cfg(desktop)]
@@ -998,7 +1045,7 @@ pub fn run() {
                     .header("Content-Type", "text/plain")
                     .header("Access-Control-Allow-Origin", "*")
                     .body(Vec::new())
-                    .unwrap(),
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
             );
         })
         .invoke_handler(tauri::generate_handler![
@@ -1154,41 +1201,53 @@ pub fn run() {
                         match TrayAction::from_id(event.id.as_ref()) {
                             Some(TrayAction::Show) => show_or_create_main_window(app),
                             Some(TrayAction::Toggle) => {
-                                if let Some(active) = state.radio.active() {
-                                    if matches!(
-                                        active.state,
-                                        radio::RadioPlayState::Playing
-                                            | radio::RadioPlayState::Connecting
-                                    ) {
-                                        state.radio.disconnect(&state.service, &state.fm_tuner);
-                                        state.notify_mpris();
+                                let radio = Arc::clone(&state.radio);
+                                let svc = Arc::clone(&state.service);
+                                let fm = Arc::clone(&state.fm_tuner);
+                                let on_change = state.mpris_notify_cb();
+                                std::thread::spawn(move || {
+                                    if let Some(active) = radio.active() {
+                                        if matches!(
+                                            active.state,
+                                            radio::RadioPlayState::Playing
+                                                | radio::RadioPlayState::Connecting
+                                        ) {
+                                            radio.disconnect(&svc, &fm);
+                                            on_change();
+                                        } else {
+                                            radio.reconnect(&svc, &fm, on_change);
+                                        }
                                     } else {
-                                        state.radio.reconnect(
-                                            &state.service,
-                                            &state.fm_tuner,
-                                            state.mpris_notify_cb(),
-                                        );
+                                        let _ = svc.handle_request(IpcRequest::TogglePause);
+                                        on_change();
                                     }
-                                } else {
-                                    let _ = state.service.handle_request(IpcRequest::TogglePause);
-                                    state.notify_mpris();
-                                }
+                                });
                             }
                             Some(TrayAction::Next) => {
-                                if state.radio.is_active() {
-                                    state.radio.queue_step(1);
-                                } else {
-                                    let _ = state.service.handle_request(IpcRequest::Next);
-                                    state.notify_mpris();
-                                }
+                                let radio = Arc::clone(&state.radio);
+                                let svc = Arc::clone(&state.service);
+                                let on_change = state.mpris_notify_cb();
+                                std::thread::spawn(move || {
+                                    if radio.is_active() {
+                                        radio.queue_step(1);
+                                    } else {
+                                        let _ = svc.handle_request(IpcRequest::Next);
+                                        on_change();
+                                    }
+                                });
                             }
                             Some(TrayAction::Prev) => {
-                                if state.radio.is_active() {
-                                    state.radio.queue_step(-1);
-                                } else {
-                                    let _ = state.service.handle_request(IpcRequest::Previous);
-                                    state.notify_mpris();
-                                }
+                                let radio = Arc::clone(&state.radio);
+                                let svc = Arc::clone(&state.service);
+                                let on_change = state.mpris_notify_cb();
+                                std::thread::spawn(move || {
+                                    if radio.is_active() {
+                                        radio.queue_step(-1);
+                                    } else {
+                                        let _ = svc.handle_request(IpcRequest::Previous);
+                                        on_change();
+                                    }
+                                });
                             }
                             Some(TrayAction::Quit) => shutdown_app(app, &state),
                             None => {}

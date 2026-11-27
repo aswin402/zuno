@@ -361,6 +361,16 @@ pub fn save_app_settings(paths: &ZunoPaths, settings: &mut AppSettings) -> Resul
     Ok(())
 }
 
+/// Atomically persist `AppSettings` without bumping `revision` (used for frequent playback history
+/// writes so the GUI poller does not re-hydrate appearance/EQ state on every track skip).
+pub fn save_app_settings_quiet(paths: &ZunoPaths, settings: &mut AppSettings) -> Result<()> {
+    paths.ensure_dirs()?;
+    sanitize_settings(settings);
+    let bytes = serde_json::to_vec_pretty(settings)?;
+    atomic_write(&paths.settings_path(), &bytes)?;
+    Ok(())
+}
+
 /// Apply a partial JSON patch onto `AppSettings`. Accepts either top-level `AppSettings` keys
 /// (`appearance`, `eq`, `sort_pref`, `last_played_ids`, `auto_check_updates`, `skipped_update_version`)
 /// or flat appearance keys directly if `appearance` isn't wrapped (ergonomic for AI agents).

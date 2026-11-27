@@ -1,8 +1,8 @@
+use crate::decoder::SymphoniaFileSource;
 use crate::eq::{EqConfig, EqSource, SharedEq};
 use crate::spectrum::SharedSpectrum;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::f32::consts::FRAC_PI_2;
-use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Arc;
@@ -80,7 +80,10 @@ impl RodioEngine {
                 .map_err(|e| ZunoError::Audio(format!("failed to open audio output: {e}")))?;
             self.stream = Some(pair);
         }
-        Ok(&self.stream.as_ref().unwrap().1)
+        self.stream
+            .as_ref()
+            .map(|(_, h)| h)
+            .ok_or_else(|| ZunoError::Audio("audio output stream unavailable".into()))
     }
 }
 
@@ -202,9 +205,24 @@ impl AudioEngine for RodioEngine {
 
     fn load_and_play(&mut self, path: &Path, volume: f32) -> Result<()> {
         let vol = volume.clamp(0.0, 1.0);
+
+        // Open and decode the incoming file FIRST before touching or stopping any currently
+        // playing sink — if the requested file is missing or corrupt, playback stays intact
+        // instead of killing the active track or leaving `loaded = true` with `sink = None`.
+        let decoded = SymphoniaFileSource::open(path)?;
+        let handle = self.ensure_stream()?;
+        let sink = Sink::try_new(handle)
+            .map_err(|e| ZunoError::Audio(format!("failed to create audio sink: {e}")))?;
+
+        let source = EqSource::with_spectrum(
+            decoded,
+            Arc::clone(&self.eq),
+            Some(Arc::clone(&self.spectrum)),
+        );
+
         self.base_volume = vol;
 
-        // Clean up any older fading-out sink before starting a new transition
+        // Clean up any older fading-out sink before starting a new transition.
         if let Some((old_fade, ..)) = self.fading_out.take() {
             old_fade.stop();
         }
@@ -212,8 +230,14 @@ impl AudioEngine for RodioEngine {
 
         let mut had_active_outgoing = false;
         if let Some(old) = self.sink.take() {
-            if self.crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS && !old.empty() && !old.is_paused() {
-                let start_vol = old.volume().clamp(0.0, 1.0);
+            let start_vol = old.volume().clamp(0.0, 1.0);
+            // Skip crossfade-out if rapid track switching caught the previous sink before it
+            // audibly faded in (avoids stacking near-silent decoders on rapid double-clicks).
+            if self.crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS
+                && start_vol > 0.02
+                && !old.empty()
+                && !old.is_paused()
+            {
                 let dur = Duration::from_secs_f32(self.crossfade_secs);
                 self.fading_out = Some((old, Instant::now(), dur, start_vol));
                 had_active_outgoing = true;
@@ -221,19 +245,6 @@ impl AudioEngine for RodioEngine {
                 old.stop();
             }
         }
-
-        let handle = self.ensure_stream()?;
-        let sink = Sink::try_new(handle)
-            .map_err(|e| ZunoError::Audio(format!("failed to create audio sink: {e}")))?;
-
-        let file = File::open(path)?;
-        let decoded = Decoder::new(BufReader::with_capacity(128 * 1024, file))
-            .map_err(|e| ZunoError::Audio(format!("failed to decode {}: {e}", path.display())))?;
-        let source = EqSource::with_spectrum(
-            decoded.convert_samples::<f32>(),
-            Arc::clone(&self.eq),
-            Some(Arc::clone(&self.spectrum)),
-        );
 
         if self.crossfade_secs > CROSSFADE_MIN_ACTIVE_SECS {
             // Smooth fade-in on incoming track (full crossfade when overlapping, gentle swell from silence)
