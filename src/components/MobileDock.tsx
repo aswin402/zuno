@@ -101,7 +101,7 @@ export function MobileDock({
   const artistLabel = displayArtist(track)
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3.5 pb-[max(0.85rem,env(safe-area-inset-bottom))] lg:hidden">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3.5 pb-[max(0.85rem,var(--zuno-safe-bottom))] lg:hidden">
       <div
         className={cn(
           'pointer-events-auto mx-auto w-full max-w-md overflow-hidden border border-border bg-card shadow-2xl transition-all duration-300',

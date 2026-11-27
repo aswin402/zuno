@@ -295,16 +295,68 @@ export default function App() {
   )
   const notify = useCallback((msg: string) => setToast(msg), [])
 
-  // Enable transparent root edges in frameless Tauri desktop mode so outer window corners curve cleanly
+  // Enable transparent root edges in frameless Tauri desktop mode only (never on Android/iOS)
   useEffect(() => {
-    document.documentElement.classList.toggle('zuno-tauri-window', nativeAudio)
-  }, [nativeAudio])
+    document.documentElement.classList.toggle('zuno-tauri-window', desktopNative)
+  }, [desktopNative])
+
+  // Sync native Android system bar + display cutout insets into `--zuno-inset-*` CSS variables
+  useEffect(() => {
+    if (!nativeAudio || desktopNative) return
+    const bridge = (
+      window as unknown as {
+        __ZUNO_ANDROID__?: {
+          getInsetsJson?: () => string
+          setSystemBarsLight?: (isLight: boolean) => void
+        }
+      }
+    ).__ZUNO_ANDROID__
+    const rootStyle = document.documentElement.style
+    let appliedTop = 0
+    if (bridge?.getInsetsJson) {
+      try {
+        const parsed = JSON.parse(bridge.getInsetsJson()) as {
+          top?: number
+          bottom?: number
+          left?: number
+          right?: number
+        }
+        if (typeof parsed.top === 'number' && parsed.top > 0) {
+          appliedTop = parsed.top
+          rootStyle.setProperty('--zuno-inset-top', `${parsed.top}px`)
+        }
+        if (typeof parsed.bottom === 'number' && parsed.bottom > 0) {
+          rootStyle.setProperty('--zuno-inset-bottom', `${parsed.bottom}px`)
+        }
+        if (typeof parsed.left === 'number' && parsed.left > 0) {
+          rootStyle.setProperty('--zuno-inset-left', `${parsed.left}px`)
+        }
+        if (typeof parsed.right === 'number' && parsed.right > 0) {
+          rootStyle.setProperty('--zuno-inset-right', `${parsed.right}px`)
+        }
+      } catch {
+        // Fallback below handles unparsed insets safely
+      }
+    }
+    // Safety floor on Android native WebViews before first WindowInsets callback arrives
+    if (appliedTop === 0 && !rootStyle.getPropertyValue('--zuno-inset-top')) {
+      rootStyle.setProperty('--zuno-inset-top', '36px')
+    }
+  }, [nativeAudio, desktopNative])
 
   // Apply appearance CSS custom properties live whenever settings change
   useEffect(() => {
     applyAppearanceToDom(appearance)
     saveAppearance(appearance)
-  }, [appearance])
+    if (nativeAudio && !desktopNative) {
+      const bridge = (
+        window as unknown as {
+          __ZUNO_ANDROID__?: { setSystemBarsLight?: (isLight: boolean) => void }
+        }
+      ).__ZUNO_ANDROID__
+      bridge?.setSystemBarsLight?.(appearance.mode === 'light')
+    }
+  }, [appearance, nativeAudio, desktopNative])
 
   const uiZoomRef = useRef<number>(appearance.uiZoom)
   uiZoomRef.current = appearance.uiZoom

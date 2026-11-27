@@ -101,7 +101,7 @@ export function SearchOverlay({
     <div
       onClick={onClose}
       className={cn(
-        't-modal-backdrop fixed inset-0 z-50 flex flex-col items-center bg-black/55 px-4 pt-[11vh] backdrop-blur-sm',
+        't-modal-backdrop fixed inset-0 z-50 flex flex-col items-center bg-black/55 px-4 pt-[max(11vh,calc(var(--zuno-safe-top)+1.25rem))] backdrop-blur-sm',
         phase === 'open' && 'is-open',
         phase === 'closing' && 'is-closing pointer-events-none',
       )}

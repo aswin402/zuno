@@ -5,6 +5,16 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.27] — 2026-11-27
+
+Fixed the Android mobile top navbar overlapping the system status / notification bar and camera cutout under edge-to-edge mode.
+
+### Fixed
+- **Android Safe-Area Insets & Status Bar Sync (`scripts/patch-android-project.py`, `src/index.css`, `src/App.tsx`, `src/components/MobileNavbar.tsx`, `src/components/MobileDock.tsx`, `src/components/NowPlayingPanel.tsx`, `src/components/SearchOverlay.tsx`)**:
+  - Added a native Android `WindowInsetsCompat` (`systemBars() | displayCutout()`) listener and `window.__ZUNO_ANDROID__` bridge in `MainActivity.kt` with Android `status_bar_height` fallback so `--zuno-inset-{top,bottom,left,right}` CSS custom properties are populated reliably even when Android WebView reports `env(safe-area-inset-top)` as `0px`.
+  - Synced Android system status & navigation bar icon contrast (`WindowInsetsControllerCompat.isAppearanceLightStatusBars` / `isAppearanceLightNavigationBars`) automatically with Zuno's Dark and Light theme modes, and gated `zuno-tauri-window` transparent root edges to desktop only.
+  - Added `--zuno-safe-top` (+ 4px breathing room) to `MobileNavbar` and its slide-over Menu drawer header, and wired `--zuno-safe-top` / `--zuno-safe-bottom` across `NowPlayingPanel`, `SearchOverlay`, and `MobileDock`.
+
 ## [0.0.26] — 2026-11-27
 
 Fixed the in-app self-updater **Restart Zuno Now** button failing to relaunch after installing a new version.

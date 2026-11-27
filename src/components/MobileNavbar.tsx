@@ -94,7 +94,8 @@ export function MobileNavbar({
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background px-4 lg:hidden">
+      <header className="shrink-0 border-b border-border/70 bg-background pt-[calc(var(--zuno-safe-top)+0.25rem)] lg:hidden">
+        <div className="flex h-14 items-center justify-between px-4">
         <button
           type="button"
           onClick={onGoHome}
@@ -149,6 +150,7 @@ export function MobileNavbar({
             )}
           </button>
         </div>
+        </div>
       </header>
 
       {/* Slide-over Mobile Navbar Open Menu */}
@@ -162,21 +164,26 @@ export function MobileNavbar({
             className="flex h-full w-[min(82vw,300px)] flex-col border-l border-border bg-card shadow-2xl animate-dock-pop"
           >
             {/* Drawer Header */}
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-              <span className="text-sm font-semibold tracking-tight text-foreground">
-                Menu
-              </span>
-              <button
-                type="button"
-                onClick={() => setMenuOpen(false)}
-                aria-label="Close menu"
-                className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
+            <div className="shrink-0 border-b border-border pt-[calc(var(--zuno-safe-top)+0.25rem)]">
+              <div className="flex h-14 items-center justify-between px-4">
+                <span className="text-sm font-semibold tracking-tight text-foreground">
+                  Menu
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen(false)}
+                  aria-label="Close menu"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
-            <CompactScrollArea className="flex-1" viewportClassName="px-3 py-4">
+            <CompactScrollArea
+              className="flex-1"
+              viewportClassName="px-3 pt-4 pb-[max(1rem,var(--zuno-safe-bottom))]"
+            >
               {/* Sound & Appearance */}
               <div className="space-y-1">
                 <p className="mb-1.5 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">

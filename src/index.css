@@ -47,6 +47,14 @@
   --zuno-mono-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --zuno-font-size: 14px;
   --zuno-icon-stroke: 1.75;
+  --zuno-inset-top: 0px;
+  --zuno-inset-bottom: 0px;
+  --zuno-inset-left: 0px;
+  --zuno-inset-right: 0px;
+  --zuno-safe-top: max(env(safe-area-inset-top, 0px), var(--zuno-inset-top, 0px));
+  --zuno-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--zuno-inset-bottom, 0px));
+  --zuno-safe-left: max(env(safe-area-inset-left, 0px), var(--zuno-inset-left, 0px));
+  --zuno-safe-right: max(env(safe-area-inset-right, 0px), var(--zuno-inset-right, 0px));
 }
 
 .dark {

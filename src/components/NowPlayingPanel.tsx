@@ -324,7 +324,7 @@ export function NowPlayingPanel({
           transform: pullUpY < 0 ? `translateY(${pullUpY * 0.32}px)` : undefined,
         }}
         className={cn(
-          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-2 pt-[max(1rem,env(safe-area-inset-top))]',
+          'relative flex min-h-0 flex-1 flex-col justify-between overflow-hidden rounded-b-[36px] pb-2 pt-[calc(var(--zuno-safe-top)+1rem)]',
           pullUpY === 0 && 'transition-transform duration-300 ease-out',
           isLight
             ? 'bg-background shadow-[0_18px_42px_rgba(0,0,0,0.22)]'
@@ -605,7 +605,7 @@ export function NowPlayingPanel({
       </div>
 
       {/* ── Contrasting Bottom Dock (Mobile + Desktop): Scrubber & Split Time (or Live FM Pill) + Transport Controls ── */}
-      <footer className="shrink-0 px-6 pt-3.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-10 md:pt-4 md:pb-5">
+      <footer className="shrink-0 px-6 pt-3.5 pb-[max(0.75rem,var(--zuno-safe-bottom))] md:px-10 md:pt-4 md:pb-5">
         {/* Scrubber & Split Elapsed | Total Timestamp (or Live FM Status + Disconnect) above transport controls */}
         <div
           onPointerDown={(e) => e.stopPropagation()}
@@ -892,7 +892,7 @@ export function NowPlayingPanel({
               transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined,
             }}
             className={cn(
-              'mx-auto flex h-[76%] max-h-[680px] w-full max-w-xl flex-col rounded-t-[30px] border-t border-border bg-card text-foreground shadow-2xl pb-[max(1rem,env(safe-area-inset-bottom))] lg:border-x',
+              'mx-auto flex h-[76%] max-h-[680px] w-full max-w-xl flex-col rounded-t-[30px] border-t border-border bg-card text-foreground shadow-2xl pb-[max(1rem,var(--zuno-safe-bottom))] lg:border-x',
               sheetClosing ? 'animate-drawer-down' : 'animate-drawer-up',
               sheetDragY === 0 && !sheetClosing && 'transition-transform duration-200 ease-out',
             )}

@@ -81,17 +81,100 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 {edge_import}import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import kotlin.math.ceil
 
 class MainActivity : TauriActivity() {{
   private var zunoWebView: WebView? = null
+  @Volatile private var insetTopCss: Int = 0
+  @Volatile private var insetBottomCss: Int = 0
+  @Volatile private var insetLeftCss: Int = 0
+  @Volatile private var insetRightCss: Int = 0
+
+  inner class ZunoAndroidBridge {{
+    @JavascriptInterface
+    fun getInsetsJson(): String {{
+      val top = if (insetTopCss > 0) insetTopCss else fallbackStatusBarCss()
+      return "{{\\"top\\":" + top +
+        ",\\"bottom\\":" + insetBottomCss +
+        ",\\"left\\":" + insetLeftCss +
+        ",\\"right\\":" + insetRightCss + "}}"
+    }}
+
+    @JavascriptInterface
+    fun setSystemBarsLight(isLight: Boolean) {{
+      runOnUiThread {{
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.isAppearanceLightStatusBars = isLight
+        controller.isAppearanceLightNavigationBars = isLight
+      }}
+    }}
+  }}
 
   override fun onCreate(savedInstanceState: Bundle?) {{
 {edge_call}    super.onCreate(savedInstanceState)
+    insetTopCss = fallbackStatusBarCss()
+    installWindowInsetsListener()
     requestAudioPermissionIfNeeded()
+  }}
+
+  private fun pxToCss(px: Int): Int {{
+    val density = resources.displayMetrics.density
+    if (density <= 0f) return px
+    return ceil(px / density).toInt().coerceAtLeast(0)
+  }}
+
+  private fun fallbackStatusBarCss(): Int {{
+    val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+    if (resId > 0) {{
+      val px = resources.getDimensionPixelSize(resId)
+      if (px > 0) return pxToCss(px)
+    }}
+    return 32
+  }}
+
+  private fun updateFromInsets(insets: WindowInsetsCompat) {{
+    val bars = insets.getInsets(
+      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+    )
+    val measuredTop = pxToCss(bars.top)
+    insetTopCss = if (measuredTop > 0) measuredTop else fallbackStatusBarCss()
+    insetBottomCss = pxToCss(bars.bottom)
+    insetLeftCss = pxToCss(bars.left)
+    insetRightCss = pxToCss(bars.right)
+    pushInsetsToWebView()
+  }}
+
+  private fun pushInsetsToWebView() {{
+    val wv = zunoWebView ?: return
+    val top = if (insetTopCss > 0) insetTopCss else fallbackStatusBarCss()
+    val bottom = insetBottomCss
+    val left = insetLeftCss
+    val right = insetRightCss
+    val js = (
+      "(function(){{" +
+        "var r=document.documentElement.style;" +
+        "r.setProperty('--zuno-inset-top','" + top + "px');" +
+        "r.setProperty('--zuno-inset-bottom','" + bottom + "px');" +
+        "r.setProperty('--zuno-inset-left','" + left + "px');" +
+        "r.setProperty('--zuno-inset-right','" + right + "px');" +
+      "}})();"
+    )
+    wv.post {{ wv.evaluateJavascript(js, null) }}
+  }}
+
+  private fun installWindowInsetsListener() {{
+    ViewCompat.setOnApplyWindowInsetsListener(window.decorView) {{ view, insets ->
+      updateFromInsets(insets)
+      ViewCompat.onApplyWindowInsets(view, insets)
+    }}
   }}
 
   override fun onWebViewCreate(webView: WebView) {{
@@ -99,6 +182,12 @@ class MainActivity : TauriActivity() {{
     zunoWebView = webView
     webView.settings.mediaPlaybackRequiresUserGesture = false
     webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+    webView.addJavascriptInterface(ZunoAndroidBridge(), "__ZUNO_ANDROID__")
+    window.decorView.post {{
+      ViewCompat.getRootWindowInsets(window.decorView)?.let {{ updateFromInsets(it) }}
+      ViewCompat.requestApplyInsets(window.decorView)
+      pushInsetsToWebView()
+    }}
   }}
 
   private fun audioPermission(): String {{
