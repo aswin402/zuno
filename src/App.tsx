@@ -80,6 +80,7 @@ import {
   type RadioStoreData,
 } from '@/lib/radioStore'
 import {
+  getAndroidBridge,
   isDesktopTauriRuntime,
   isTauriRuntime,
   zunoApi,
@@ -303,14 +304,7 @@ export default function App() {
   // Sync native Android system bar + display cutout insets into `--zuno-inset-*` CSS variables
   useEffect(() => {
     if (!nativeAudio || desktopNative) return
-    const bridge = (
-      window as unknown as {
-        __ZUNO_ANDROID__?: {
-          getInsetsJson?: () => string
-          setSystemBarsLight?: (isLight: boolean) => void
-        }
-      }
-    ).__ZUNO_ANDROID__
+    const bridge = getAndroidBridge()
     const rootStyle = document.documentElement.style
     let appliedTop = 0
     if (bridge?.getInsetsJson) {
@@ -349,12 +343,7 @@ export default function App() {
     applyAppearanceToDom(appearance)
     saveAppearance(appearance)
     if (nativeAudio && !desktopNative) {
-      const bridge = (
-        window as unknown as {
-          __ZUNO_ANDROID__?: { setSystemBarsLight?: (isLight: boolean) => void }
-        }
-      ).__ZUNO_ANDROID__
-      bridge?.setSystemBarsLight?.(appearance.mode === 'light')
+      getAndroidBridge()?.setSystemBarsLight?.(appearance.mode === 'light')
     }
   }, [appearance, nativeAudio, desktopNative])
 
@@ -594,7 +583,7 @@ export default function App() {
       setUpdateChecking(true)
       if (!silent) setUpdateCheckError(null)
       try {
-        const info = await zunoApi.checkUpdate()
+        const info = await zunoApi.checkUpdate(appVersion)
         if (info) {
           setUpdateInfo(info)
           setUpdateCheckError(null)
@@ -615,7 +604,7 @@ export default function App() {
         setUpdateChecking(false)
       }
     },
-    [nativeAudio, skippedVersion, notify],
+    [nativeAudio, appVersion, skippedVersion, notify],
   )
 
   const handleToggleAutoCheckUpdates = useCallback((next: boolean) => {

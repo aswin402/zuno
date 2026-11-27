@@ -5,6 +5,18 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.28] — 2026-11-27
+
+Fixed the Android app launcher icon and added full mobile update detection, a visible navbar Update button, and 1-tap native Android APK updates.
+
+### Fixed
+- **Android Launcher & Adaptive App Icons (`src-tauri/icons/android/`, `scripts/patch-android-project.py`)**:
+  - Replaced Tauri's default placeholder Android launcher icons with Zuno's glossy obsidian + crisp white musical note across all densities (`mipmap-mdpi` through `mipmap-xxxhdpi`, square + round), Android 8.0+ adaptive vector icons (`mipmap-anydpi-v26` + `drawable/ic_launcher_{background,foreground}.xml`), and Android 13+ Material You monochrome themed icons (`ic_launcher_monochrome.xml`).
+- **Android Update Checking, Mobile Update Button & 1-Tap APK Installer (`scripts/patch-android-project.py`, `src/lib/zunoApi.ts`, `src/components/MobileNavbar.tsx`, `src/components/UpdateDialog.tsx`, `src/components/ui/dialog.tsx`, `src/App.tsx`)**:
+  - Fixed Android update checks silently failing (because Android does not ship a `curl` binary) by adding a native non-blocking `HttpURLConnection` fetch bridge (`window.__ZUNO_ANDROID__.fetchUrlAsync`) reading `latest.json` with GitHub Releases REST API fallback.
+  - Added a visible high-contrast **Update** pill button right in `MobileNavbar`, a primary indicator dot on the mobile menu button, and a highlighted **Update available** banner at the top of the mobile menu drawer.
+  - Replaced the hidden install action and Linux `curl | bash` fallback on mobile in `UpdateDialog.tsx` with native Android in-app APK download + live progress + SHA-256 verification + `FileProvider` Package Installer launch (`REQUEST_INSTALL_PACKAGES`) and a direct browser download fallback, plus mobile-safe scrolling dialog bounds.
+
 ## [0.0.27] — 2026-11-27
 
 Fixed the Android mobile top navbar overlapping the system status / notification bar and camera cutout under edge-to-edge mode.

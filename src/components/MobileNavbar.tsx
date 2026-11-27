@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Menu, X } from 'lucide-react'
+import { ArrowUpCircle, Menu, X } from 'lucide-react'
 import { EaseThemeToggle } from '@/components/EaseThemeToggle'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { ZunoIcon, type ZunoIconName } from '@/components/ZunoIcon'
@@ -105,8 +105,20 @@ export function MobileNavbar({
           <span>Zuno</span>
         </button>
 
-        {/* Outside controls: Theme Toggle right next to the Navbar Menu button */}
+        {/* Outside controls: Update pill (when available) + Theme Toggle + Navbar Menu button */}
         <div className="flex items-center gap-2">
+          {updateAvailableVersion && onOpenUpdates && (
+            <button
+              type="button"
+              onClick={onOpenUpdates}
+              aria-label={`Update available: v${updateAvailableVersion}`}
+              className="t-press inline-flex h-8 items-center gap-1.5 rounded-full bg-primary px-2.5 text-[11.5px] font-semibold text-primary-foreground shadow-sm cursor-pointer"
+            >
+              <ArrowUpCircle className="h-3.5 w-3.5 shrink-0" />
+              <span>Update</span>
+            </button>
+          )}
+
           <EaseThemeToggle
             mode={mode}
             transition={themeTransition}
@@ -123,7 +135,8 @@ export function MobileNavbar({
             aria-expanded={menuOpen}
             className={cn(
               'relative flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-secondary cursor-pointer',
-              (page === 'customize' || page === 'equalizer') && 'border-primary/60',
+              (page === 'customize' || page === 'equalizer' || Boolean(updateAvailableVersion)) &&
+                'border-primary/60',
             )}
           >
             {iconPack === 'skiper99' ? (
@@ -142,7 +155,7 @@ export function MobileNavbar({
             ) : (
               <Menu className="h-4 w-4" />
             )}
-            {eqEnabled && (
+            {(eqEnabled || Boolean(updateAvailableVersion)) && (
               <span
                 className="pointer-events-none absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-primary"
                 aria-hidden="true"
@@ -184,6 +197,22 @@ export function MobileNavbar({
               className="flex-1"
               viewportClassName="px-3 pt-4 pb-[max(1rem,var(--zuno-safe-bottom))]"
             >
+              {updateAvailableVersion && onOpenUpdates && (
+                <button
+                  type="button"
+                  onClick={() => closeAnd(onOpenUpdates)}
+                  className="t-press mb-4 flex w-full items-center justify-between gap-2 rounded-xl bg-primary px-3.5 py-2.5 text-left text-[13px] font-semibold text-primary-foreground shadow-sm cursor-pointer"
+                >
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <ArrowUpCircle className="h-4 w-4 shrink-0" />
+                    <span className="truncate">Update available</span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-primary-foreground/20 px-2 py-0.5 font-mono text-[10.5px]">
+                    v{updateAvailableVersion}
+                  </span>
+                </button>
+              )}
+
               {/* Sound & Appearance */}
               <div className="space-y-1">
                 <p className="mb-1.5 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">

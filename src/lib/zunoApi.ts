@@ -221,10 +221,260 @@ interface TauriInternals {
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 }
 
+export interface ZunoAndroidBridge {
+  getInsetsJson?: () => string
+  setSystemBarsLight?: (isLight: boolean) => void
+  openExternalUrl?: (url: string) => boolean
+  fetchUrlAsync?: (reqId: string, url: string) => void
+  downloadAndInstallApk?: (
+    url: string,
+    expectedSha256: string,
+    expectedSize: number,
+    version: string,
+  ) => void
+  reopenPendingApkInstaller?: () => boolean
+}
+
+interface AndroidUpdateProgressPayload {
+  stage: UpdateProgress['stage']
+  message: string
+  percent: number
+  apkPath?: string
+}
+
+const ZUNO_REPO = 'aswin402/zuno'
+
 function getTauriInternals(): TauriInternals | null {
   if (typeof window === 'undefined') return null
   const w = window as unknown as { __TAURI_INTERNALS__?: TauriInternals }
   return w.__TAURI_INTERNALS__ ?? null
+}
+
+/** Native Android Kotlin bridge injected by MainActivity.kt (`window.__ZUNO_ANDROID__`). */
+export function getAndroidBridge(): ZunoAndroidBridge | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as { __ZUNO_ANDROID__?: ZunoAndroidBridge }
+  return w.__ZUNO_ANDROID__ ?? null
+}
+
+/** True when the Android APK exposes native in-app download + FileProvider installer bridge. */
+export function hasAndroidApkInstaller(): boolean {
+  const bridge = getAndroidBridge()
+  return typeof bridge?.downloadAndInstallApk === 'function'
+}
+
+/** Open an external http(s) URL in the OS browser (uses Android Intent on mobile). */
+export function openExternalUrl(url: string): void {
+  const trimmed = url.trim()
+  if (!trimmed) return
+  const bridge = getAndroidBridge()
+  if (bridge?.openExternalUrl) {
+    try {
+      if (bridge.openExternalUrl(trimmed)) return
+    } catch {
+      /* fall back to window.open */
+    }
+  }
+  window.open(trimmed, '_blank', 'noopener,noreferrer')
+}
+
+interface ParsedSemver {
+  major: number
+  minor: number
+  patch: number
+  pre: string[]
+}
+
+function parseSemver(raw: string): ParsedSemver | null {
+  const trimmed = raw.trim().replace(/^[vV]/, '')
+  const noBuild = trimmed.split('+')[0]
+  if (!noBuild) return null
+  const dashIdx = noBuild.indexOf('-')
+  const core = dashIdx >= 0 ? noBuild.slice(0, dashIdx) : noBuild
+  const preStr = dashIdx >= 0 ? noBuild.slice(dashIdx + 1) : ''
+  const parts = core.split('.')
+  if (parts.length === 0 || parts.length > 3) return null
+  const major = Number(parts[0])
+  const minor = Number(parts[1] ?? '0')
+  const patch = Number(parts[2] ?? '0')
+  if (
+    !Number.isInteger(major) ||
+    !Number.isInteger(minor) ||
+    !Number.isInteger(patch) ||
+    major < 0 ||
+    minor < 0 ||
+    patch < 0
+  ) {
+    return null
+  }
+  return {
+    major,
+    minor,
+    patch,
+    pre: preStr ? preStr.split('.') : [],
+  }
+}
+
+export function isNewerSemver(current: string, latest: string): boolean {
+  const c = parseSemver(current)
+  const l = parseSemver(latest)
+  if (!c || !l) return false
+  if (l.major !== c.major) return l.major > c.major
+  if (l.minor !== c.minor) return l.minor > c.minor
+  if (l.patch !== c.patch) return l.patch > c.patch
+  if (c.pre.length === 0 && l.pre.length === 0) return false
+  if (l.pre.length === 0) return true
+  if (c.pre.length === 0) return false
+  const len = Math.min(c.pre.length, l.pre.length)
+  for (let i = 0; i < len; i++) {
+    const a = c.pre[i]
+    const b = l.pre[i]
+    const na = /^\d+$/.test(a) ? Number(a) : null
+    const nb = /^\d+$/.test(b) ? Number(b) : null
+    if (na !== null && nb !== null && na !== nb) return nb > na
+    if (na !== null && nb === null) return true
+    if (na === null && nb !== null) return false
+    if (a !== b) return b > a
+  }
+  return l.pre.length > c.pre.length
+}
+
+const pendingAndroidFetches = new Map<
+  string,
+  { resolve: (text: string) => void; reject: (err: Error) => void; timer: number }
+>()
+let androidFetchSeq = 0
+
+function androidFetchText(url: string, timeoutMs = 15000): Promise<string> {
+  const bridge = getAndroidBridge()
+  if (!bridge?.fetchUrlAsync) {
+    return Promise.reject(new Error('Native Android network bridge unavailable'))
+  }
+  const w = window as unknown as {
+    __zunoAndroidFetchCb?: (reqId: string, ok: boolean, payload: string) => void
+  }
+  if (!w.__zunoAndroidFetchCb) {
+    w.__zunoAndroidFetchCb = (reqId: string, ok: boolean, payload: string) => {
+      const entry = pendingAndroidFetches.get(reqId)
+      if (!entry) return
+      pendingAndroidFetches.delete(reqId)
+      window.clearTimeout(entry.timer)
+      if (ok) {
+        entry.resolve(payload)
+      } else {
+        entry.reject(new Error(payload || 'Network request failed'))
+      }
+    }
+  }
+  const reqId = `zfetch_${++androidFetchSeq}_${Date.now()}`
+  return new Promise<string>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      pendingAndroidFetches.delete(reqId)
+      reject(new Error('Update check timed out'))
+    }, timeoutMs)
+    pendingAndroidFetches.set(reqId, { resolve, reject, timer })
+    try {
+      bridge.fetchUrlAsync!(reqId, url)
+    } catch (err) {
+      pendingAndroidFetches.delete(reqId)
+      window.clearTimeout(timer)
+      reject(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
+
+async function checkAndroidUpdate(currentVersion: string): Promise<UpdateInfo> {
+  const target = 'android-arm64'
+  const canInstall = hasAndroidApkInstaller()
+  const manifestUrl = `https://github.com/${ZUNO_REPO}/releases/latest/download/latest.json`
+  const apiUrl = `https://api.github.com/repos/${ZUNO_REPO}/releases/latest`
+
+  // 1. Prefer Zuno's lightweight `latest.json` via native Android HttpURLConnection (no CORS, includes SHA-256)
+  try {
+    const raw = await androidFetchText(manifestUrl)
+    const manifest = JSON.parse(raw) as {
+      version?: string
+      tag?: string
+      published_at?: string
+      release_url?: string
+      notes?: string
+      targets?: Record<string, { url?: string; sha256?: string; size?: number }>
+    }
+    if (manifest?.version) {
+      const latestVer = manifest.version.replace(/^[vV]/, '')
+      const targetInfo = manifest.targets?.[target]
+      const downloadUrl =
+        targetInfo?.url ??
+        `https://github.com/${ZUNO_REPO}/releases/download/${manifest.tag || `v${latestVer}`}/zuno-${target}.apk`
+      return {
+        current_version: currentVersion,
+        latest_version: latestVer,
+        update_available: isNewerSemver(currentVersion, latestVer),
+        tag: manifest.tag || `v${latestVer}`,
+        release_url:
+          manifest.release_url || `https://github.com/${ZUNO_REPO}/releases/latest`,
+        published_at: manifest.published_at || '',
+        notes: manifest.notes || '',
+        target,
+        download_url: downloadUrl,
+        sha256: targetInfo?.sha256 ?? null,
+        size_bytes: typeof targetInfo?.size === 'number' ? targetInfo.size : null,
+        can_auto_install: canInstall && Boolean(downloadUrl),
+        install_path: 'Android APK',
+      }
+    }
+  } catch {
+    /* fall through to GitHub Releases REST API */
+  }
+
+  // 2. Fallback to GitHub Releases REST API (via native Android bridge or CORS-enabled WebView fetch)
+  let rawApi: string
+  try {
+    rawApi = await androidFetchText(apiUrl)
+  } catch {
+    const res = await fetch(apiUrl, {
+      headers: { Accept: 'application/vnd.github+json' },
+    })
+    if (!res.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${res.status}`)
+    }
+    rawApi = await res.text()
+  }
+
+  const release = JSON.parse(rawApi) as {
+    tag_name?: string
+    html_url?: string
+    published_at?: string
+    body?: string
+    assets?: { name?: string; browser_download_url?: string; size?: number }[]
+  }
+  const tag = release.tag_name || ''
+  const latestVer = tag.replace(/^[vV]/, '')
+  if (!latestVer) {
+    throw new Error('Could not parse latest release version')
+  }
+  const expectedAsset = `zuno-${target}.apk`
+  const asset = release.assets?.find((a) => a.name === expectedAsset)
+  const downloadUrl =
+    asset?.browser_download_url ??
+    `https://github.com/${ZUNO_REPO}/releases/download/${tag}/${expectedAsset}`
+
+  return {
+    current_version: currentVersion,
+    latest_version: latestVer,
+    update_available: isNewerSemver(currentVersion, latestVer),
+    tag,
+    release_url:
+      release.html_url || `https://github.com/${ZUNO_REPO}/releases/tag/${tag}`,
+    published_at: release.published_at || '',
+    notes: release.body || '',
+    target,
+    download_url: downloadUrl,
+    sha256: null,
+    size_bytes: typeof asset?.size === 'number' ? asset.size : null,
+    can_auto_install: canInstall && Boolean(downloadUrl),
+    install_path: 'Android APK',
+  }
 }
 
 /** True when running inside the native Tauri v2 runtime (desktop or Android/iOS). */
@@ -234,6 +484,7 @@ export function isTauriRuntime(): boolean {
 
 /** True on Android or iOS mobile devices (including inside the Tauri mobile WebView). */
 export function isMobilePlatform(): boolean {
+  if (getAndroidBridge() !== null) return true
   if (typeof navigator === 'undefined') return false
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
@@ -418,10 +669,106 @@ export const zunoApi = {
     }
   },
 
-  async checkUpdate(): Promise<UpdateInfo | null> {
+  async checkUpdate(currentVersionHint?: string): Promise<UpdateInfo | null> {
+    if (isMobilePlatform()) {
+      const currentVer =
+        currentVersionHint ||
+        (typeof __ZUNO_VERSION__ === 'string' ? __ZUNO_VERSION__ : '0.0.0')
+      return await checkAndroidUpdate(currentVer)
+    }
     const tauri = getTauriInternals()
     if (!tauri) return null
     return await tauri.invoke<UpdateInfo>('zuno_check_update')
+  },
+
+  async installAndroidApk(opts: {
+    downloadUrl: string
+    sha256?: string | null
+    sizeBytes?: number | null
+    targetVersion: string
+    createBackup: boolean
+    uiSettingsJson?: string
+    onProgress?: (progress: UpdateProgress) => void
+  }): Promise<UpdateInstallResult> {
+    const bridge = getAndroidBridge()
+    if (!bridge?.downloadAndInstallApk) {
+      throw new Error(
+        'In-app APK installer is unavailable in this build. Tap Download APK to upgrade via browser.',
+      )
+    }
+
+    let backupPath: string | null = null
+    let backupFiles = 0
+    if (opts.createBackup) {
+      opts.onProgress?.({
+        stage: 'backup',
+        message: 'Backing up playlists, folders, EQ & settings…',
+        percent: 10,
+      })
+      try {
+        const report = await this.backupData(opts.uiSettingsJson)
+        if (report) {
+          backupPath = report.backup_path
+          backupFiles = report.files_count
+        }
+      } catch {
+        /* non-fatal on mobile — proceed with APK download */
+      }
+    }
+
+    const w = window as unknown as {
+      __zunoAndroidUpdateProgress?: (payload: AndroidUpdateProgressPayload) => void
+    }
+
+    return await new Promise<UpdateInstallResult>((resolve, reject) => {
+      const prevHandler = w.__zunoAndroidUpdateProgress
+      const cleanup = () => {
+        if (w.__zunoAndroidUpdateProgress === handler) {
+          w.__zunoAndroidUpdateProgress = prevHandler
+        }
+      }
+      const handler = (payload: AndroidUpdateProgressPayload) => {
+        opts.onProgress?.({
+          stage: payload.stage,
+          message: payload.message,
+          percent: payload.percent,
+        })
+        if (payload.stage === 'done') {
+          cleanup()
+          resolve({
+            installed_version: opts.targetVersion.replace(/^[vV]/, ''),
+            installed_path: payload.apkPath || 'Android APK',
+            backup_path: backupPath,
+            backup_files: backupFiles,
+          })
+        } else if (payload.stage === 'error') {
+          cleanup()
+          reject(new Error(payload.message || 'Failed to download APK update'))
+        }
+      }
+      w.__zunoAndroidUpdateProgress = handler
+      try {
+        bridge.downloadAndInstallApk!(
+          opts.downloadUrl,
+          opts.sha256 ?? '',
+          opts.sizeBytes ?? 0,
+          opts.targetVersion,
+        )
+      } catch (err) {
+        cleanup()
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
+    })
+  },
+
+  reopenAndroidApkInstaller(): boolean {
+    const bridge = getAndroidBridge()
+    if (!bridge?.reopenPendingApkInstaller) return false
+    try {
+      return Boolean(bridge.reopenPendingApkInstaller())
+    } catch {
+      return false
+    }
   },
 
   async backupData(uiSettingsJson?: string): Promise<BackupReport | null> {

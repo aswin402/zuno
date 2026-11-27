@@ -74,14 +74,14 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         className={cn(
-          't-modal w-full max-w-md rounded-xl border border-border bg-card shadow-xl',
+          't-modal flex max-h-[calc(100dvh-2rem-var(--zuno-safe-top)-var(--zuno-safe-bottom))] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl',
           phase === 'open' && 'is-open',
           phase === 'closing' && 'is-closing',
           className,
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between border-b border-border px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between border-b border-border px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold text-foreground">{title}</h2>
             {displaySubtitle && (
@@ -96,7 +96,7 @@ export function Dialog({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="min-h-0 overflow-y-auto p-5">{children}</div>
       </div>
     </div>
   )

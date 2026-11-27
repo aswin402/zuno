@@ -16,7 +16,10 @@ import { MotionSwitch } from '@/components/ui/motion'
 import { formatError, shortenHomePath } from '@/lib/format'
 import { cn, formatBytes } from '@/lib/utils'
 import {
+  hasAndroidApkInstaller,
+  isMobilePlatform,
   isTauriRuntime,
+  openExternalUrl,
   zunoApi,
   type BackupReport,
   type UpdateInfo,
@@ -59,11 +62,18 @@ function formatReleaseDate(iso: string): string {
 const CLI_INSTALL_CMD =
   'curl -fsSL https://raw.githubusercontent.com/aswin402/zuno/main/install.sh | bash'
 
-const STAGES: { id: UpdateProgress['stage']; label: string }[] = [
+const DESKTOP_STAGES: { id: UpdateProgress['stage']; label: string }[] = [
   { id: 'backup', label: 'Back up playlists & settings' },
   { id: 'downloading', label: 'Download release archive' },
   { id: 'verifying', label: 'Verify SHA-256 checksum' },
   { id: 'installing', label: 'Install updated binary' },
+]
+
+const ANDROID_STAGES: { id: UpdateProgress['stage']; label: string }[] = [
+  { id: 'backup', label: 'Back up playlists & settings' },
+  { id: 'downloading', label: 'Download Android APK' },
+  { id: 'verifying', label: 'Verify SHA-256 checksum' },
+  { id: 'installing', label: 'Open Android installer' },
 ]
 
 const STAGE_INDEX_MAP: Record<UpdateProgress['stage'], number> = {
@@ -125,9 +135,13 @@ export function UpdateDialog({
     }
   }, [])
 
-  // Poll live backend update progress while installing (with in-flight guard)
+  const isAndroid = Boolean(updateInfo?.target?.startsWith('android')) || isMobilePlatform()
+  const canAndroidInstall = isAndroid && hasAndroidApkInstaller()
+  const stages = isAndroid ? ANDROID_STAGES : DESKTOP_STAGES
+
+  // Poll live backend update progress while installing on desktop (Android pushes progress directly)
   useEffect(() => {
-    if (!installing) return
+    if (!installing || isAndroid) return
     let active = true
     let inFlight = false
     const tick = () => {
@@ -149,7 +163,7 @@ export function UpdateDialog({
       active = false
       window.clearInterval(id)
     }
-  }, [installing])
+  }, [installing, isAndroid])
 
   const hasUpdate = Boolean(updateInfo?.update_available)
   const currentVer = updateInfo?.current_version || appVersion
@@ -159,6 +173,20 @@ export function UpdateDialog({
     if (!updateInfo?.download_url || installing) return
     setInstallError(null)
     setInstallResult(null)
+
+    // Android fallback when native FileProvider bridge isn't present: open direct APK URL in browser
+    if (isAndroid && !canAndroidInstall) {
+      if (createBackup) {
+        try {
+          await zunoApi.backupData(onCollectUiSettings())
+        } catch {
+          /* continue to browser download */
+        }
+      }
+      openExternalUrl(updateInfo.download_url)
+      return
+    }
+
     setInstalling(true)
     setProgress({
       stage: createBackup ? 'backup' : 'downloading',
@@ -168,17 +196,29 @@ export function UpdateDialog({
       percent: createBackup ? 10 : 20,
     })
     try {
-      const result = await zunoApi.installUpdate({
-        downloadUrl: updateInfo.download_url,
-        sha256: updateInfo.sha256,
-        sizeBytes: updateInfo.size_bytes,
-        targetVersion: latestVer,
-        createBackup,
-        uiSettingsJson: createBackup ? onCollectUiSettings() : undefined,
-      })
+      const result = isAndroid
+        ? await zunoApi.installAndroidApk({
+            downloadUrl: updateInfo.download_url,
+            sha256: updateInfo.sha256,
+            sizeBytes: updateInfo.size_bytes,
+            targetVersion: latestVer,
+            createBackup,
+            uiSettingsJson: createBackup ? onCollectUiSettings() : undefined,
+            onProgress: (p) => setProgress(p),
+          })
+        : await zunoApi.installUpdate({
+            downloadUrl: updateInfo.download_url,
+            sha256: updateInfo.sha256,
+            sizeBytes: updateInfo.size_bytes,
+            targetVersion: latestVer,
+            createBackup,
+            uiSettingsJson: createBackup ? onCollectUiSettings() : undefined,
+          })
       setProgress({
         stage: 'done',
-        message: `Zuno v${result.installed_version} installed — ready to restart`,
+        message: isAndroid
+          ? `Zuno v${result.installed_version} APK downloaded — confirm install in Android`
+          : `Zuno v${result.installed_version} installed — ready to restart`,
         percent: 100,
       })
       setInstallResult(result)
@@ -186,6 +226,18 @@ export function UpdateDialog({
       setInstallError(formatError(err))
     } finally {
       setInstalling(false)
+    }
+  }
+
+  function handleReopenAndroidInstaller() {
+    setRelaunchError(null)
+    const ok = zunoApi.reopenAndroidApkInstaller()
+    if (!ok) {
+      if (updateInfo?.download_url) {
+        openExternalUrl(updateInfo.download_url)
+      } else {
+        setRelaunchError('Could not re-open Android installer. Download the APK in your browser.')
+      }
     }
   }
 
@@ -229,16 +281,24 @@ export function UpdateDialog({
   }
 
   const title = installResult
-    ? `Zuno v${installResult.installed_version} Ready`
+    ? isAndroid
+      ? `Zuno v${installResult.installed_version} APK Ready`
+      : `Zuno v${installResult.installed_version} Ready`
     : hasUpdate
       ? `Update Available · v${latestVer}`
       : 'Zuno Updates & Backup'
 
   const subtitle = installResult
-    ? 'Your data was preserved safely. Restart Zuno to launch the new version.'
+    ? isAndroid
+      ? "Android's package installer was opened. Confirm Install to upgrade Zuno."
+      : 'Your data was preserved safely. Restart Zuno to launch the new version.'
     : hasUpdate
-      ? `You are on v${currentVer}. Install v${latestVer} directly with automatic data backup.`
-      : `Installed version v${currentVer} · Offline-first single binary`
+      ? isAndroid
+        ? `You are on v${currentVer}. Download and install v${latestVer} APK directly.`
+        : `You are on v${currentVer}. Install v${latestVer} directly with automatic data backup.`
+      : isAndroid
+        ? `Installed version v${currentVer} · Offline-first Android app`
+        : `Installed version v${currentVer} · Offline-first single binary`
 
   const activeStageIdx = stageIndex(progress.stage)
 
@@ -263,11 +323,21 @@ export function UpdateDialog({
                 </span>
                 <div className="min-w-0 space-y-1">
                   <p className="text-sm font-semibold text-foreground">
-                    Installed Zuno v{installResult.installed_version}
+                    {isAndroid
+                      ? `Downloaded Zuno v${installResult.installed_version} APK`
+                      : `Installed Zuno v${installResult.installed_version}`}
                   </p>
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {shortenHomePath(installResult.installed_path, homeDir)}
-                  </p>
+                  {!isAndroid && (
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      {shortenHomePath(installResult.installed_path, homeDir)}
+                    </p>
+                  )}
+                  {isAndroid && (
+                    <p className="text-xs text-muted-foreground">
+                      If Android asks for &ldquo;Install unknown apps&rdquo;, allow Zuno and tap{' '}
+                      <span className="font-medium text-foreground">Install APK</span> again.
+                    </p>
+                  )}
                   {installResult.backup_path && (
                     <p className="pt-1 text-xs text-muted-foreground">
                       Backup saved ({installResult.backup_files} files):{' '}
@@ -286,27 +356,59 @@ export function UpdateDialog({
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={restarting}
-                onClick={onClose}
-              >
-                Restart later
-              </Button>
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                className="gap-1.5"
-                disabled={restarting}
-                onClick={handleRelaunch}
-              >
-                <RotateCw className={cn('h-3.5 w-3.5', restarting && 'animate-spin')} />
-                {restarting ? 'Restarting…' : 'Restart Zuno Now'}
-              </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              {isAndroid ? (
+                <>
+                  {updateInfo?.download_url && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openExternalUrl(updateInfo.download_url!)}
+                      className="gap-1.5"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Browser
+                    </Button>
+                  )}
+                  <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+                    Close
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={handleReopenAndroidInstaller}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Install APK
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={restarting}
+                    onClick={onClose}
+                  >
+                    Restart later
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={restarting}
+                    onClick={handleRelaunch}
+                  >
+                    <RotateCw className={cn('h-3.5 w-3.5', restarting && 'animate-spin')} />
+                    {restarting ? 'Restarting…' : 'Restart Zuno Now'}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         ) : installing ? (
@@ -329,7 +431,7 @@ export function UpdateDialog({
               </div>
 
               <div className="mt-3 space-y-1.5 pt-1">
-                {STAGES.filter((s) => createBackup || s.id !== 'backup').map((step) => {
+                {stages.filter((s) => createBackup || s.id !== 'backup').map((step) => {
                   const idx = stageIndex(step.id)
                   const done = activeStageIdx > idx
                   const active = activeStageIdx === idx
@@ -365,7 +467,14 @@ export function UpdateDialog({
             </div>
 
             <p className="text-[11px] text-muted-foreground">
-              Your music files in <span className="font-mono">~/zuno/songs</span> are never touched.
+              {isAndroid ? (
+                'Your music files on this device are never touched.'
+              ) : (
+                <>
+                  Your music files in <span className="font-mono">~/zuno/songs</span> are never
+                  touched.
+                </>
+              )}
             </p>
           </div>
         ) : (
@@ -531,8 +640,8 @@ export function UpdateDialog({
               </div>
             )}
 
-            {/* Fallback CLI Installer snippet when binary dir isn't writable or web mode */}
-            {hasUpdate && updateInfo && !updateInfo.can_auto_install && (
+            {/* Fallback CLI Installer snippet on desktop when binary dir isn't writable */}
+            {hasUpdate && updateInfo && !isAndroid && !updateInfo.can_auto_install && (
               <div className="space-y-2 rounded-xl border border-border bg-background/60 p-3">
                 <p className="text-[11px] text-muted-foreground">
                   Run this command in your terminal to upgrade directly:
@@ -573,6 +682,12 @@ export function UpdateDialog({
                     href={updateInfo.release_url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(e) => {
+                      if (isAndroid) {
+                        e.preventDefault()
+                        openExternalUrl(updateInfo.release_url)
+                      }
+                    }}
                     className="inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <span>Release notes</span>
@@ -586,18 +701,28 @@ export function UpdateDialog({
                   {hasUpdate ? 'Later' : 'Close'}
                 </Button>
 
-                {hasUpdate && updateInfo?.can_auto_install && updateInfo.download_url && (
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="sm"
-                    onClick={handleInstall}
-                    className="gap-1.5"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    {createBackup ? 'Backup & Install' : 'Install Update'}
-                  </Button>
-                )}
+                {hasUpdate &&
+                  updateInfo?.download_url &&
+                  (isAndroid || updateInfo.can_auto_install) && (
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleInstall}
+                      className="gap-1.5"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      {isAndroid
+                        ? canAndroidInstall
+                          ? createBackup
+                            ? 'Backup & Update'
+                            : 'Install APK'
+                          : 'Download APK'
+                        : createBackup
+                          ? 'Backup & Install'
+                          : 'Install Update'}
+                    </Button>
+                  )}
               </div>
             </div>
           </>
