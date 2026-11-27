@@ -320,6 +320,7 @@ impl ZunoService {
                                                     if let Ok(st) = thread_inner.lock() {
                                                         Self::persist_locked(&st, 0.0);
                                                     }
+                                                    svc.notify_change();
                                                     break;
                                                 }
                                             }
@@ -340,6 +341,7 @@ impl ZunoService {
                                             st.play_state = PlayState::Stopped;
                                             Self::persist_locked(&st, 0.0);
                                         }
+                                        svc.notify_change();
                                     }
                                 }
                             } else if engine.is_finished() {

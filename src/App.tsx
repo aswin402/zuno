@@ -550,6 +550,15 @@ export default function App() {
       if (infoRes?.suggested_dirs) setSuggestedDirs(infoRes.suggested_dirs)
       if (infoRes?.home_dir) setHomeDir(infoRes.home_dir)
       if (infoRes?.version) setAppVersion(infoRes.version)
+      if (
+        infoRes?.android_bridge_port &&
+        infoRes?.android_bridge_token
+      ) {
+        getAndroidBridge()?.configureRustBridge?.(
+          infoRes.android_bridge_port,
+          infoRes.android_bridge_token,
+        )
+      }
     } catch {
       /* backend offline */
     }
@@ -705,6 +714,9 @@ export default function App() {
     (clearState = true) => {
       radioReqIdRef.current += 1
       clearHtmlRadioElement()
+      if (nativeAudio && !desktopNative) {
+        getAndroidBridge()?.stopAndroidRadio?.()
+      }
       if (nativeAudio) {
         const op = clearState ? zunoApi.radioStop() : zunoApi.radioDisconnect()
         op.catch(() => {})
@@ -715,7 +727,7 @@ export default function App() {
         setActiveRadio(null)
       }
     },
-    [clearHtmlRadioElement, nativeAudio, refreshFmHardware],
+    [clearHtmlRadioElement, nativeAudio, desktopNative, refreshFmHardware],
   )
 
   const pauseLocalSongs = useCallback(() => {
@@ -784,7 +796,12 @@ export default function App() {
             if (msg.includes('NO_NATIVE_STREAM_DECODER')) {
               setUsingHtmlRadioFallback(true)
               pauseLocalSongs()
-              startHtmlOnlineStream(opts.id, opts.name, opts.url)
+              const androidBridge = !desktopNative ? getAndroidBridge() : null
+              if (androidBridge?.playAndroidRadio) {
+                androidBridge.playAndroidRadio(opts.url, opts.name, opts.subtitle)
+              } else {
+                startHtmlOnlineStream(opts.id, opts.name, opts.url)
+              }
               return
             }
             setActiveRadio((cur) =>
@@ -2592,6 +2609,7 @@ export default function App() {
       try {
         bridge.updateMediaNotification?.(
           JSON.stringify({
+            trackId: displayTrack.id,
             title,
             artist,
             album,
@@ -2600,6 +2618,7 @@ export default function App() {
             positionMs: posMs,
             durationMs: durMs,
             artworkBase64,
+            hasCover: !isLive && displayTrack.has_cover,
           }),
         )
       } catch {
@@ -2723,6 +2742,45 @@ export default function App() {
     window.addEventListener('zuno:android-media-action', onMediaAction)
     return () => window.removeEventListener('zuno:android-media-action', onMediaAction)
   }, [nativeAudio, desktopNative])
+
+  // Sync native Android MediaPlayer background FM radio state & refresh Rust state on resume from lockscreen
+  useEffect(() => {
+    if (!nativeAudio || desktopNative) return
+    const onRadioState = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ state?: string; error?: string }>).detail
+      const state = detail?.state
+      if (!state) return
+      setActiveRadio((cur) => {
+        if (!cur || cur.kind !== 'online') return cur
+        if (state === 'connecting') {
+          return { ...cur, isPlaying: false, isBuffering: true, error: null }
+        }
+        if (state === 'playing') {
+          return { ...cur, isPlaying: true, isBuffering: false, error: null }
+        }
+        if (state === 'error') {
+          return {
+            ...cur,
+            isPlaying: false,
+            isBuffering: false,
+            error: detail?.error || 'Stream unavailable',
+          }
+        }
+        return { ...cur, isPlaying: false, isBuffering: false }
+      })
+    }
+    const onVisible = () => {
+      if (!document.hidden) {
+        zunoApi.getStatus().then(applyNativeStatus).catch(() => {})
+      }
+    }
+    window.addEventListener('zuno:android-radio-state', onRadioState)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('zuno:android-radio-state', onRadioState)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [nativeAudio, desktopNative, applyNativeStatus])
 
   const nowPlayingProps = {
     track: displayTrack,

@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "android", test))]
+mod android_bridge;
 mod cover_cache;
 #[cfg(target_os = "linux")]
 mod mpris;
@@ -145,6 +147,8 @@ struct AppState {
     updated_exe_path: Mutex<Option<std::path::PathBuf>>,
     #[cfg(target_os = "linux")]
     mpris: OnceLock<mpris::MprisHandle>,
+    #[cfg(target_os = "android")]
+    android_bridge: Option<android_bridge::AndroidBridgeHandle>,
 }
 
 impl AppState {
@@ -529,6 +533,13 @@ fn zuno_info(state: tauri::State<'_, AppState>) -> serde_json::Value {
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
         .filter(|s| !s.trim().is_empty());
+    #[cfg(target_os = "android")]
+    let (bridge_port, bridge_token) = match state.android_bridge.as_ref() {
+        Some(h) => (Some(h.port), Some(h.token.as_str())),
+        None => (None, None),
+    };
+    #[cfg(not(target_os = "android"))]
+    let (bridge_port, bridge_token): (Option<u16>, Option<&str>) = (None, None);
     serde_json::json!({
         "root_dir": paths.root().display().to_string(),
         "songs_dir": paths.songs_dir().display().to_string(),
@@ -540,6 +551,8 @@ fn zuno_info(state: tauri::State<'_, AppState>) -> serde_json::Value {
         "native_audio": true,
         "platform": std::env::consts::OS,
         "is_mobile": cfg!(mobile),
+        "android_bridge_port": bridge_port,
+        "android_bridge_token": bridge_token,
     })
 }
 
@@ -1044,6 +1057,9 @@ pub fn run() {
             let fm_tuner = Arc::clone(service.fm_tuner());
             let radio_mgr = Arc::clone(service.radio());
 
+            #[cfg(target_os = "android")]
+            let android_bridge = android_bridge::start_android_bridge(Arc::clone(&service)).ok();
+
             app.manage(AppState {
                 service,
                 fm_tuner,
@@ -1055,6 +1071,8 @@ pub fn run() {
                 updated_exe_path: Mutex::new(None),
                 #[cfg(target_os = "linux")]
                 mpris: OnceLock::new(),
+                #[cfg(target_os = "android")]
+                android_bridge,
             });
 
             // Native Linux MPRIS2 D-Bus media integration (GNOME/KDE notification banner,

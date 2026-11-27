@@ -3,17 +3,23 @@
 1. AndroidManifest.xml: add INTERNET, READ_MEDIA_AUDIO, READ_EXTERNAL_STORAGE (<=API 32),
    WAKE_LOCK, REQUEST_INSTALL_PACKAGES, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PLAYBACK,
    POST_NOTIFICATIONS, launcher icon attrs, usesCleartextTraffic, requestLegacyExternalStorage,
-   FileProvider paths for in-app APK updates, and ZunoMediaService declaration.
+   FileProvider paths, ZunoMediaService declaration, and ZunoAppWidgetProvider receiver.
 2. App Icons: replace default Tauri launcher icons with Zuno's glossy obsidian + vector note
    adaptive icons (API 26+), Material You monochrome icon (API 33+), and multi-density legacy
    / round PNGs (`mipmap-mdpi` .. `mipmap-xxxhdpi`).
-3. ZunoMediaService.kt: native Android MediaSession + Notification.MediaStyle foreground
-   mediaPlayback service displaying Now Playing artwork, track metadata, interactive scrubber,
-   and Previous / Play-Pause / Next controls in Android's top notification banner & lock screen.
-4. MainActivity.kt: native WindowInsetsCompat safe-area bridge, system bar theme sync,
-   native app WebView overscroll/zoom lock, runtime audio + notification permissions,
-   native HTTP + APK download/verify/install bridge, and MediaSession action bridge.
-5. app/build.gradle.kts: ensure `minSdk >= 24` for Oboe/AAudio and Tauri v2.
+3. App Widget: install Pure OLED Home Screen & Lock Screen widget (`home_screen|keyguard`)
+   layouts, drawables, XML metadata, and `ZunoAppWidgetProvider.kt`.
+4. ZunoMediaService.kt: native Android foreground `mediaPlayback` service holding
+   `PARTIAL_WAKE_LOCK`, `WifiLock` (for FM radio), `AudioManager` media audio focus,
+   headphone unplug (`ACTION_AUDIO_BECOMING_NOISY`) pause, native `MediaPlayer` for background
+   Online FM Radio, direct `127.0.0.1` Rust engine control + auto-advance sync (so playback,
+   scrubber seek, and Previous/Play-Pause/Next work seamlessly even when the screen is off and
+   the WebView is frozen), lockscreen `MediaSession` + `Notification.MediaStyle`, and live
+   `ZunoAppWidgetProvider` updates.
+5. MainActivity.kt: native WindowInsetsCompat safe-area bridge, system bar theme sync,
+   native app WebView overscroll/zoom lock, keep-playing-on-back-button, runtime audio +
+   notification permissions, native HTTP + APK download/verify/install bridge, and media bridge.
+6. app/build.gradle.kts: ensure `minSdk >= 24` for Oboe/AAudio and Tauri v2.
 """
 
 from __future__ import annotations
@@ -168,6 +174,25 @@ def patch_manifest(path: pathlib.Path, res_dir: pathlib.Path) -> str:
         )
         xml = xml.replace("</application>", service_block + "</application>", 1)
 
+    if "ZunoAppWidgetProvider" not in xml and "</application>" in xml:
+        widget_block = (
+            '\n        <receiver\n'
+            '            android:name=".ZunoAppWidgetProvider"\n'
+            '            android:exported="true"\n'
+            '            android:label="Zuno Player">\n'
+            '            <intent-filter>\n'
+            '                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />\n'
+            '                <action android:name="dev.zuno.player.WIDGET_PREV" />\n'
+            '                <action android:name="dev.zuno.player.WIDGET_TOGGLE" />\n'
+            '                <action android:name="dev.zuno.player.WIDGET_NEXT" />\n'
+            '            </intent-filter>\n'
+            '            <meta-data\n'
+            '                android:name="android.appwidget.provider"\n'
+            '                android:resource="@xml/zuno_widget_info" />\n'
+            '        </receiver>\n    '
+        )
+        xml = xml.replace("</application>", widget_block + "</application>", 1)
+
     ensure_file_provider_paths(res_dir, paths_xml_name)
 
     path.write_text(xml, encoding="utf-8")
@@ -285,6 +310,302 @@ def patch_icons(res_dir: pathlib.Path) -> None:
     print(f"[patch-android] Installed Zuno launcher & adaptive icons ({copied} PNGs + vector drawables)")
 
 
+def patch_widget_resources(res_dir: pathlib.Path) -> None:
+    drawable_dir = res_dir / "drawable"
+    layout_dir = res_dir / "layout"
+    xml_dir = res_dir / "xml"
+    drawable_dir.mkdir(parents=True, exist_ok=True)
+    layout_dir.mkdir(parents=True, exist_ok=True)
+    xml_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pure OLED rounded card background matching Zuno's default theme
+    (drawable_dir / "zuno_widget_bg.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">\n'
+        '    <solid android:color="#EE000000" />\n'
+        '    <stroke android:width="1dp" android:color="#26262E" />\n'
+        '    <corners android:radius="20dp" />\n'
+        "</shape>\n",
+        encoding="utf-8",
+    )
+
+    (drawable_dir / "zuno_widget_btn_bg.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">\n'
+        '    <solid android:color="#18181E" />\n'
+        '    <stroke android:width="1dp" android:color="#282832" />\n'
+        "</shape>\n",
+        encoding="utf-8",
+    )
+
+    (drawable_dir / "zuno_widget_play_bg.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">\n'
+        '    <solid android:color="#FFFFFF" />\n'
+        "</shape>\n",
+        encoding="utf-8",
+    )
+
+    (layout_dir / "zuno_widget.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+        '    android:id="@+id/zuno_widget_root"\n'
+        '    android:layout_width="match_parent"\n'
+        '    android:layout_height="match_parent"\n'
+        '    android:background="@drawable/zuno_widget_bg"\n'
+        '    android:gravity="center_vertical"\n'
+        '    android:orientation="horizontal"\n'
+        '    android:paddingStart="12dp"\n'
+        '    android:paddingEnd="12dp"\n'
+        '    android:paddingTop="10dp"\n'
+        '    android:paddingBottom="10dp">\n'
+        "\n"
+        "    <ImageView\n"
+        '        android:id="@+id/zuno_widget_art"\n'
+        '        android:layout_width="46dp"\n'
+        '        android:layout_height="46dp"\n'
+        '        android:scaleType="centerCrop"\n'
+        '        android:src="@mipmap/ic_launcher"\n'
+        '        android:contentDescription="Album artwork" />\n'
+        "\n"
+        "    <LinearLayout\n"
+        '        android:id="@+id/zuno_widget_text_area"\n'
+        '        android:layout_width="0dp"\n'
+        '        android:layout_height="wrap_content"\n'
+        '        android:layout_weight="1"\n'
+        '        android:layout_marginStart="11dp"\n'
+        '        android:layout_marginEnd="8dp"\n'
+        '        android:orientation="vertical">\n'
+        "\n"
+        "        <TextView\n"
+        '            android:id="@+id/zuno_widget_title"\n'
+        '            android:layout_width="match_parent"\n'
+        '            android:layout_height="wrap_content"\n'
+        '            android:ellipsize="end"\n'
+        '            android:maxLines="1"\n'
+        '            android:text="Zuno"\n'
+        '            android:textColor="#FFFFFF"\n'
+        '            android:textSize="14sp"\n'
+        '            android:textStyle="bold" />\n'
+        "\n"
+        "        <TextView\n"
+        '            android:id="@+id/zuno_widget_artist"\n'
+        '            android:layout_width="match_parent"\n'
+        '            android:layout_height="wrap_content"\n'
+        '            android:layout_marginTop="2dp"\n'
+        '            android:ellipsize="end"\n'
+        '            android:maxLines="1"\n'
+        '            android:text="Tap to play offline music"\n'
+        '            android:textColor="#9A9AA4"\n'
+        '            android:textSize="11.5sp" />\n'
+        "    </LinearLayout>\n"
+        "\n"
+        "    <ImageButton\n"
+        '        android:id="@+id/zuno_widget_prev"\n'
+        '        android:layout_width="34dp"\n'
+        '        android:layout_height="34dp"\n'
+        '        android:background="@drawable/zuno_widget_btn_bg"\n'
+        '        android:contentDescription="Previous"\n'
+        '        android:padding="7dp"\n'
+        '        android:scaleType="fitCenter"\n'
+        '        android:src="@android:drawable/ic_media_previous"\n'
+        '        android:tint="#FAFAFA" />\n'
+        "\n"
+        "    <ImageButton\n"
+        '        android:id="@+id/zuno_widget_play"\n'
+        '        android:layout_width="40dp"\n'
+        '        android:layout_height="40dp"\n'
+        '        android:layout_marginStart="6dp"\n'
+        '        android:layout_marginEnd="6dp"\n'
+        '        android:background="@drawable/zuno_widget_play_bg"\n'
+        '        android:contentDescription="Play or Pause"\n'
+        '        android:padding="9dp"\n'
+        '        android:scaleType="fitCenter"\n'
+        '        android:src="@android:drawable/ic_media_play"\n'
+        '        android:tint="#000000" />\n'
+        "\n"
+        "    <ImageButton\n"
+        '        android:id="@+id/zuno_widget_next"\n'
+        '        android:layout_width="34dp"\n'
+        '        android:layout_height="34dp"\n'
+        '        android:background="@drawable/zuno_widget_btn_bg"\n'
+        '        android:contentDescription="Next"\n'
+        '        android:padding="7dp"\n'
+        '        android:scaleType="fitCenter"\n'
+        '        android:src="@android:drawable/ic_media_next"\n'
+        '        android:tint="#FAFAFA" />\n'
+        "</LinearLayout>\n",
+        encoding="utf-8",
+    )
+
+    (xml_dir / "zuno_widget_info.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"\n'
+        '    android:minWidth="250dp"\n'
+        '    android:minHeight="64dp"\n'
+        '    android:targetCellWidth="4"\n'
+        '    android:targetCellHeight="1"\n'
+        '    android:resizeMode="horizontal|vertical"\n'
+        '    android:updatePeriodMillis="0"\n'
+        '    android:initialLayout="@layout/zuno_widget"\n'
+        '    android:previewImage="@mipmap/ic_launcher"\n'
+        '    android:widgetCategory="home_screen|keyguard" />\n',
+        encoding="utf-8",
+    )
+    print(f"[patch-android] Installed Pure OLED Home & Lock Screen widget resources under {res_dir}")
+
+
+def write_widget_provider(activity_dir: pathlib.Path, package_name: str) -> None:
+    widget_path = activity_dir / "ZunoAppWidgetProvider.kt"
+    code = f"""package {package_name}
+
+import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.graphics.RectF
+import android.widget.RemoteViews
+
+class ZunoAppWidgetProvider : AppWidgetProvider() {{
+  companion object {{
+    const val ACTION_WIDGET_PREV = "dev.zuno.player.WIDGET_PREV"
+    const val ACTION_WIDGET_TOGGLE = "dev.zuno.player.WIDGET_TOGGLE"
+    const val ACTION_WIDGET_NEXT = "dev.zuno.player.WIDGET_NEXT"
+
+    private fun roundBitmap(src: Bitmap): Bitmap {{
+      return try {{
+        val size = minOf(src.width, src.height).coerceIn(64, 192)
+        val scaled = Bitmap.createScaledBitmap(src, size, size, true)
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val rect = Rect(0, 0, size, size)
+        val radius = size * 0.22f
+        canvas.drawRoundRect(RectF(rect), radius, radius, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(scaled, rect, rect, paint)
+        out
+      }} catch (_: Exception) {{
+        src
+      }}
+    }}
+
+    private fun buildWidgetBroadcast(context: Context, action: String, reqCode: Int): PendingIntent {{
+      val intent = Intent(context, ZunoAppWidgetProvider::class.java).apply {{
+        this.action = action
+      }}
+      val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      return PendingIntent.getBroadcast(context, reqCode, intent, flags)
+    }}
+
+    private fun buildViews(
+      context: Context,
+      state: ZunoMediaService.NowPlayingState?,
+      artwork: Bitmap?,
+    ): RemoteViews {{
+      val views = RemoteViews(context.packageName, R.layout.zuno_widget)
+
+      val title = state?.title?.takeIf {{ it.isNotBlank() }} ?: "Zuno"
+      val subtitle = if (state == null) {{
+        "Tap to play offline music"
+      }} else if (state.isLive) {{
+        val sub = state.artist.ifBlank {{ "FM Radio" }}
+        "LIVE · " + sub
+      }} else {{
+        state.artist.ifBlank {{ "Zuno" }}
+      }}
+      val playing = state?.isPlaying == true
+
+      views.setTextViewText(R.id.zuno_widget_title, title)
+      views.setTextViewText(R.id.zuno_widget_artist, subtitle)
+      views.setImageViewResource(
+        R.id.zuno_widget_play,
+        if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+      )
+
+      if (artwork != null) {{
+        views.setImageViewBitmap(R.id.zuno_widget_art, roundBitmap(artwork))
+      }} else {{
+        views.setImageViewResource(R.id.zuno_widget_art, R.mipmap.ic_launcher)
+      }}
+
+      val openIntent = Intent(context, MainActivity::class.java).apply {{
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      }}
+      val openPi = PendingIntent.getActivity(
+        context,
+        200,
+        openIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      views.setOnClickPendingIntent(R.id.zuno_widget_art, openPi)
+      views.setOnClickPendingIntent(R.id.zuno_widget_text_area, openPi)
+
+      views.setOnClickPendingIntent(R.id.zuno_widget_prev, buildWidgetBroadcast(context, ACTION_WIDGET_PREV, 201))
+      views.setOnClickPendingIntent(R.id.zuno_widget_play, buildWidgetBroadcast(context, ACTION_WIDGET_TOGGLE, 202))
+      views.setOnClickPendingIntent(R.id.zuno_widget_next, buildWidgetBroadcast(context, ACTION_WIDGET_NEXT, 203))
+      return views
+    }}
+
+    fun updateAll(
+      context: Context,
+      state: ZunoMediaService.NowPlayingState?,
+      artwork: Bitmap?,
+    ) {{
+      try {{
+        val mgr = AppWidgetManager.getInstance(context)
+        val ids = mgr.getAppWidgetIds(ComponentName(context, ZunoAppWidgetProvider::class.java))
+        if (ids == null || ids.isEmpty()) return
+        val views = buildViews(context, state, artwork)
+        mgr.updateAppWidget(ids, views)
+      }} catch (_: Exception) {{
+      }}
+    }}
+  }}
+
+  override fun onUpdate(
+    context: Context,
+    appWidgetManager: AppWidgetManager,
+    appWidgetIds: IntArray,
+  ) {{
+    val views = buildViews(context, ZunoMediaService.currentState, ZunoMediaService.latestArtworkBitmap)
+    appWidgetManager.updateAppWidget(appWidgetIds, views)
+  }}
+
+  override fun onReceive(context: Context, intent: Intent) {{
+    super.onReceive(context, intent)
+    val op = when (intent.action) {{
+      ACTION_WIDGET_PREV -> "previous"
+      ACTION_WIDGET_TOGGLE -> "toggle"
+      ACTION_WIDGET_NEXT -> "next"
+      else -> return
+    }}
+    val handled = ZunoMediaService.dispatchExternalControl(context.applicationContext, op)
+    if (!handled) {{
+      // App process was cold — launch Zuno cleanly when user taps widget
+      try {{
+        val launch = Intent(context, MainActivity::class.java).apply {{
+          flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }}
+        context.startActivity(launch)
+      }} catch (_: Exception) {{
+      }}
+    }}
+  }}
+}}
+"""
+    widget_path.write_text(code, encoding="utf-8")
+    print(f"[patch-android] Wrote {widget_path}")
+
+
 def write_media_service(activity_dir: pathlib.Path, package_name: str) -> None:
     service_path = activity_dir / "ZunoMediaService.kt"
     code = f"""package {package_name}
@@ -294,21 +615,36 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaMetadata
+import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Base64
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ZunoMediaService : Service() {{
   data class NowPlayingState(
+    val trackId: String,
     val title: String,
     val artist: String,
     val album: String,
@@ -317,6 +653,7 @@ class ZunoMediaService : Service() {{
     val positionMs: Long,
     val durationMs: Long,
     val artworkBase64: String,
+    val hasCover: Boolean = false,
   )
 
   companion object {{
@@ -328,12 +665,59 @@ class ZunoMediaService : Service() {{
     const val ACTION_TOGGLE = "dev.zuno.player.ACTION_MEDIA_TOGGLE"
     const val ACTION_NEXT = "dev.zuno.player.ACTION_MEDIA_NEXT"
     const val ACTION_STOP = "dev.zuno.player.ACTION_MEDIA_STOP"
+    const val ACTION_RADIO_PLAY = "dev.zuno.player.ACTION_RADIO_PLAY"
+    const val ACTION_RADIO_STOP = "dev.zuno.player.ACTION_RADIO_STOP"
 
     @Volatile var currentState: NowPlayingState? = null
+    @Volatile var latestArtworkBitmap: Bitmap? = null
     @Volatile var actionListener: ((String, Double) -> Unit)? = null
+    @Volatile var radioEventListener: ((String, String) -> Unit)? = null
+    @Volatile var rustBridgePort: Int = 0
+    @Volatile var rustBridgeToken: String = ""
+    @Volatile var pendingRadioUrl: String = ""
+    @Volatile var pendingRadioName: String = ""
+    @Volatile var pendingRadioSubtitle: String = ""
+    @Volatile var activeInstance: ZunoMediaService? = null
+
+    fun configureBridge(port: Int, token: String) {{
+      if (port > 0 && token.isNotBlank()) {{
+        rustBridgePort = port
+        rustBridgeToken = token
+      }}
+    }}
+
+    fun ensureBridgeCredentials(context: Context): Pair<Int, String>? {{
+      if (rustBridgePort > 0 && rustBridgeToken.isNotBlank()) {{
+        return Pair(rustBridgePort, rustBridgeToken)
+      }}
+      val candidates = listOf(
+        File(context.filesDir, "zuno/.zuno/android-bridge.json"),
+        File(context.cacheDir, "zuno/.zuno/android-bridge.json"),
+      )
+      for (f in candidates) {{
+        if (!f.isFile) continue
+        try {{
+          val obj = JSONObject(f.readText(Charsets.UTF_8))
+          val port = obj.optInt("port", 0)
+          val token = obj.optString("token", "")
+          if (port > 0 && token.isNotBlank()) {{
+            rustBridgePort = port
+            rustBridgeToken = token
+            return Pair(port, token)
+          }}
+        }} catch (_: Exception) {{
+        }}
+      }}
+      return null
+    }}
 
     fun sync(context: Context, state: NowPlayingState) {{
       currentState = state
+      val inst = activeInstance
+      if (inst != null) {{
+        inst.renderMediaNotification(state)
+        return
+      }}
       val intent = Intent(context, ZunoMediaService::class.java).apply {{
         action = ACTION_UPDATE
       }}
@@ -351,8 +735,58 @@ class ZunoMediaService : Service() {{
       }}
     }}
 
+    fun startRadioStream(context: Context, url: String, name: String, subtitle: String) {{
+      pendingRadioUrl = url
+      pendingRadioName = name
+      pendingRadioSubtitle = subtitle
+      currentState = NowPlayingState(
+        trackId = "radio:" + url.hashCode(),
+        title = name.ifBlank {{ "FM Radio" }},
+        artist = subtitle.ifBlank {{ "Online FM Radio" }},
+        album = "Online FM",
+        isPlaying = true,
+        isLive = true,
+        positionMs = 0L,
+        durationMs = 0L,
+        artworkBase64 = "",
+        hasCover = false,
+      )
+      val intent = Intent(context, ZunoMediaService::class.java).apply {{
+        action = ACTION_RADIO_PLAY
+      }}
+      try {{
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+          context.startForegroundService(intent)
+        }} else {{
+          context.startService(intent)
+        }}
+      }} catch (_: Exception) {{
+        try {{
+          context.startService(intent)
+        }} catch (_: Exception) {{
+        }}
+      }}
+    }}
+
+    fun stopRadioStream(context: Context) {{
+      val inst = activeInstance
+      if (inst != null) {{
+        inst.stopNativeRadioPlayer()
+        return
+      }}
+      val intent = Intent(context, ZunoMediaService::class.java).apply {{
+        action = ACTION_RADIO_STOP
+      }}
+      try {{
+        context.startService(intent)
+      }} catch (_: Exception) {{
+      }}
+    }}
+
     fun clear(context: Context) {{
       currentState = null
+      latestArtworkBitmap = null
+      ZunoAppWidgetProvider.updateAll(context, null, null)
       val intent = Intent(context, ZunoMediaService::class.java).apply {{
         action = ACTION_CLEAR
       }}
@@ -361,40 +795,144 @@ class ZunoMediaService : Service() {{
       }} catch (_: Exception) {{
       }}
     }}
+
+    /** Called by Home/Lock Screen widget broadcasts even when WebView is frozen. */
+    fun dispatchExternalControl(context: Context, op: String): Boolean {{
+      val inst = activeInstance
+      if (inst != null) {{
+        inst.handleMediaControl(op, -1.0)
+        return true
+      }}
+      val creds = ensureBridgeCredentials(context)
+      if (creds != null) {{
+        val intent = Intent(context, ZunoMediaService::class.java).apply {{
+          action = when (op) {{
+            "previous" -> ACTION_PREV
+            "next" -> ACTION_NEXT
+            "stop" -> ACTION_STOP
+            else -> ACTION_TOGGLE
+          }}
+        }}
+        return try {{
+          context.startService(intent)
+          true
+        }} catch (_: Exception) {{
+          try {{
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+              context.startForegroundService(intent)
+              true
+            }} else {{
+              false
+            }}
+          }} catch (_: Exception) {{
+            false
+          }}
+        }}
+      }}
+      return false
+    }}
   }}
 
   private var mediaSession: MediaSession? = null
+  private var wakeLock: PowerManager.WakeLock? = null
+  private var wifiLock: WifiManager.WifiLock? = null
+  private var audioManager: AudioManager? = null
+  private var audioFocusRequest: AudioFocusRequest? = null
+  private var hasAudioFocus = false
+  private var resumeAfterTransientLoss = false
+  private var noisyReceiverRegistered = false
+  private var radioPlayer: MediaPlayer? = null
+  private var radioActive = false
   private var cachedArtworkKey: String = ""
   private var cachedArtworkBitmap: Bitmap? = null
   private var fallbackArtworkBitmap: Bitmap? = null
+  private val syncLoopRunning = AtomicBoolean(false)
+
+  private val noisyReceiver = object : BroadcastReceiver() {{
+    override fun onReceive(context: Context?, intent: Intent?) {{
+      if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {{
+        handleMediaControl("pause", -1.0)
+      }}
+    }}
+  }}
+
+  private val audioFocusListener = AudioManager.OnAudioFocusChangeListener {{ focusChange ->
+    when (focusChange) {{
+      AudioManager.AUDIOFOCUS_LOSS -> {{
+        resumeAfterTransientLoss = false
+        hasAudioFocus = false
+        handleMediaControl("pause", -1.0)
+      }}
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {{
+        if (currentState?.isPlaying == true) {{
+          resumeAfterTransientLoss = true
+          handleMediaControl("pause", -1.0)
+        }}
+      }}
+      AudioManager.AUDIOFOCUS_GAIN -> {{
+        if (resumeAfterTransientLoss) {{
+          resumeAfterTransientLoss = false
+          handleMediaControl("play", -1.0)
+        }}
+      }}
+    }}
+  }}
 
   override fun onCreate() {{
     super.onCreate()
+    activeInstance = this
+    audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     ensureNotificationChannel()
+    ensureBridgeCredentials(applicationContext)
+
+    val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+    wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zuno:audio_playback")?.apply {{
+      setReferenceCounted(false)
+    }}
+
+    try {{
+      val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+      val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {{
+        WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+      }} else {{
+        @Suppress("DEPRECATION")
+        WifiManager.WIFI_MODE_FULL_HIGH_PERF
+      }}
+      wifiLock = wm?.createWifiLock(wifiMode, "zuno:radio_stream")?.apply {{
+        setReferenceCounted(false)
+      }}
+    }} catch (_: Exception) {{
+    }}
+
     mediaSession = MediaSession(this, "ZunoMediaSession").apply {{
+      @Suppress("DEPRECATION")
+      setFlags(
+        MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+          MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS,
+      )
       setCallback(object : MediaSession.Callback() {{
         override fun onPlay() {{
-          actionListener?.invoke("play", -1.0)
+          handleMediaControl("play", -1.0)
         }}
 
         override fun onPause() {{
-          actionListener?.invoke("pause", -1.0)
+          handleMediaControl("pause", -1.0)
         }}
 
         override fun onSkipToNext() {{
-          actionListener?.invoke("next", -1.0)
+          handleMediaControl("next", -1.0)
         }}
 
         override fun onSkipToPrevious() {{
-          actionListener?.invoke("previous", -1.0)
+          handleMediaControl("previous", -1.0)
         }}
 
         override fun onStop() {{
-          actionListener?.invoke("stop", -1.0)
+          handleMediaControl("stop", -1.0)
         }}
 
         override fun onSeekTo(pos: Long) {{
-          actionListener?.invoke("seek", (pos.coerceAtLeast(0L)) / 1000.0)
+          handleMediaControl("seek", (pos.coerceAtLeast(0L)) / 1000.0)
         }}
       }})
       isActive = true
@@ -405,45 +943,414 @@ class ZunoMediaService : Service() {{
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {{
     when (intent?.action) {{
-      ACTION_PREV -> {{
-        actionListener?.invoke("previous", -1.0)
-      }}
-      ACTION_TOGGLE -> {{
-        actionListener?.invoke("toggle", -1.0)
-      }}
-      ACTION_NEXT -> {{
-        actionListener?.invoke("next", -1.0)
-      }}
+      ACTION_PREV -> handleMediaControl("previous", -1.0)
+      ACTION_TOGGLE -> handleMediaControl("toggle", -1.0)
+      ACTION_NEXT -> handleMediaControl("next", -1.0)
       ACTION_STOP -> {{
-        actionListener?.invoke("stop", -1.0)
+        handleMediaControl("stop", -1.0)
         stopAndRemoveNotification()
       }}
-      ACTION_CLEAR -> {{
-        stopAndRemoveNotification()
-      }}
+      ACTION_CLEAR -> stopAndRemoveNotification()
+      ACTION_RADIO_PLAY -> startNativeRadioPlayer(pendingRadioUrl, pendingRadioName, pendingRadioSubtitle)
+      ACTION_RADIO_STOP -> stopNativeRadioPlayer()
       else -> {{
         val state = currentState
         if (state == null) {{
-          stopAndRemoveNotification()
+          // Try hydrating live state directly from Rust bridge if available
+          refreshFromRustBridgeAsync()
         }} else {{
           renderMediaNotification(state)
         }}
       }}
     }}
-    return START_NOT_STICKY
+    return START_STICKY
   }}
 
   override fun onTaskRemoved(rootIntent: Intent?) {{
-    actionListener?.invoke("stop", -1.0)
-    stopAndRemoveNotification()
+    if (currentState?.isPlaying != true) {{
+      stopAndRemoveNotification()
+    }}
     super.onTaskRemoved(rootIntent)
   }}
 
   override fun onDestroy() {{
+    activeInstance = null
+    syncLoopRunning.set(false)
+    stopNativeRadioPlayer()
+    releasePlaybackLocks()
+    unregisterNoisyReceiver()
+    abandonAudioFocus()
     mediaSession?.isActive = false
     mediaSession?.release()
     mediaSession = null
     super.onDestroy()
+  }}
+
+  private fun acquirePlaybackLocks(needWifi: Boolean) {{
+    try {{
+      if (wakeLock?.isHeld == false) {{
+        wakeLock?.acquire()
+      }}
+    }} catch (_: Exception) {{
+    }}
+    try {{
+      if (needWifi) {{
+        if (wifiLock?.isHeld == false) wifiLock?.acquire()
+      }} else {{
+        if (wifiLock?.isHeld == true) wifiLock?.release()
+      }}
+    }} catch (_: Exception) {{
+    }}
+  }}
+
+  private fun releasePlaybackLocks() {{
+    try {{
+      if (wakeLock?.isHeld == true) wakeLock?.release()
+    }} catch (_: Exception) {{
+    }}
+    try {{
+      if (wifiLock?.isHeld == true) wifiLock?.release()
+    }} catch (_: Exception) {{
+    }}
+  }}
+
+  private fun requestAudioFocus() {{
+    val am = audioManager ?: return
+    if (hasAudioFocus) return
+    try {{
+      val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+        val attrs = AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_MEDIA)
+          .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+          .build()
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+          .setAudioAttributes(attrs)
+          .setAcceptsDelayedFocusGain(true)
+          .setOnAudioFocusChangeListener(audioFocusListener)
+          .build()
+        audioFocusRequest = req
+        am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+      }} else {{
+        @Suppress("DEPRECATION")
+        am.requestAudioFocus(
+          audioFocusListener,
+          AudioManager.STREAM_MUSIC,
+          AudioManager.AUDIOFOCUS_GAIN,
+        ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+      }}
+      hasAudioFocus = granted
+    }} catch (_: Exception) {{
+    }}
+  }}
+
+  private fun abandonAudioFocus() {{
+    val am = audioManager ?: return
+    if (!hasAudioFocus) return
+    try {{
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+        audioFocusRequest?.let {{ am.abandonAudioFocusRequest(it) }}
+      }} else {{
+        @Suppress("DEPRECATION")
+        am.abandonAudioFocus(audioFocusListener)
+      }}
+    }} catch (_: Exception) {{
+    }}
+    hasAudioFocus = false
+  }}
+
+  private fun registerNoisyReceiver() {{
+    if (noisyReceiverRegistered) return
+    try {{
+      val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {{
+        registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+      }} else {{
+        @Suppress("UnspecifiedRegisterReceiverFlag")
+        registerReceiver(noisyReceiver, filter)
+      }}
+      noisyReceiverRegistered = true
+    }} catch (_: Exception) {{
+    }}
+  }}
+
+  private fun unregisterNoisyReceiver() {{
+    if (!noisyReceiverRegistered) return
+    try {{
+      unregisterReceiver(noisyReceiver)
+    }} catch (_: Exception) {{
+    }}
+    noisyReceiverRegistered = false
+  }}
+
+  /** Native background MediaPlayer for Online FM Radio streams (survives screen-off!). */
+  private fun startNativeRadioPlayer(url: String, name: String, subtitle: String) {{
+    stopNativeRadioPlayer()
+    if (url.isBlank()) return
+    radioActive = true
+    val connectingState = NowPlayingState(
+      trackId = "radio:" + url.hashCode(),
+      title = name.ifBlank {{ "FM Radio" }},
+      artist = subtitle.ifBlank {{ "Online FM Radio" }},
+      album = "Online FM",
+      isPlaying = true,
+      isLive = true,
+      positionMs = 0L,
+      durationMs = 0L,
+      artworkBase64 = "",
+      hasCover = false,
+    )
+    currentState = connectingState
+    renderMediaNotification(connectingState)
+    radioEventListener?.invoke("connecting", "")
+
+    try {{
+      val attrs = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
+      val mp = MediaPlayer().apply {{
+        setAudioAttributes(attrs)
+        setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+        setDataSource(url)
+        setOnPreparedListener {{ player ->
+          try {{
+            player.start()
+            radioEventListener?.invoke("playing", "")
+            currentState?.let {{ renderMediaNotification(it.copy(isPlaying = true)) }}
+          }} catch (e: Exception) {{
+            radioEventListener?.invoke("error", e.message ?: "Stream playback failed")
+          }}
+        }}
+        setOnErrorListener {{ _, what, extra ->
+          radioEventListener?.invoke("error", "Stream error (" + what + "/" + extra + ")")
+          stopNativeRadioPlayer()
+          true
+        }}
+        setOnCompletionListener {{
+          radioEventListener?.invoke("disconnected", "")
+          currentState?.let {{ renderMediaNotification(it.copy(isPlaying = false)) }}
+        }}
+        prepareAsync()
+      }}
+      radioPlayer = mp
+    }} catch (e: Exception) {{
+      radioActive = false
+      radioEventListener?.invoke("error", e.message ?: "Unable to connect to stream")
+    }}
+  }}
+
+  fun stopNativeRadioPlayer() {{
+    radioActive = false
+    val mp = radioPlayer
+    radioPlayer = null
+    if (mp != null) {{
+      try {{
+        if (mp.isPlaying) mp.stop()
+      }} catch (_: Exception) {{
+      }}
+      try {{
+        mp.reset()
+      }} catch (_: Exception) {{
+      }}
+      try {{
+        mp.release()
+      }} catch (_: Exception) {{
+      }}
+    }}
+  }}
+
+  /**
+   * Executes Play/Pause/Toggle/Next/Previous/Seek directly against the Rust audio engine over
+   * localhost `127.0.0.1` so lockscreen, notification, Bluetooth, and Home Screen Widget controls
+   * work instantaneously even when the screen is off and WebView JS is completely frozen.
+   */
+  fun handleMediaControl(op: String, seekSecs: Double) {{
+    if (radioActive || currentState?.isLive == true) {{
+      when (op) {{
+        "pause", "stop" -> {{
+          stopNativeRadioPlayer()
+          radioEventListener?.invoke("disconnected", "")
+          currentState?.let {{
+            val next = it.copy(isPlaying = false)
+            currentState = next
+            renderMediaNotification(next)
+          }}
+        }}
+        "play" -> {{
+          if (pendingRadioUrl.isNotBlank()) {{
+            startNativeRadioPlayer(pendingRadioUrl, pendingRadioName, pendingRadioSubtitle)
+          }}
+        }}
+        "toggle" -> {{
+          if (radioActive && radioPlayer != null) {{
+            stopNativeRadioPlayer()
+            radioEventListener?.invoke("disconnected", "")
+            currentState?.let {{
+              val next = it.copy(isPlaying = false)
+              currentState = next
+              renderMediaNotification(next)
+            }}
+          }} else if (pendingRadioUrl.isNotBlank()) {{
+            startNativeRadioPlayer(pendingRadioUrl, pendingRadioName, pendingRadioSubtitle)
+          }}
+        }}
+        else -> actionListener?.invoke(op, seekSecs)
+      }}
+      return
+    }}
+
+    val creds = ensureBridgeCredentials(applicationContext)
+    if (creds == null) {{
+      actionListener?.invoke(op, seekSecs)
+      return
+    }}
+
+    Thread {{
+      val (port, token) = creds
+      val endpoint = if (op == "seek" && seekSecs >= 0.0) {{
+        "/seek/" + (seekSecs * 1000.0).toLong()
+      }} else {{
+        "/control/" + op
+      }}
+      val body = callRustBridge("POST", port, token, endpoint)
+      if (body != null) {{
+        applyRustStatusJson(body, port, token)
+      }} else {{
+        actionListener?.invoke(op, seekSecs)
+      }}
+    }}.apply {{
+      isDaemon = true
+      start()
+    }}
+  }}
+
+  private fun startBridgeSyncLoop() {{
+    if (!syncLoopRunning.compareAndSet(false, true)) return
+    Thread {{
+      try {{
+        while (syncLoopRunning.get()) {{
+          Thread.sleep(1200L)
+          val st = currentState
+          if (st == null || !st.isPlaying || st.isLive || radioActive) {{
+            break
+          }}
+          val creds = ensureBridgeCredentials(applicationContext) ?: break
+          val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: continue
+          applyRustStatusJson(body, creds.first, creds.second)
+        }}
+      }} catch (_: Exception) {{
+      }} finally {{
+        syncLoopRunning.set(false)
+      }}
+    }}.apply {{
+      isDaemon = true
+      start()
+    }}
+  }}
+
+  private fun refreshFromRustBridgeAsync() {{
+    val creds = ensureBridgeCredentials(applicationContext) ?: return
+    Thread {{
+      val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: return@Thread
+      applyRustStatusJson(body, creds.first, creds.second)
+    }}.apply {{
+      isDaemon = true
+      start()
+    }}
+  }}
+
+  private fun callRustBridge(method: String, port: Int, token: String, path: String): String? {{
+    var conn: HttpURLConnection? = null
+    return try {{
+      conn = (URL("http://127.0.0.1:" + port + path).openConnection() as HttpURLConnection).apply {{
+        requestMethod = method
+        connectTimeout = 1500
+        readTimeout = 2500
+        setRequestProperty("X-Zuno-Token", token)
+      }}
+      val code = conn.responseCode
+      if (code in 200..299) {{
+        conn.inputStream.bufferedReader(Charsets.UTF_8).use {{ it.readText() }}
+      }} else {{
+        null
+      }}
+    }} catch (_: Exception) {{
+      null
+    }} finally {{
+      conn?.disconnect()
+    }}
+  }}
+
+  private fun fetchCoverBytesFromBridge(port: Int, token: String, trackId: String): Bitmap? {{
+    if (trackId.isBlank()) return null
+    var conn: HttpURLConnection? = null
+    return try {{
+      val encoded = URLEncoder.encode(trackId, "UTF-8").replace("+", "%20")
+      conn = (URL("http://127.0.0.1:" + port + "/cover/" + encoded).openConnection() as HttpURLConnection).apply {{
+        requestMethod = "GET"
+        connectTimeout = 1500
+        readTimeout = 2500
+        setRequestProperty("X-Zuno-Token", token)
+      }}
+      if (conn.responseCode in 200..299) {{
+        conn.inputStream.use {{ BitmapFactory.decodeStream(it) }}
+      }} else {{
+        null
+      }}
+    }} catch (_: Exception) {{
+      null
+    }} finally {{
+      conn?.disconnect()
+    }}
+  }}
+
+  private fun applyRustStatusJson(rawJson: String, port: Int, token: String) {{
+    try {{
+      val obj = JSONObject(rawJson)
+      val stateStr = obj.optString("state", "stopped")
+      val trackId = obj.optString("track_id", "")
+      val title = obj.optString("title", "")
+      if (stateStr == "stopped" && title.isBlank()) {{
+        stopAndRemoveNotification()
+        return
+      }}
+      val next = NowPlayingState(
+        trackId = trackId,
+        title = title.ifBlank {{ "Zuno" }},
+        artist = obj.optString("artist", ""),
+        album = obj.optString("album", "Zuno"),
+        isPlaying = obj.optBoolean("is_playing", false),
+        isLive = false,
+        positionMs = obj.optLong("position_ms", 0L),
+        durationMs = obj.optLong("duration_ms", 0L),
+        artworkBase64 = "",
+        hasCover = obj.optBoolean("has_cover", false),
+      )
+
+      if (next.hasCover && trackId.isNotBlank() && cachedArtworkKey != "tid:" + trackId) {{
+        val bmp = fetchCoverBytesFromBridge(port, token, trackId)
+        if (bmp != null) {{
+          cachedArtworkKey = "tid:" + trackId
+          cachedArtworkBitmap = bmp
+        }}
+      }} else if (!next.hasCover) {{
+        cachedArtworkKey = ""
+        cachedArtworkBitmap = null
+      }}
+
+      val prev = currentState
+      val changed = prev == null ||
+        prev.trackId != next.trackId ||
+        prev.isPlaying != next.isPlaying ||
+        prev.title != next.title ||
+        kotlin.math.abs(prev.positionMs - next.positionMs) > 2500L
+
+      currentState = next
+      if (changed) {{
+        renderMediaNotification(next)
+      }}
+    }} catch (_: Exception) {{
+    }}
   }}
 
   private fun ensureNotificationChannel() {{
@@ -455,7 +1362,7 @@ class ZunoMediaService : Service() {{
           "Now Playing",
           NotificationManager.IMPORTANCE_LOW,
         ).apply {{
-          description = "Playback controls for currently playing music and FM radio"
+          description = "Lock screen & notification controls for currently playing music and FM radio"
           setShowBadge(false)
           setSound(null, null)
           lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -465,8 +1372,11 @@ class ZunoMediaService : Service() {{
     }}
   }}
 
-  private fun decodeArtwork(base64Data: String): Bitmap? {{
-    val cleaned = base64Data.trim()
+  private fun decodeArtwork(state: NowPlayingState): Bitmap? {{
+    if (state.trackId.isNotBlank() && cachedArtworkKey == "tid:" + state.trackId && cachedArtworkBitmap != null) {{
+      return cachedArtworkBitmap
+    }}
+    val cleaned = state.artworkBase64.trim()
     if (cleaned.isNotEmpty()) {{
       if (cleaned == cachedArtworkKey && cachedArtworkBitmap != null) {{
         return cachedArtworkBitmap
@@ -476,7 +1386,7 @@ class ZunoMediaService : Service() {{
         val bytes = Base64.decode(rawPart, Base64.DEFAULT)
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         if (bmp != null) {{
-          cachedArtworkKey = cleaned
+          cachedArtworkKey = if (state.trackId.isNotBlank()) "tid:" + state.trackId else cleaned
           cachedArtworkBitmap = bmp
           return bmp
         }}
@@ -510,9 +1420,23 @@ class ZunoMediaService : Service() {{
     }}
   }}
 
-  private fun renderMediaNotification(state: NowPlayingState) {{
+  @Synchronized
+  fun renderMediaNotification(state: NowPlayingState) {{
     val session = mediaSession ?: return
-    val art = decodeArtwork(state.artworkBase64)
+    val art = decodeArtwork(state)
+    latestArtworkBitmap = art
+
+    if (state.isPlaying) {{
+      requestAudioFocus()
+      acquirePlaybackLocks(needWifi = state.isLive)
+      registerNoisyReceiver()
+      if (!state.isLive) {{
+        startBridgeSyncLoop()
+      }}
+    }} else {{
+      releasePlaybackLocks()
+      unregisterNoisyReceiver()
+    }}
 
     val metaBuilder = MediaMetadata.Builder()
       .putString(MediaMetadata.METADATA_KEY_TITLE, state.title.ifBlank {{ "Zuno" }})
@@ -586,6 +1510,7 @@ class ZunoMediaService : Service() {{
       .setContentTitle(state.title.ifBlank {{ "Zuno" }})
       .setContentText(state.artist.ifBlank {{ "Zuno" }})
       .setSubText(if (state.isLive) "FM Radio · Live" else if (state.album.isNotBlank()) state.album else null)
+      .setCategory(Notification.CATEGORY_TRANSPORT)
       .setContentIntent(contentPi)
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setOnlyAlertOnce(true)
@@ -620,9 +1545,21 @@ class ZunoMediaService : Service() {{
       }} catch (_: Exception) {{
       }}
     }}
+
+    // Keep Home Screen & Lock Screen App Widgets synchronized live
+    ZunoAppWidgetProvider.updateAll(applicationContext, state, art)
   }}
 
+  @Synchronized
   private fun stopAndRemoveNotification() {{
+    syncLoopRunning.set(false)
+    stopNativeRadioPlayer()
+    releasePlaybackLocks()
+    unregisterNoisyReceiver()
+    abandonAudioFocus()
+    currentState = null
+    latestArtworkBitmap = null
+    ZunoAppWidgetProvider.updateAll(applicationContext, null, null)
     try {{
       stopForeground(STOP_FOREGROUND_REMOVE)
     }} catch (_: Exception) {{
@@ -657,6 +1594,7 @@ def patch_main_activity(root: pathlib.Path, authority_template: str) -> None:
     edge_call = "    enableEdgeToEdge()\n" if has_edge_to_edge else ""
     authority_kotlin = authority_template.replace("${applicationId}", "${packageName}")
 
+    write_widget_provider(activity_path.parent, package_name)
     write_media_service(activity_path.parent, package_name)
 
     patched = f"""package {package_name}
@@ -716,10 +1654,16 @@ class MainActivity : TauriActivity() {{
     }}
 
     @JavascriptInterface
+    fun configureRustBridge(port: Int, token: String) {{
+      ZunoMediaService.configureBridge(port, token)
+    }}
+
+    @JavascriptInterface
     fun updateMediaNotification(jsonPayload: String) {{
       try {{
         val obj = JSONObject(jsonPayload)
         val state = ZunoMediaService.NowPlayingState(
+          trackId = obj.optString("trackId", ""),
           title = obj.optString("title", "Zuno"),
           artist = obj.optString("artist", ""),
           album = obj.optString("album", ""),
@@ -728,6 +1672,7 @@ class MainActivity : TauriActivity() {{
           positionMs = obj.optLong("positionMs", 0L),
           durationMs = obj.optLong("durationMs", 0L),
           artworkBase64 = obj.optString("artworkBase64", ""),
+          hasCover = obj.optBoolean("hasCover", false),
         )
         runOnUiThread {{
           ZunoMediaService.sync(applicationContext, state)
@@ -740,6 +1685,20 @@ class MainActivity : TauriActivity() {{
     fun clearMediaNotification() {{
       runOnUiThread {{
         ZunoMediaService.clear(applicationContext)
+      }}
+    }}
+
+    @JavascriptInterface
+    fun playAndroidRadio(url: String, name: String, subtitle: String) {{
+      runOnUiThread {{
+        ZunoMediaService.startRadioStream(applicationContext, url, name, subtitle)
+      }}
+    }}
+
+    @JavascriptInterface
+    fun stopAndroidRadio() {{
+      runOnUiThread {{
+        ZunoMediaService.stopRadioStream(applicationContext)
       }}
     }}
 
@@ -885,7 +1844,6 @@ class MainActivity : TauriActivity() {{
             conn.disconnect()
           }}
 
-          // Clean older cached APKs before moving the verified APK into place
           updatesDir.listFiles()?.forEach {{ f ->
             if (f.name.endsWith(".apk") && f.absolutePath != finalFile.absolutePath) {{
               f.delete()
@@ -992,6 +1950,16 @@ class MainActivity : TauriActivity() {{
     wv.post {{ wv.evaluateJavascript(js, null) }}
   }}
 
+  private fun dispatchRadioEvent(state: String, error: String) {{
+    val wv = zunoWebView ?: return
+    val obj = JSONObject().apply {{
+      put("state", state)
+      if (error.isNotEmpty()) put("error", error)
+    }}
+    val js = "window.dispatchEvent(new CustomEvent('zuno:android-radio-state',{{detail:" + obj.toString() + "}}));"
+    wv.post {{ wv.evaluateJavascript(js, null) }}
+  }}
+
   private fun launchApkInstaller(apkFile: File): Boolean {{
     return try {{
       val authority = "{authority_kotlin}"
@@ -1020,9 +1988,20 @@ class MainActivity : TauriActivity() {{
     requestStartupPermissionsIfNeeded()
   }}
 
+  @Suppress("DEPRECATION")
+  override fun onBackPressed() {{
+    // Keep music & FM radio playing in the background when pressing Back on the main screen
+    if (ZunoMediaService.currentState?.isPlaying == true) {{
+      moveTaskToBack(true)
+      return
+    }}
+    super.onBackPressed()
+  }}
+
   override fun onDestroy() {{
-    if (isFinishing) {{
+    if (isFinishing && !isChangingConfigurations && ZunoMediaService.currentState?.isPlaying != true) {{
       ZunoMediaService.actionListener = null
+      ZunoMediaService.radioEventListener = null
       ZunoMediaService.clear(applicationContext)
     }}
     super.onDestroy()
@@ -1096,6 +2075,9 @@ class MainActivity : TauriActivity() {{
     ZunoMediaService.actionListener = {{ action, seekSecs ->
       dispatchMediaAction(action, seekSecs)
     }}
+    ZunoMediaService.radioEventListener = {{ state, error ->
+      dispatchRadioEvent(state, error)
+    }}
     window.decorView.post {{
       ViewCompat.getRootWindowInsets(window.decorView)?.let {{ updateFromInsets(it) }}
       ViewCompat.requestApplyInsets(window.decorView)
@@ -1149,6 +2131,18 @@ class MainActivity : TauriActivity() {{
           )
         }}
       }}
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {{
+        val notifIdx = permissions.indexOf(Manifest.permission.POST_NOTIFICATIONS)
+        if (
+          notifIdx >= 0 &&
+          notifIdx < grantResults.size &&
+          grantResults[notifIdx] == PackageManager.PERMISSION_GRANTED
+        ) {{
+          ZunoMediaService.currentState?.let {{ st ->
+            ZunoMediaService.sync(applicationContext, st)
+          }}
+        }}
+      }}
     }}
   }}
 }}
@@ -1180,6 +2174,7 @@ def patch_gradle(path: pathlib.Path) -> None:
 def main() -> None:
     authority_template = patch_manifest(MANIFEST_PATH, RES_DIR)
     patch_icons(RES_DIR)
+    patch_widget_resources(RES_DIR)
     patch_main_activity(ROOT, authority_template)
     patch_gradle(GRADLE_PATH)
 

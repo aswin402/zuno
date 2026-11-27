@@ -5,6 +5,23 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.30] — 2026-11-27
+
+Enabled uninterrupted background & screen-off playback on Android and Desktop, plus a native Pure OLED Android Home Screen & Lock Screen widget.
+
+### Added
+- **Android Home Screen & Lock Screen App Widget (`scripts/patch-android-project.py`)**:
+  - Added `ZunoAppWidgetProvider.kt` and Pure OLED widget layout/drawables (`zuno_widget.xml`, `zuno_widget_info.xml` with `android:widgetCategory="home_screen|keyguard"`) displaying live album artwork, song/FM metadata, and Previous / Play-Pause / Next buttons directly on the Android Home Screen and Lock Screen.
+- **Pure-Rust Android Loopback Media Bridge (`src-tauri/src/android_bridge.rs`, `src-tauri/src/lib.rs`)**:
+  - Added an authenticated `127.0.0.1` loopback bridge inside `libzuno_lib.so` so `ZunoMediaService` and `ZunoAppWidgetProvider` can read playback status, fetch embedded album art, and execute Play / Pause / Next / Previous / Seek directly against Rust `ZunoService` even when the phone screen is off and Android WebView JavaScript is frozen.
+- **Desktop Screen-Off Background Playback (`src-tauri/src/mpris.rs`, `crates/zuno-audio/src/service.rs`)**:
+  - Added a systemd-logind `"sleep"` inhibitor while audio is playing on Linux so the screen can turn off and lock (displaying the MPRIS2 Lock Screen media widget) without suspending the machine or interrupting music, and emitted immediate auto-advance callbacks when tracks finish in the background.
+
+### Fixed
+- **Android Background & Screen-Off Music Playback (`scripts/patch-android-project.py`, `src/App.tsx`, `src/lib/zunoApi.ts`)**:
+  - Upgraded `ZunoMediaService.kt` with `PowerManager.PARTIAL_WAKE_LOCK`, `WifiManager.WifiLock` (for Online FM streams), `AudioManager` media `AudioFocusRequest` (with auto-pause/resume across phone calls), headphone-unplug (`ACTION_AUDIO_BECOMING_NOISY`) pause, `CATEGORY_TRANSPORT` + `VISIBILITY_PUBLIC` lockscreen media notification, native `MediaPlayer` background streaming for Online FM Radio, and automatic background Rust status polling for auto-next track updates.
+  - Updated `MainActivity.kt` so pressing Back while playing moves Zuno cleanly to the background (`moveTaskToBack(true)`) instead of killing playback, and immediately refreshes the notification banner when `POST_NOTIFICATIONS` is granted.
+
 ## [0.0.29] — 2026-11-27
 
 Locked mobile viewport layout to eliminate horizontal page drift, added Android's native top notification media player banner, and set **Pure OLED + Obel Mono + Skiper 99** as Zuno's default theme.

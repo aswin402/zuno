@@ -98,6 +98,10 @@ struct MprisShared {
     connection: Mutex<Option<gio::DBusConnection>>,
     snapshot: Mutex<MprisSnapshot>,
     cover_cache: Mutex<CoverCache>,
+    /// Holds a systemd-logind `"sleep"` inhibitor FD strictly while audio is playing so the
+    /// desktop screen can still blank & lock (displaying the lockscreen media widget) without
+    /// suspending the system and cutting off music.
+    sleep_inhibit_fd: Mutex<Option<std::os::fd::OwnedFd>>,
 }
 
 impl MprisShared {
@@ -192,6 +196,50 @@ impl MprisShared {
         build_radio_metadata_variant(radio, art_url.as_deref())
     }
 
+    fn sync_sleep_inhibitor(&self, playing: bool) {
+        use std::os::fd::FromRawFd;
+
+        let Ok(mut guard) = self.sleep_inhibit_fd.lock() else {
+            return;
+        };
+        if !playing {
+            *guard = None;
+            return;
+        }
+        if guard.is_some() {
+            return;
+        }
+        let Ok(sys_bus) = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) else {
+            return;
+        };
+        let params = (
+            "sleep",
+            "Zuno",
+            "Playing audio in the background",
+            "block",
+        )
+            .to_variant();
+        if let Ok((_reply, fd_list)) = sys_bus.call_with_unix_fd_list_sync(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+            "Inhibit",
+            Some(&params),
+            None,
+            gio::DBusCallFlags::NONE,
+            1500,
+            gio::UnixFDList::NONE,
+            gio::Cancellable::NONE,
+        ) {
+            if let Ok(raw_fd) = fd_list.get(0) {
+                if raw_fd >= 0 {
+                    // SAFETY: `g_unix_fd_list_get` returns a newly duplicated valid owned FD.
+                    *guard = Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) });
+                }
+            }
+        }
+    }
+
     fn emit_changes(&self) {
         let conn = {
             let guard = self.connection.lock().unwrap();
@@ -213,6 +261,7 @@ impl MprisShared {
             Some(r) => radio_to_play_state(r.state),
             None => status.state,
         };
+        self.sync_sleep_inhibitor(effective_state == PlayState::Playing);
         let radio_key = active_radio
             .as_ref()
             .map(|r| (r.id.clone(), r.name.clone(), r.subtitle.clone(), r.state));
@@ -454,6 +503,7 @@ where
         cover_cache: Mutex::new(CoverCache {
             recent: VecDeque::with_capacity(MAX_CACHED_ART_FILES),
         }),
+        sleep_inhibit_fd: Mutex::new(None),
     });
 
     let on_raise = Arc::new(on_raise);

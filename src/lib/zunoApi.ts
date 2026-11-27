@@ -69,6 +69,8 @@ export interface ServerInfo {
   suggested_dirs?: string[]
   mcp_http_url: string
   version: string
+  android_bridge_port?: number | null
+  android_bridge_token?: string | null
 }
 
 export interface AudioLevels {
@@ -224,6 +226,7 @@ interface TauriInternals {
 export interface ZunoAndroidBridge {
   getInsetsJson?: () => string
   setSystemBarsLight?: (isLight: boolean) => void
+  configureRustBridge?: (port: number, token: string) => void
   openExternalUrl?: (url: string) => boolean
   fetchUrlAsync?: (reqId: string, url: string) => void
   downloadAndInstallApk?: (
@@ -235,6 +238,8 @@ export interface ZunoAndroidBridge {
   reopenPendingApkInstaller?: () => boolean
   updateMediaNotification?: (jsonPayload: string) => void
   clearMediaNotification?: () => void
+  playAndroidRadio?: (url: string, name: string, subtitle: string) => void
+  stopAndroidRadio?: () => void
 }
 
 interface AndroidUpdateProgressPayload {
