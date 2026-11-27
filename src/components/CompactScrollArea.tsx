@@ -135,16 +135,16 @@ export function CompactScrollArea({
 
   return (
     <ScrollViewportContext.Provider value={viewportRef}>
-      <div className={cn('group/scroll relative min-h-0 overflow-hidden', className)}>
+      <div className={cn('group/scroll relative min-h-0 min-w-0 max-w-full overflow-hidden', className)}>
         <div
           ref={viewportRef}
           className={cn(
-            'zuno-scrollbar-hide w-full overflow-y-auto overscroll-contain',
+            'zuno-scrollbar-hide w-full max-w-full overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y',
             !autoHeight && 'h-full',
             viewportClassName,
           )}
         >
-          <div ref={contentRef} className="min-w-0">
+          <div ref={contentRef} className="w-full max-w-full min-w-0 overflow-x-clip">
             {children}
           </div>
         </div>

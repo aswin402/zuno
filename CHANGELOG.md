@@ -5,6 +5,23 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.29] — 2026-11-27
+
+Locked mobile viewport layout to eliminate horizontal page drift, added Android's native top notification media player banner, and set **Pure OLED + Obel Mono + Skiper 99** as Zuno's default theme.
+
+### Added
+- **Android Top Notification Media Player (`scripts/patch-android-project.py`, `src/App.tsx`, `src/lib/zunoApi.ts`)**:
+  - Added `ZunoMediaService.kt` implementing Android's native `MediaSession` + `Notification.MediaStyle` foreground `mediaPlayback` service (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `POST_NOTIFICATIONS`).
+  - Displays the currently playing song or FM radio station with album art, interactive progress scrubber, and Previous / Play-Pause / Next controls directly in Android's top notification shade, Quick Settings media card, and lock screen while keeping background playback alive.
+
+### Fixed
+- **Mobile Native-App Viewport & Width Lock (`index.html`, `src/index.css`, `src/components/CompactScrollArea.tsx`, `src/components/MobileDock.tsx`, `src/pages/HomePage.tsx`, `src/pages/CustomizePage.tsx`, `src/lib/zunoApi.ts`, `scripts/patch-android-project.py`)**:
+  - Locked `html`/`body`/`#root` and `CompactScrollArea` with `overflow-x-hidden`, `overscroll-behavior: none`, `touch-pan-y`, and `maximum-scale=1.0, user-scalable=no`, disabled WebView overscroll/zoom (`OVER_SCROLL_NEVER`, `setSupportZoom(false)`, `useWideViewPort = false`), suppressed desktop hover tooltips on touch screens so right-edge tooltips cannot widen `scrollWidth`, disabled CSS `zoom` on mobile WebViews, and added safe-area top/bottom padding to `CustomizePage`.
+
+### Changed
+- **Default Theme & Appearance (`src/lib/appearance.ts`, `crates/zuno-core/src/settings.rs`, `src/index.css`, `index.html`, `public/manifest.webmanifest`)**:
+  - Set **Pure OLED** (`#000000`), **Obel Mono** UI & monospace font, **Skiper 99** animated icons, **Blur Reveal** scroll, **Solid** scrubber knob, **Wave-Bars Spectrum** visualizer, **3s** crossfade, and hidden scroll progress indicator as Zuno's out-of-the-box defaults.
+
 ## [0.0.28] — 2026-11-27
 
 Fixed the Android app launcher icon and added full mobile update detection, a visible navbar Update button, and 1-tap native Android APK updates.

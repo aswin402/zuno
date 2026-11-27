@@ -66,10 +66,10 @@ export const HomePage = memo(function HomePage({
   const rowHeight = estimateTrackRowHeight(appearance.density, appearance.showTrackOverline)
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 px-5 pb-8 pt-6 sm:px-8">
+    <div className="mx-auto w-full max-w-4xl space-y-6 px-4 pb-8 pt-6 sm:px-8">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
             LIBRARY
           </p>
@@ -78,7 +78,7 @@ export const HomePage = memo(function HomePage({
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onOpenFolders}

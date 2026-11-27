@@ -24,27 +24,27 @@
  * Dynamically customizable via src/lib/appearance.ts CSS variables.
  */
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #121215;
-  --card-foreground: #fafafa;
-  --popover: #141417;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #09090b;
-  --secondary: #18181b;
-  --secondary-foreground: #fafafa;
-  --muted: #18181b;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
-  --accent-foreground: #fafafa;
-  --border: #27272a;
-  --input: #27272a;
-  --ring: #d4d4d8;
+  --background: #000000;
+  --foreground: #ffffff;
+  --card: #0a0a0c;
+  --card-foreground: #ffffff;
+  --popover: #0e0e11;
+  --popover-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #121216;
+  --secondary-foreground: #ffffff;
+  --muted: #121216;
+  --muted-foreground: #8e8e97;
+  --accent: #202026;
+  --accent-foreground: #ffffff;
+  --border: #1e1e24;
+  --input: #1e1e24;
+  --ring: #ffffff;
   --destructive: #dc2626;
   --radius: 0.75rem;
-  --zuno-font: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --zuno-mono-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --zuno-font: 'Obel Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --zuno-mono-font: 'Obel Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --zuno-font-size: 14px;
   --zuno-icon-stroke: 1.75;
   --zuno-inset-top: 0px;
@@ -93,10 +93,39 @@
   body,
   #root {
     height: 100%;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--zuno-font);
     -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Native mobile app feel: disable webpage rubber-banding, accidental text selection, and hover tooltips */
+  @media (hover: none), (pointer: coarse) {
+    html,
+    body {
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    input,
+    textarea,
+    code,
+    pre {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .t-tt-bubble {
+      display: none !important;
+    }
   }
 
   /* Native frameless Tauri window: transparent viewport edges so outer window corners stay genuinely curved */

@@ -280,6 +280,13 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [androidMediaSyncSeq, setAndroidMediaSyncSeq] = useState(0)
+  const positionRef = useRef(0)
+  positionRef.current = position
+  const androidArtCacheRef = useRef<{ trackId: string; base64: string }>({
+    trackId: '',
+    base64: '',
+  })
   const [volume, setVolume] = useState(DEFAULT_VOLUME)
   const [shuffle, setShuffle] = useState(false)
   const [repeat, setRepeat] = useState<RepeatMode>('off')
@@ -1877,13 +1884,20 @@ export default function App() {
 
   const handleSeekCommit = useCallback(
     (secs: number) => {
+      positionRef.current = secs
       if (nativeAudio) {
-        zunoApi.seek(secs).then(applyNativeStatus).catch(() => {})
+        zunoApi
+          .seek(secs)
+          .then((st) => {
+            applyNativeStatus(st)
+            if (!desktopNative) setAndroidMediaSyncSeq((n) => n + 1)
+          })
+          .catch(() => {})
         return
       }
       if (audioRef.current) audioRef.current.currentTime = secs
     },
-    [nativeAudio, applyNativeStatus],
+    [nativeAudio, desktopNative, applyNativeStatus],
   )
 
   const handleToggleShuffle = useCallback(() => {
@@ -1923,8 +1937,6 @@ export default function App() {
 
   // Refs keep playback position/duration/track current inside the global keydown handler
   // without tearing down and re-registering `window.addEventListener('keydown')` 3–4×/sec.
-  const positionRef = useRef(position)
-  positionRef.current = position
   const durationRef = useRef(duration)
   durationRef.current = duration
   const currentTrackRef = useRef(currentTrack)
@@ -2553,6 +2565,164 @@ export default function App() {
     displayNext,
     handleSeekCommit,
   ])
+
+  // Native Android top notification media player banner (MediaSession + MediaStyle foreground service)
+  useEffect(() => {
+    if (!nativeAudio || desktopNative) return
+    const bridge = getAndroidBridge()
+    if (!bridge?.updateMediaNotification) return
+
+    if (!displayTrack) {
+      bridge.clearMediaNotification?.()
+      return
+    }
+
+    let cancelled = false
+    const title = displayTrack.title || 'Zuno'
+    const artist = displayArtist(displayTrack)
+    const album = displayTrack.album || displayTrack.folder || 'Zuno'
+    const playingNow = displayIsPlaying || displayIsBuffering
+    const isLive = Boolean(activeRadio)
+    const durationSecs = isLive ? 0 : duration || displayTrack.duration_secs || 0
+    const posMs = isLive ? 0 : Math.max(0, Math.round(positionRef.current * 1000))
+    const durMs = Math.max(0, Math.round(durationSecs * 1000))
+
+    const pushState = (artworkBase64: string) => {
+      if (cancelled) return
+      try {
+        bridge.updateMediaNotification?.(
+          JSON.stringify({
+            title,
+            artist,
+            album,
+            isPlaying: playingNow,
+            isLive,
+            positionMs: posMs,
+            durationMs: durMs,
+            artworkBase64,
+          }),
+        )
+      } catch {
+        /* ignore bridge errors */
+      }
+    }
+
+    const needsCover = !isLive && displayTrack.has_cover
+    if (!needsCover) {
+      pushState('')
+      return () => {
+        cancelled = true
+      }
+    }
+
+    if (androidArtCacheRef.current.trackId === displayTrack.id) {
+      pushState(androidArtCacheRef.current.base64)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    // Show notification immediately with Zuno emblem, then upgrade with embedded album art
+    pushState('')
+    fetch(zunoApi.coverUrl(displayTrack.id, 256))
+      .then((res) => (res.ok ? res.blob() : null))
+      .then(
+        (blob) =>
+          new Promise<string>((resolve) => {
+            if (!blob) {
+              resolve('')
+              return
+            }
+            const reader = new FileReader()
+            reader.onloadend = () =>
+              resolve(typeof reader.result === 'string' ? reader.result : '')
+            reader.onerror = () => resolve('')
+            reader.readAsDataURL(blob)
+          }),
+      )
+      .then((dataUrl) => {
+        if (cancelled) return
+        androidArtCacheRef.current = { trackId: displayTrack.id, base64: dataUrl }
+        if (dataUrl) pushState(dataUrl)
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    nativeAudio,
+    desktopNative,
+    activeRadio,
+    displayTrack,
+    displayIsPlaying,
+    displayIsBuffering,
+    duration,
+    androidMediaSyncSeq,
+  ])
+
+  const androidMediaHandlersRef = useRef({
+    displayIsPlaying,
+    activeRadio,
+    handleTogglePlay,
+    displayPrev,
+    displayNext,
+    handleSeekCommit,
+    pauseLocalSongs,
+    stopRadioPlayback,
+  })
+  androidMediaHandlersRef.current = {
+    displayIsPlaying,
+    activeRadio,
+    handleTogglePlay,
+    displayPrev,
+    displayNext,
+    handleSeekCommit,
+    pauseLocalSongs,
+    stopRadioPlayback,
+  }
+
+  useEffect(() => {
+    if (!nativeAudio || desktopNative) return
+    const onMediaAction = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ action?: string; seekSecs?: number }>).detail
+      const action = detail?.action
+      if (!action) return
+      const h = androidMediaHandlersRef.current
+      switch (action) {
+        case 'play':
+          if (!h.displayIsPlaying) h.handleTogglePlay()
+          break
+        case 'pause':
+          if (h.displayIsPlaying) h.handleTogglePlay()
+          break
+        case 'toggle':
+          h.handleTogglePlay()
+          break
+        case 'next':
+          h.displayNext()
+          break
+        case 'previous':
+          h.displayPrev()
+          break
+        case 'stop':
+          if (h.activeRadio) {
+            h.stopRadioPlayback()
+          } else {
+            h.pauseLocalSongs()
+          }
+          break
+        case 'seek':
+          if (!h.activeRadio && typeof detail?.seekSecs === 'number') {
+            setPosition(detail.seekSecs)
+            h.handleSeekCommit(detail.seekSecs)
+          }
+          break
+      }
+    }
+    window.addEventListener('zuno:android-media-action', onMediaAction)
+    return () => window.removeEventListener('zuno:android-media-action', onMediaAction)
+  }, [nativeAudio, desktopNative])
 
   const nowPlayingProps = {
     track: displayTrack,

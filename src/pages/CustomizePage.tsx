@@ -803,7 +803,7 @@ export function CustomizePage({
 
       {/* Right Full-Screen Studio Stage */}
       <CompactScrollArea className="min-h-0 min-w-0 flex-1">
-        <div className="mx-auto w-full max-w-5xl space-y-6 px-5 pb-14 pt-5 sm:px-10 sm:pt-7">
+        <div className="mx-auto w-full max-w-5xl space-y-6 px-4 pb-[calc(3.5rem+var(--zuno-safe-bottom))] pt-[calc(var(--zuno-safe-top)+1rem)] sm:px-10 sm:pt-7">
           {/* Mobile Top Back Bar + 2-Level Hierarchical Nav */}
           <div className="space-y-2.5 lg:hidden">
             <div className="flex items-center justify-between gap-3">

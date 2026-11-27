@@ -235,10 +235,10 @@ export function MobileDock({
           </div>
         )}
 
-        {/* Lower Tier: Nested Contrasting 4-Tab Curved Nav Tray */}
+        {/* Lower Tier: Nested Contrasting 5-Tab Curved Nav Tray */}
         <nav
           aria-label="Navigation"
-          className="grid grid-cols-5 items-center rounded-[28px] bg-primary px-2.5 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
+          className="grid grid-cols-5 items-center rounded-[28px] bg-primary px-1.5 py-2.5 text-primary-foreground shadow-[0_-4px_20px_rgba(0,0,0,0.12)]"
         >
           {navItems.map((item) => (
             <button
@@ -247,18 +247,18 @@ export function MobileDock({
               onClick={item.onClick}
               aria-label={item.label}
               aria-current={item.active ? 'page' : undefined}
-              className="relative flex h-11 flex-col items-center justify-center rounded-2xl transition-transform active:scale-95 cursor-pointer"
+              className="relative flex h-11 min-w-0 flex-col items-center justify-center rounded-2xl px-0.5 transition-transform active:scale-95 cursor-pointer"
             >
               {item.active ? (
                 <span
                   key={`${item.id}-active`}
-                  className="animate-dock-pop flex flex-col items-center justify-center gap-1"
+                  className="animate-dock-pop flex max-w-full flex-col items-center justify-center gap-1"
                 >
                   <span
                     className="h-1.5 w-[2.5px] rounded-full bg-primary-foreground/85"
                     aria-hidden="true"
                   />
-                  <span className="text-[12px] font-semibold leading-none tracking-tight text-primary-foreground">
+                  <span className="max-w-full truncate text-[11px] font-semibold leading-none tracking-tight text-primary-foreground">
                     {item.label}
                   </span>
                 </span>

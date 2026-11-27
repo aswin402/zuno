@@ -233,6 +233,8 @@ export interface ZunoAndroidBridge {
     version: string,
   ) => void
   reopenPendingApkInstaller?: () => boolean
+  updateMediaNotification?: (jsonPayload: string) => void
+  clearMediaNotification?: () => void
 }
 
 interface AndroidUpdateProgressPayload {
@@ -1055,7 +1057,9 @@ export const zunoWindow = {
       return
     }
     if (typeof document !== 'undefined') {
-      document.documentElement.style.zoom = clamped === 100 ? '' : `${clamped}%`
+      // Never apply CSS `zoom` on mobile WebViews — keeps viewport width locked to 100% device width
+      document.documentElement.style.zoom =
+        isMobilePlatform() || clamped === 100 ? '' : `${clamped}%`
     }
   },
   quit: async () => {
