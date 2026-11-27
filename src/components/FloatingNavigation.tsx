@@ -659,10 +659,10 @@ export function FloatingNavigation({
                     >
                       <span>
                         {updateAvailableVersion
-                          ? `Update Available · v${updateAvailableVersion}`
+                          ? `Update · v${updateAvailableVersion}`
                           : appVersion
-                            ? `Updates & Backup (v${appVersion})`
-                            : 'Updates & Backup'}
+                            ? `Updates · v${appVersion}`
+                            : 'Updates'}
                       </span>
                     </button>
                   )}

@@ -76,7 +76,6 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { VinylPlayButton, WaveformPlayButton } from '@/components/WaveformPlayButton'
 import { WindowTitlebar } from '@/components/WindowTitlebar'
 import { ZunoIcon } from '@/components/ZunoIcon'
-import { MONO_FONT_PRESETS, UI_FONT_PRESETS } from '@/lib/fonts'
 import { cn } from '@/lib/utils'
 import {
   ACCENT_PRESETS,
@@ -169,32 +168,31 @@ interface StudioCategoryBranch {
 const STUDIO_TREE: StudioCategoryBranch[] = [
   {
     id: 'color_themes_fonts',
-    label: 'Color Themes & Fonts',
-    shortLabel: 'Themes & Fonts',
+    label: 'Themes & Fonts',
+    shortLabel: 'Themes',
     icon: Palette,
     children: [
       {
         id: 'theme_presets',
         categoryId: 'color_themes_fonts',
-        label: 'Theme Presets',
-        description: `Choose from ${THEME_PRESETS.length} curated dual-mode theme families — every preset supports both Dark and Light modes.`,
+        label: 'Themes',
+        description: 'Dark and light theme palettes.',
         keywords: 'theme dark light oled vermilion obsidian terracotta amber crimson emerald slate',
         icon: Sparkles,
       },
       {
         id: 'custom_palette',
         categoryId: 'color_themes_fonts',
-        label: 'Custom Palette',
-        description:
-          'Swap your 10% accent color or fine-tune any 60/30/10 surface token with the interactive HSV picker.',
+        label: 'Colors',
+        description: 'Accent and surface colors.',
         keywords: 'color palette hex accent hsv picker background secondary card border text',
         icon: Paintbrush,
       },
       {
         id: 'typography_fonts',
         categoryId: 'color_themes_fonts',
-        label: 'Typography & Fonts',
-        description: `Pick from ${UI_FONT_PRESETS.length} variable UI fonts, ${MONO_FONT_PRESETS.length} monospace timestamp fonts, local OS fonts, uploads, and text scale.`,
+        label: 'Fonts',
+        description: 'UI fonts, mono fonts, and text size.',
         keywords: 'font typography mono obel geist jetbrains upload woff2 ttf text size scale',
         icon: Type,
       },
@@ -202,43 +200,39 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
   },
   {
     id: 'window_chrome_nav',
-    label: 'Window, Chrome & Nav',
-    shortLabel: 'Window & Nav',
+    label: 'Window & Nav',
+    shortLabel: 'Window',
     icon: AppWindow,
     children: [
       {
         id: 'window_corners',
         categoryId: 'window_chrome_nav',
         label: 'Window Corners',
-        description:
-          'Adjust the outer corner curve of the frameless desktop app window (flattens cleanly when maximized).',
+        description: 'Outer window corner radius.',
         keywords: 'rounded corners curve window border radius frameless transparent pill sharp',
         icon: Maximize2,
       },
       {
         id: 'top_titlebar',
         categoryId: 'window_chrome_nav',
-        label: 'Top Titlebar',
-        description:
-          'Customize close, minimize, and maximize controls, left/right alignment, active song pill, and height.',
+        label: 'Titlebar',
+        description: 'Window controls and top bar.',
         keywords: 'titlebar top bar close minimize maximize restore macos traffic lights pill compact',
         icon: PanelTop,
       },
       {
         id: 'desktop_nav',
         categoryId: 'window_chrome_nav',
-        label: 'Desktop Navigation',
-        description:
-          'Switch between Classic Sidebar, SmoothUI Floating Navbar, Great UI Floating Dock, and Capsule Menu.',
+        label: 'Navigation',
+        description: 'Sidebar or floating navigation.',
         keywords: 'navigation sidebar floating navbar dock menu capsule smoothui great-ui pill',
         icon: Compass,
       },
       {
         id: 'display_zoom',
         categoryId: 'window_chrome_nav',
-        label: 'Display Zoom',
-        description:
-          'Zoom the entire Zuno interface in or out (50% – 200%, Chrome-style 100%, 110%, 125%...) with live keyboard shortcuts.',
+        label: 'Zoom',
+        description: 'Interface scale (50% – 200%).',
         keywords: 'zoom scale magnify shrink size chrome 100 110 125 90 80 75 150 200 layout dpi',
         icon: ZoomIn,
       },
@@ -246,25 +240,23 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
   },
   {
     id: 'surfaces_scroll_motion',
-    label: 'Surfaces, Scroll & Motion',
-    shortLabel: 'Surfaces & Motion',
+    label: 'Surfaces & Motion',
+    shortLabel: 'Motion',
     icon: Layers,
     children: [
       {
         id: 'surface_materials',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Surface Materials',
-        description:
-          'Control the physical finish of cards and studio panels alongside structural border contrast.',
+        label: 'Surfaces',
+        description: 'Card finish and borders.',
         keywords: 'surface material bordered flat matte hairline borderless glass elevated borders dividers',
         icon: Layers,
       },
       {
         id: 'canvas_background',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Canvas Background',
-        description:
-          'Add subtle theme-matched ambient textures like dot grids, fine grids, top glow, or vignette.',
+        label: 'Background',
+        description: 'Subtle canvas textures.',
         keywords: 'background pattern texture clean dot grid fine grid top glow vignette canvas',
         icon: LayoutGrid,
       },
@@ -272,44 +264,39 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
         id: 'scroll_progress',
         categoryId: 'surfaces_scroll_motion',
         label: 'Scroll Progress',
-        description:
-          'Zero-rerender Skiper 89, 94, and 95 scroll progress gauges updated directly in requestAnimationFrame.',
+        description: 'Scroll indicator style.',
         keywords: 'scroll progress skiper89 skiper94 skiper95 ring pill vertical rail top hairline gauge',
         icon: ArrowDownUp,
       },
       {
         id: 'scroll_reveal',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Scroll Row Reveal',
-        description:
-          'Optional GPU-friendly entrance animations as songs scroll into view (Great UI Blur Reveal & Cascade).',
+        label: 'Row Reveal',
+        description: 'Row scroll entrance effect.',
         keywords: 'scroll reveal blur-scroll-reveal great-ui cascade slide fade entrance animation rows',
         icon: Eye,
       },
       {
         id: 'theme_toggle',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Theme Toggle Button',
-        description:
-          'Pick the animated Dark / Light button glyph from SmoothUI Kinetic and Skiper 4 variants.',
+        label: 'Theme Toggle',
+        description: 'Dark / light button style.',
         keywords: 'theme toggle button smoothui skiper4 eclipse split disc horizon sun orbital switch pill',
         icon: Contrast,
       },
       {
         id: 'theme_transitions',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Theme Transitions',
-        description:
-          'Choose the View Transition reveal animation (Great UI & Skiper 26) and starting origin when switching modes.',
+        label: 'Transitions',
+        description: 'Mode switch animation.',
         keywords: 'transition view dark light circle blur fade swipe polygon curtain blinds origin skiper26 great-ui',
         icon: Wand2,
       },
       {
         id: 'layout_geometry',
         categoryId: 'surfaces_scroll_motion',
-        label: 'Layout & Geometry',
-        description:
-          'Fine-tune interface zoom (50%–200%), song row corner roundness, and vertical list spacing across your library.',
+        label: 'Layout',
+        description: 'Zoom, radius, and density.',
         keywords: 'layout geometry zoom scale 100 110 corner radius sharp balanced round density compact comfortable spacious',
         icon: Box,
       },
@@ -317,69 +304,63 @@ const STUDIO_TREE: StudioCategoryBranch[] = [
   },
   {
     id: 'music_components',
-    label: 'Music Components',
+    label: 'Music',
     shortLabel: 'Music',
     icon: Music2,
     children: [
       {
         id: 'playing_track',
         categoryId: 'music_components',
-        label: 'Playing Track Style',
-        description:
-          'Customize how the currently playing song animates and how idle track indicators appear in lists.',
+        label: 'Active Track',
+        description: 'Playing row indicator.',
         keywords: 'playing active song equalizer pulse ring pulse bars loader minimal leading icon number',
         icon: Play,
       },
       {
         id: 'now_playing_visualizer',
         categoryId: 'music_components',
-        label: 'Now Playing Visualizer',
-        description:
-          'Real-time bass & frequency-reactive animations for Now Playing: Sound Orb, Wave Bars, Harmonic Waves, Bass Ring & Ambient Halo.',
+        label: 'Visualizer',
+        description: 'Now Playing audio visuals.',
         keywords: 'visualizer now playing orb wave bars harmonic sine radial bass ring aurora halo sound spectrum animation fft',
         icon: Sparkles,
       },
       {
         id: 'scrubber',
         categoryId: 'music_components',
-        label: 'Progress Scrubber',
-        description:
-          'Customize the seek rail and playhead handle across the desktop player bar and Now Playing screen.',
+        label: 'Scrubber',
+        description: 'Progress bar style.',
         keywords: 'scrubber progress seek bar waveform ticks capsule pill ring solid line',
         icon: Sliders,
       },
       {
         id: 'play_button',
         categoryId: 'music_components',
-        label: 'Play Button Style',
-        description:
-          'Switch between Classic monochrome icon, Skiper 25 Waveform Toggle, or Spinning Vinyl disc.',
+        label: 'Play Button',
+        description: 'Play / pause button style.',
         keywords: 'play button pause skiper25 waveform spinning vinyl disc classic toggle',
         icon: Disc3,
       },
       {
         id: 'player_bar',
         categoryId: 'music_components',
-        label: 'Player Bar & Rows',
-        description:
-          'Configure Floating Sticky vs Docked desktop bar layout, bottom dock gradual blur, and track row metadata.',
+        label: 'Player Bar',
+        description: 'Bar layout and row details.',
         keywords: 'player bar floating docked gradual blur gradualblur react-bits dock visibility pulse overline artist duration metadata',
         icon: RectangleHorizontal,
       },
       {
         id: 'audio_crossfade',
         categoryId: 'music_components',
-        label: 'Audio Crossfade',
-        description:
-          'Pure-Rust equal-power crossfade & fade-in transitions when advancing from one song to the next.',
+        label: 'Crossfade',
+        description: 'Track transition fade.',
         keywords: 'crossfade fade in fade out audio transition gapless overlap dj smooth',
         icon: AudioLines,
       },
       {
         id: 'icon_packs',
         categoryId: 'music_components',
-        label: 'Icon Packs',
-        description: `Switch between ${ICON_PACK_OPTIONS.length} curated vector icon packs (including Skiper 99 kinetic icons) and stroke weight.`,
+        label: 'Icons',
+        description: 'Icon style and stroke.',
         keywords: 'icons lucide skiper99 tabler iconsax hugeicons itshover pulsoicon humbleicons majesticons stroke weight',
         icon: Frame,
       },
@@ -399,44 +380,44 @@ interface CustomColorSlot {
 const CUSTOM_COLOR_SLOTS: CustomColorSlot[] = [
   {
     key: 'primary',
-    label: 'Primary Accent (10%)',
-    hint: 'Active buttons, indicators & scrubber fill',
+    label: 'Accent',
+    hint: 'Buttons & scrubber',
     presets: ['#fafafa', '#ea5829', '#f59e0b', '#10b981', '#3b82f6', '#818cf8', '#e11d48'],
   },
   {
     key: 'background',
-    label: 'Canvas Background (60%)',
-    hint: 'Main matte workspace background',
+    label: 'Background',
+    hint: 'Main canvas',
     presets: ['#09090b', '#000000', '#0e0c0a', '#0a0c14', '#ffffff', '#f7f5f0'],
   },
   {
     key: 'secondary',
-    label: 'Secondary Surface (30%)',
-    hint: 'Active rows, hover fills & pills',
+    label: 'Surface',
+    hint: 'Active rows & pills',
     presets: ['#18181b', '#121216', '#211c17', '#181e30', '#f4f4f5', '#ede9e0'],
   },
   {
     key: 'card',
-    label: 'Card & Sidebar Surface',
-    hint: 'Sidebar, floating bar & elevated cards',
+    label: 'Cards',
+    hint: 'Sidebar & dock',
     presets: ['#121215', '#0a0a0c', '#181411', '#121624', '#f8f8f9', '#ffffff'],
   },
   {
     key: 'border',
-    label: 'Hairline Border',
-    hint: 'Structural 1px dividers & edges',
+    label: 'Borders',
+    hint: 'Dividers',
     presets: ['#27272a', '#1e1e24', '#2e2721', '#242a40', '#e4e4e7', '#dfdad0'],
   },
   {
     key: 'foreground',
-    label: 'Primary Text',
-    hint: 'Song titles, headings & labels',
+    label: 'Text',
+    hint: 'Titles & labels',
     presets: ['#fafafa', '#ffffff', '#f8f4ef', '#f1f5f9', '#09090b', '#1c1917'],
   },
   {
     key: 'mutedForeground',
-    label: 'Muted Text',
-    hint: 'Artists, timestamps & subtle captions',
+    label: 'Muted',
+    hint: 'Artists & time',
     presets: ['#a1a1aa', '#8e8e97', '#9d9287', '#8c96b0', '#71717a', '#64748b'],
   },
 ]
@@ -692,8 +673,8 @@ export function CustomizePage({
                   searchRef.current?.blur()
                 }
               }}
-              placeholder="Search components... (/)"
-              aria-label="Search Customize Studio"
+              placeholder="Search…"
+              aria-label="Search Customize"
               className="w-full rounded-xl border border-border bg-card py-1.5 pl-8 pr-7 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
             />
             {searchQuery && (
@@ -823,14 +804,11 @@ export function CustomizePage({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-                Appearance Studio / {currentCategory.label} / {currentMeta.label}
+                {currentCategory.label}
               </p>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground sm:text-[28px]">
                 {currentMeta.label}
               </h1>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground sm:text-[13px]">
-                {currentMeta.description}
-              </p>
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -882,8 +860,7 @@ export function CustomizePage({
           {activePage === 'theme_presets' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Workspace Theme Preview"
-                hint="Toggle Dark / Light top-right"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -893,10 +870,7 @@ export function CustomizePage({
                 <ThemePresetPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Theme Families"
-                description="Each preset includes calibrated Dark and Light palettes following a 60 / 30 / 10 contrast hierarchy."
-              >
+              <Group title="Themes">
                 <ThemeSelector
                   themes={THEME_PRESETS}
                   value={settings.theme}
@@ -910,7 +884,7 @@ export function CustomizePage({
           {activePage === 'custom_palette' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live 60 / 30 / 10 Palette Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -924,7 +898,7 @@ export function CustomizePage({
                       className="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-[10.5px] font-sans font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
                     >
                       <RotateCcw className="h-3 w-3" />
-                      <span>Restore Preset</span>
+                      <span>Reset</span>
                     </button>
                   )
                 }
@@ -932,10 +906,7 @@ export function CustomizePage({
                 <PaletteBalancePreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Quick Accent Swatches (10%)"
-                description="Instantly swap your primary accent highlight while keeping your chosen base theme."
-              >
+              <Group title="Accent">
                 <div className="flex flex-wrap gap-2">
                   {ACCENT_PRESETS.map((acc) => {
                     const active =
@@ -978,10 +949,7 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Fine-Tune Surface Tokens"
-                description="Customize individual hex slots with the interactive HSV color picker."
-              >
+              <Group title="Custom Colors">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {CUSTOM_COLOR_SLOTS.map((slot) => (
                     <div
@@ -1012,7 +980,7 @@ export function CustomizePage({
           {activePage === 'typography_fonts' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Typography & Timestamp Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1022,17 +990,14 @@ export function CustomizePage({
                 <TypographyPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Global Text Size"
-                description="Adjust the base UI typography scale across headings, lists, and controls."
-              >
+              <Group title="Text Size">
                 <Segmented<FontSizeId>
                   value={settings.fontSize}
                   onChange={(fontSize) => onChange({ fontSize })}
                   options={[
-                    { value: 'sm', label: 'Small (13px)' },
-                    { value: 'md', label: 'Default (14px)' },
-                    { value: 'lg', label: 'Large (15.5px)' },
+                    { value: 'sm', label: 'Small' },
+                    { value: 'md', label: 'Default' },
+                    { value: 'lg', label: 'Large' },
                   ]}
                 />
               </Group>
@@ -1045,8 +1010,7 @@ export function CustomizePage({
           {activePage === 'window_corners' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Frameless Desktop Window Preview"
-                hint="Test Maximize button inside preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1056,23 +1020,20 @@ export function CustomizePage({
                 <WindowCornersPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="App Window Corner Curve"
-                description="Choose the outer roundness of Zuno's frameless desktop window."
-              >
+              <Group title="Corner Curve">
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   {(
                     [
-                      { id: 'sharp', label: 'Sharp', px: '0px', desc: 'Crisp flush studio edges' },
-                      { id: 'soft', label: 'Soft', px: '10px', desc: 'Subtle refined rounding' },
+                      { id: 'sharp', label: 'Sharp', px: '0px', desc: 'Flush edges' },
+                      { id: 'soft', label: 'Soft', px: '10px', desc: 'Subtle curve' },
                       {
                         id: 'curved',
                         label: 'Curved',
                         px: '16px',
-                        desc: 'Balanced modern desktop curve',
+                        desc: 'Balanced',
                         recommended: true,
                       },
-                      { id: 'pill', label: 'Extra Curved', px: '22px', desc: 'Deep organic corners' },
+                      { id: 'pill', label: 'Extra', px: '22px', desc: 'Deep curve' },
                     ] as {
                       id: WindowRadiusId
                       label: string
@@ -1133,7 +1094,7 @@ export function CustomizePage({
           {activePage === 'top_titlebar' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Custom Desktop Titlebar Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1167,44 +1128,21 @@ export function CustomizePage({
                     }}
                     isPlaying
                   />
-                  <div className="flex h-16 items-center justify-center bg-background/80 px-4 text-xs text-muted-foreground">
-                    Theme-matched desktop chrome · drag bar to move · double-click to maximize
+                  <div className="flex h-14 items-center justify-center bg-background/80 px-4 text-xs text-muted-foreground">
+                    Drag to move · double-click to maximize
                   </div>
                 </div>
               </LivePreviewStage>
 
-              <Group
-                title="Window Controls Style"
-                description="Style of the Close, Minimize, and Maximize / Restore buttons in the top bar."
-              >
+              <Group title="Controls Style">
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
-                      {
-                        id: 'minimal',
-                        label: 'Minimal Mono',
-                        desc: 'Quiet circular buttons with soft hover highlights',
-                      },
-                      {
-                        id: 'macos',
-                        label: 'Traffic Lights',
-                        desc: 'Compact dots that glow red, amber & green on hover',
-                      },
-                      {
-                        id: 'dots',
-                        label: 'Monochrome Dots',
-                        desc: 'Strict monochrome dots matched to your active theme',
-                      },
-                      {
-                        id: 'pill',
-                        label: 'Floating Pill',
-                        desc: 'Window controls grouped inside a rounded pill capsule',
-                      },
-                      {
-                        id: 'geometric',
-                        label: 'Sharp Studio',
-                        desc: 'Bordered square hardware keys with hairline dividers',
-                      },
+                      { id: 'minimal', label: 'Minimal', desc: 'Clean circular buttons' },
+                      { id: 'macos', label: 'Traffic Lights', desc: 'Color dots on hover' },
+                      { id: 'dots', label: 'Mono Dots', desc: 'Theme-matched dots' },
+                      { id: 'pill', label: 'Floating Pill', desc: 'Grouped pill capsule' },
+                      { id: 'geometric', label: 'Sharp', desc: 'Square framed keys' },
                     ] as { id: TitlebarStyleId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.titlebarStyle === opt.id
@@ -1233,34 +1171,26 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Controls Alignment"
-                description="Choose which side of the top bar holds Minimize, Maximize, and Close."
-              >
+              <Group title="Alignment">
                 <Segmented<TitlebarAlignId>
                   value={settings.titlebarAlign}
                   onChange={(titlebarAlign) => onChange({ titlebarAlign })}
                   options={[
-                    { value: 'right', label: 'Right (Linux / Windows)' },
+                    { value: 'right', label: 'Right' },
                     { value: 'left', label: 'Left (macOS)' },
                   ]}
                 />
               </Group>
 
-              <Group
-                title="Titlebar Behavior"
-                description="Fine-tune top bar height and centered active song pill."
-              >
+              <Group title="Options">
                 <div className="z-surface-card divide-y divide-border rounded-2xl border border-border bg-card">
                   <ToggleRow
                     label="Show playing track in titlebar"
-                    description="Display a centered pill with the current song title & live indicator."
                     checked={settings.titlebarShowTrack}
                     onChange={(titlebarShowTrack) => onChange({ titlebarShowTrack })}
                   />
                   <ToggleRow
-                    label="Ultra-slim compact titlebar"
-                    description="Shrink top bar height from 36px to 30px for maximum canvas space."
+                    label="Compact titlebar"
                     checked={settings.titlebarCompact}
                     onChange={(titlebarCompact) => onChange({ titlebarCompact })}
                   />
@@ -1272,8 +1202,7 @@ export function CustomizePage({
           {activePage === 'desktop_nav' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Interactive Desktop Navigation Preview"
-                hint="Click tabs, Studio dock, or capsule inside preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1283,33 +1212,30 @@ export function CustomizePage({
                 <DesktopNavPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Desktop Navigation Theme (SmoothUI & Great UI)"
-                description="Choose between the full-height classic sidebar or floating navigation shells."
-              >
+              <Group title="Navigation Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {(
                     [
                       {
                         id: 'sidebar',
-                        label: 'Classic Sidebar',
-                        desc: 'Full-height left rail with inline playlists & counts',
+                        label: 'Sidebar',
+                        desc: 'Left rail with playlists',
                       },
                       {
                         id: 'floating-navbar',
-                        label: 'Floating Navbar (SmoothUI)',
-                        desc: 'Detached top pill with active dot & auto-hide on scroll',
+                        label: 'Floating Bar',
+                        desc: 'Top pill, auto-hides on scroll',
                         recommended: true,
                       },
                       {
                         id: 'floating-dock',
-                        label: 'Floating Dock Menu (Great UI)',
-                        desc: 'Morphing active pill dock with expandable Studio submenu',
+                        label: 'Floating Dock',
+                        desc: 'Compact dock + menu',
                       },
                       {
                         id: 'floating-menu',
-                        label: 'Floating Capsule Menu (Great UI)',
-                        desc: 'Minimal corner pill expanding into a full-canvas menu',
+                        label: 'Capsule Menu',
+                        desc: 'Corner pill + full menu',
                       },
                     ] as { id: NavStyleId; label: string; desc: string; recommended?: boolean }[]
                   ).map((opt) => {
@@ -1402,7 +1328,7 @@ export function CustomizePage({
           {activePage === 'surface_materials' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Surface Material Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1412,19 +1338,16 @@ export function CustomizePage({
                 <SurfaceMaterialPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Surface Material Finish"
-                description="Controls the physical finish of Studio cards, panels, and elevated surfaces."
-              >
+              <Group title="Surface Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
-                      { id: 'bordered', label: 'Framed Bordered', desc: 'Crisp card fill + 1px edge' },
-                      { id: 'flat', label: 'Flat Matte', desc: 'Quiet secondary surface, no border' },
-                      { id: 'minimal_top', label: 'Minimal Hairline', desc: 'Top divider only, zero box weight' },
-                      { id: 'borderless', label: 'Borderless Fill', desc: 'Soft tonal separation' },
-                      { id: 'glass', label: 'Frosted Glass', desc: 'Translucent backdrop blur' },
-                      { id: 'elevated', label: 'Elevated Soft', desc: 'Floating depth shadow' },
+                      { id: 'bordered', label: 'Framed', desc: 'Card fill + 1px edge' },
+                      { id: 'flat', label: 'Flat Matte', desc: 'Matte fill, no border' },
+                      { id: 'minimal_top', label: 'Hairline', desc: 'Top divider only' },
+                      { id: 'borderless', label: 'Borderless', desc: 'Soft tonal fill' },
+                      { id: 'glass', label: 'Glass', desc: 'Frosted blur' },
+                      { id: 'elevated', label: 'Elevated', desc: 'Soft shadow' },
                     ] as { id: SurfaceStyleId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.surfaceStyle === opt.id
@@ -1466,15 +1389,12 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Borders & Dividers"
-                description="Hairline structural contrast across panels and navigation chrome."
-              >
+              <Group title="Borders">
                 <Segmented<BorderStyleId>
                   value={settings.borders}
                   onChange={(borders) => onChange({ borders })}
                   options={[
-                    { value: 'borderless', label: 'Borderless' },
+                    { value: 'borderless', label: 'None' },
                     { value: 'subtle', label: 'Subtle' },
                     { value: 'crisp', label: 'Crisp' },
                   ]}
@@ -1486,7 +1406,7 @@ export function CustomizePage({
           {activePage === 'canvas_background' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Canvas Background Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1496,18 +1416,15 @@ export function CustomizePage({
                 <CanvasPatternPreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Canvas Background Pattern"
-                description="Optional subtle ambient texture on the workspace canvas (inherits your active theme)."
-              >
+              <Group title="Pattern">
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                   {(
                     [
-                      { id: 'clean', label: 'Clean', desc: 'Pure matte canvas' },
-                      { id: 'dot_grid', label: 'Dot Grid', desc: 'Fine dot matrix' },
-                      { id: 'fine_grid', label: 'Fine Grid', desc: 'Blueprint lines' },
-                      { id: 'top_glow', label: 'Top Glow', desc: 'Soft accent aura' },
-                      { id: 'vignette', label: 'Vignette', desc: 'Radial studio shade' },
+                      { id: 'clean', label: 'Clean', desc: 'Solid canvas' },
+                      { id: 'dot_grid', label: 'Dot Grid', desc: 'Dot matrix' },
+                      { id: 'fine_grid', label: 'Fine Grid', desc: 'Grid lines' },
+                      { id: 'top_glow', label: 'Top Glow', desc: 'Top aura' },
+                      { id: 'vignette', label: 'Vignette', desc: 'Edge shade' },
                     ] as { id: BgPatternId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.bgPattern === opt.id
@@ -1551,8 +1468,7 @@ export function CustomizePage({
           {activePage === 'scroll_progress' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Interactive Scroll Progress Preview"
-                hint="Scroll list or drag Skiper 89 pill"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1562,34 +1478,14 @@ export function CustomizePage({
                 <ScrollProgressLivePreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Scroll Progress Indicator (Skiper 89 / 94 / 95)"
-                description="Choose a zero-lag scroll progress effect while browsing your song library."
-              >
+              <Group title="Indicator Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {(
                     [
-                      {
-                        id: 'none',
-                        label: 'None (Minimal)',
-                        desc: 'Quiet pill scrollbar only',
-                      },
-                      {
-                        id: 'skiper89',
-                        label: 'Skiper 89 · Ring Pill',
-                        desc: 'Draggable circular progress ring + % counter',
-                      },
-                      {
-                        id: 'skiper94',
-                        label: 'Skiper 94 · Vertical Rail',
-                        desc: 'Edge gauge with clipped % readout',
-                      },
-                      {
-                        id: 'skiper95',
-                        label: 'Skiper 95 · Top Hairline',
-                        desc: 'Precision top progress line + tick badge',
-                        recommended: true,
-                      },
+                      { id: 'none', label: 'None', desc: 'Scrollbar only' },
+                      { id: 'skiper89', label: 'Ring Pill', desc: 'Draggable ring' },
+                      { id: 'skiper94', label: 'Vertical Rail', desc: 'Edge gauge' },
+                      { id: 'skiper95', label: 'Top Hairline', desc: 'Top line', recommended: true },
                     ] as {
                       id: ScrollProgressStyleId
                       label: string
@@ -1647,8 +1543,7 @@ export function CustomizePage({
           {activePage === 'scroll_reveal' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Row Reveal Preview"
-                hint="Select a style or click Replay Entrance"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1658,29 +1553,13 @@ export function CustomizePage({
                 <ScrollRevealLivePreview settings={settings} />
               </LivePreviewStage>
 
-              <Group
-                title="Scroll Row Reveal Effect (Great UI)"
-                description="Subtle GPU-accelerated entrance effect as songs scroll into view."
-              >
+              <Group title="Row Reveal">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   {(
                     [
-                      {
-                        id: 'none',
-                        label: 'Instant (Off)',
-                        desc: 'Zero animation — fastest possible scroll',
-                      },
-                      {
-                        id: 'slide-fade',
-                        label: 'Smooth Cascade',
-                        desc: 'Crisp micro-slide + fade reveal (zero blur cost)',
-                        recommended: true,
-                      },
-                      {
-                        id: 'blur-reveal',
-                        label: 'Blur Scroll Reveal (Great UI)',
-                        desc: 'Soft unblur + float entrance on newly revealed rows',
-                      },
+                      { id: 'none', label: 'Off', desc: 'Instant' },
+                      { id: 'slide-fade', label: 'Cascade', desc: 'Slide + fade', recommended: true },
+                      { id: 'blur-reveal', label: 'Blur Reveal', desc: 'Soft unblur' },
                     ] as {
                       id: ScrollRevealStyleId
                       label: string
@@ -1725,8 +1604,7 @@ export function CustomizePage({
           {activePage === 'theme_toggle' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Interactive Theme Toggle Button Preview"
-                hint="Click button to test spring morph"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1736,25 +1614,17 @@ export function CustomizePage({
                 <ThemeToggleLivePreview settings={settings} onToggleMode={handleToggleMode} />
               </LivePreviewStage>
 
-              <Group
-                title="Theme Toggle Button Style (SmoothUI & Skiper 4)"
-                description="Choose the animated Dark / Light toggle icon shown across sidebar, navbar, and studio."
-              >
+              <Group title="Toggle Icon">
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
-                      { id: 'eclipse', label: 'Eclipse Mask', desc: 'Smooth crescent cutout & sun rays' },
-                      {
-                        id: 'smoothui',
-                        label: 'SmoothUI Kinetic',
-                        desc: 'Tactile dual-layer spring morph',
-                        recommended: true,
-                      },
-                      { id: 'skiper-1', label: 'Split Disc', desc: 'Skiper 4 · Rotating Yin-Yang half disc' },
-                      { id: 'skiper-2', label: 'Horizon Sun', desc: 'Skiper 4 · Rising sun over horizon' },
-                      { id: 'skiper-3', label: 'Expand Dot', desc: 'Skiper 4 · Dotted sun morphing orb' },
-                      { id: 'skiper-4', label: 'Orbital Ring', desc: 'Skiper 4 · Orbiting lunar satellite' },
-                      { id: 'skiper-5', label: 'Switch Pill', desc: 'Skiper 4 · Sliding capsule toggle' },
+                      { id: 'eclipse', label: 'Eclipse', desc: 'Crescent & rays' },
+                      { id: 'smoothui', label: 'Kinetic', desc: 'Spring morph', recommended: true },
+                      { id: 'skiper-1', label: 'Split Disc', desc: 'Rotating half disc' },
+                      { id: 'skiper-2', label: 'Horizon', desc: 'Rising sun' },
+                      { id: 'skiper-3', label: 'Expand Dot', desc: 'Morphing orb' },
+                      { id: 'skiper-4', label: 'Orbital', desc: 'Orbiting dot' },
+                      { id: 'skiper-5', label: 'Switch Pill', desc: 'Sliding pill' },
                     ] as { id: ThemeToggleStyleId; label: string; desc: string; recommended?: boolean }[]
                   ).map((opt) => {
                     const active = settings.themeToggleStyle === opt.id
@@ -1806,7 +1676,7 @@ export function CustomizePage({
           {activePage === 'theme_transitions' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Dark / Light View Transition Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1816,21 +1686,18 @@ export function CustomizePage({
                 <ThemeTransitionLivePreview settings={settings} onToggleMode={handleToggleMode} />
               </LivePreviewStage>
 
-              <Group
-                title="Transition Style (Great UI & Skiper 26)"
-                description="Choose how the workspace reveals when toggling between Dark and Light mode."
-              >
+              <Group title="Transition Style">
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
                   {(
                     [
-                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Skiper 26 · Soft blurred radial ripple', recommended: true },
-                      { id: 'circle', label: 'Circular Wipe', desc: 'Great UI · Sharp circular clip-path' },
-                      { id: 'blur-fade', label: 'Blur Fade', desc: 'Great UI · Soft blur cross-fade' },
-                      { id: 'swipe', label: 'Directional Swipe', desc: 'Great UI · Smooth horizontal sweep' },
-                      { id: 'polygon', label: 'Diagonal Polygon', desc: 'Skiper 26 · Angled polygon wipe' },
-                      { id: 'bottom-up', label: 'Bottom-Up Curtain', desc: 'Skiper 26 · Rising vertical reveal' },
-                      { id: 'rectangle', label: 'Top-Down Sweep', desc: 'Clean downward curtain' },
-                      { id: 'blinds', label: 'Venetian Blinds', desc: 'Slatted architectural reveal' },
+                      { id: 'circle-blur', label: 'Circle Blur', desc: 'Soft radial ripple', recommended: true },
+                      { id: 'circle', label: 'Circle Wipe', desc: 'Sharp circle clip' },
+                      { id: 'blur-fade', label: 'Blur Fade', desc: 'Soft cross-fade' },
+                      { id: 'swipe', label: 'Swipe', desc: 'Horizontal sweep' },
+                      { id: 'polygon', label: 'Polygon', desc: 'Diagonal wipe' },
+                      { id: 'bottom-up', label: 'Curtain', desc: 'Bottom-up reveal' },
+                      { id: 'rectangle', label: 'Sweep', desc: 'Top-down reveal' },
+                      { id: 'blinds', label: 'Blinds', desc: 'Slatted reveal' },
                     ] as { id: ThemeTransitionId; label: string; desc: string; recommended?: boolean }[]
                   ).map((opt) => {
                     const active = settings.themeTransition === opt.id
@@ -1866,15 +1733,12 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Reveal Starting Origin"
-                description="Anchor point where circular and radial reveal animations originate."
-              >
+              <Group title="Origin">
                 <Segmented<ThemeTransitionStartId>
                   value={settings.themeTransitionStart}
                   onChange={(themeTransitionStart) => onChange({ themeTransitionStart })}
                   options={[
-                    { value: 'trigger', label: 'From Button' },
+                    { value: 'trigger', label: 'Button' },
                     { value: 'center', label: 'Center' },
                     { value: 'top-left', label: 'Top Left' },
                     { value: 'top-right', label: 'Top Right' },
@@ -1897,7 +1761,7 @@ export function CustomizePage({
           {activePage === 'layout_geometry' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Row Corner Radius & Density Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1907,11 +1771,7 @@ export function CustomizePage({
                 <LayoutGeometryPreview settings={settings} />
               </LivePreviewStage>
 
-              {/* Inline Zoom & Scale Control directly inside Layout & Geometry */}
-              <Group
-                title="Display Zoom (Chrome-Style)"
-                description={`Scale the entire layout in or out (${UI_ZOOM_MIN}% – ${UI_ZOOM_MAX}%) like Chrome page zoom, or use Ctrl + / Ctrl - / Ctrl 0.`}
-              >
+              <Group title="Zoom">
                 <DisplayZoomControls
                   variant="compact"
                   uiZoom={settings.uiZoom}
@@ -1920,7 +1780,7 @@ export function CustomizePage({
               </Group>
 
               <div className="grid gap-6 sm:grid-cols-2">
-                <Group title="Corner Radius" description="Roundness across song rows, tiles, and cards.">
+                <Group title="Corner Radius">
                   <Segmented<RadiusStyleId>
                     value={settings.radius}
                     onChange={(radius) => onChange({ radius })}
@@ -1932,13 +1792,13 @@ export function CustomizePage({
                   />
                 </Group>
 
-                <Group title="List Density" description="Vertical breathing room between songs in lists.">
+                <Group title="List Density">
                   <Segmented<DensityId>
                     value={settings.density}
                     onChange={(density) => onChange({ density })}
                     options={[
                       { value: 'compact', label: 'Compact' },
-                      { value: 'comfortable', label: 'Comfortable' },
+                      { value: 'comfortable', label: 'Default' },
                       { value: 'spacious', label: 'Spacious' },
                     ]}
                   />
@@ -1951,8 +1811,7 @@ export function CustomizePage({
           {activePage === 'playing_track' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Active & Idle Song Row Preview"
-                hint="Click active row to toggle Play / Pause"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -1966,33 +1825,14 @@ export function CustomizePage({
                 />
               </LivePreviewStage>
 
-              <Group
-                title="Active Playing Song Theme"
-                description="Choose how the currently playing song animates in Songs, Queue, and Playlists."
-              >
+              <Group title="Active Row Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {(
                     [
-                      {
-                        id: 'pulse',
-                        label: 'Pulse Ring',
-                        desc: 'Circular Play/Pause button with subtle ring pulse',
-                      },
-                      {
-                        id: 'equalizer',
-                        label: 'Equalizer Bars',
-                        desc: 'Square album cover tile + 4 dancing equalizer bars',
-                      },
-                      {
-                        id: 'pulse-bars',
-                        label: 'Pulse Bars',
-                        desc: 'Square album cover tile + 5 centered pulsing bars',
-                      },
-                      {
-                        id: 'minimal',
-                        label: 'Minimal',
-                        desc: 'Quiet text highlight with clean icon morph',
-                      },
+                      { id: 'pulse', label: 'Pulse Ring', desc: 'Circular pulse button' },
+                      { id: 'equalizer', label: 'Equalizer Bars', desc: 'Cover + 4 bars' },
+                      { id: 'pulse-bars', label: 'Pulse Bars', desc: 'Cover + 5 bars' },
+                      { id: 'minimal', label: 'Minimal', desc: 'Clean highlight' },
                     ] as { id: PlayingStyleId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.playingStyle === opt.id
@@ -2058,10 +1898,7 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Idle Track Leading Indicator"
-                description="Choose how non-playing track rows render their left-side play badge in Pulse Ring mode."
-              >
+              <Group title="Idle Indicator">
                 <Segmented<TrackIconStyleId>
                   value={settings.trackIconStyle}
                   onChange={(trackIconStyle) => onChange({ trackIconStyle })}
@@ -2079,8 +1916,7 @@ export function CustomizePage({
           {activePage === 'now_playing_visualizer' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Audio-Reactive Now Playing Preview"
-                hint="Click Pulse Bass to test low-end shockwaves"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2094,44 +1930,16 @@ export function CustomizePage({
                 />
               </LivePreviewStage>
 
-              <Group
-                title="Visualizer Animation Theme"
-                description="Reacts live to your song's real bass, mid, treble, and 24-band frequency energy."
-              >
+              <Group title="Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
-                      {
-                        id: 'orb',
-                        label: 'Sound Orb',
-                        desc: 'Organic morphing orb with expanding bass shockwave rings',
-                        recommended: true,
-                      },
-                      {
-                        id: 'wave-bars',
-                        label: 'Spectrum Wave Bars',
-                        desc: '32 mirrored studio bars with reflections & peak-hold dots',
-                      },
-                      {
-                        id: 'fluid-wave',
-                        label: 'Harmonic Waves',
-                        desc: 'Layered bass, vocal & treble ribbons flowing smoothly across stage',
-                      },
-                      {
-                        id: 'radial-ring',
-                        label: 'Radial Bass Ring',
-                        desc: '360° frequency burst around a breathing bass core + orbit dot',
-                      },
-                      {
-                        id: 'aurora-pulse',
-                        label: 'Ambient Bass Halo',
-                        desc: 'Full-stage soft atmospheric aura pulsing behind the track title',
-                      },
-                      {
-                        id: 'none',
-                        label: 'Minimal (Off)',
-                        desc: 'Pure typography-only Now Playing screen',
-                      },
+                      { id: 'orb', label: 'Sound Orb', desc: 'Morphing bass orb', recommended: true },
+                      { id: 'wave-bars', label: 'Wave Bars', desc: 'Spectrum bars' },
+                      { id: 'fluid-wave', label: 'Harmonic Waves', desc: 'Flowing ribbons' },
+                      { id: 'radial-ring', label: 'Bass Ring', desc: 'Radial frequency ring' },
+                      { id: 'aurora-pulse', label: 'Ambient Halo', desc: 'Soft stage glow' },
+                      { id: 'none', label: 'Off', desc: 'Text only' },
                     ] as {
                       id: VisualizerStyleId
                       label: string
@@ -2235,25 +2043,19 @@ export function CustomizePage({
               </Group>
 
               <div className="grid gap-6 sm:grid-cols-2">
-                <Group
-                  title="Visualizer Color Mode"
-                  description="Match your active 60/30/10 theme, use harmonic frequency tones, or stay monochrome."
-                >
+                <Group title="Color">
                   <Segmented<VisualizerColorId>
                     value={settings.visualizerColor}
                     onChange={(visualizerColor) => onChange({ visualizerColor })}
                     options={[
-                      { value: 'theme', label: 'Theme Matched' },
-                      { value: 'spectrum', label: 'Harmonic Color' },
-                      { value: 'mono', label: 'Pure Mono' },
+                      { value: 'theme', label: 'Theme' },
+                      { value: 'spectrum', label: 'Spectrum' },
+                      { value: 'mono', label: 'Mono' },
                     ]}
                   />
                 </Group>
 
-                <Group
-                  title="Bass & Sound Reactivity"
-                  description="Control how strongly kicks, bass drops, and vocal waves drive motion."
-                >
+                <Group title="Reactivity">
                   <Segmented<VisualizerIntensityId>
                     value={settings.visualizerIntensity}
                     onChange={(visualizerIntensity) => onChange({ visualizerIntensity })}
@@ -2271,8 +2073,7 @@ export function CustomizePage({
           {activePage === 'scrubber' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Interactive Scrubber Preview"
-                hint="Drag rail to test feel"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2295,20 +2096,17 @@ export function CustomizePage({
                 </div>
               </LivePreviewStage>
 
-              <Group
-                title="Progress Scrubber Style"
-                description="Choose the seek rail & playhead style across desktop and mobile."
-              >
+              <Group title="Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
-                      { id: 'ring', label: 'Hollow Ring', desc: 'Hairline rail + ring handle' },
-                      { id: 'solid', label: 'Solid Dot', desc: 'Hairline rail + filled dot' },
-                      { id: 'line', label: 'Minimal Line', desc: 'Clean line, handle on hover' },
-                      { id: 'pill', label: 'Vertical Pill', desc: 'Hardware-style vertical marker' },
-                      { id: 'capsule', label: 'Capsule Bar', desc: 'Thick pill progress fill' },
-                      { id: 'waveform', label: 'Waveform Bars', desc: 'Audio waveform scrub rail' },
-                      { id: 'ticks', label: 'Segmented Ticks', desc: 'Precision studio ruler ticks' },
+                      { id: 'ring', label: 'Hollow Ring', desc: 'Ring handle' },
+                      { id: 'solid', label: 'Solid Dot', desc: 'Filled dot' },
+                      { id: 'line', label: 'Line', desc: 'Clean line' },
+                      { id: 'pill', label: 'Vertical Pill', desc: 'Vertical marker' },
+                      { id: 'capsule', label: 'Capsule', desc: 'Thick pill bar' },
+                      { id: 'waveform', label: 'Waveform', desc: 'Audio waveform' },
+                      { id: 'ticks', label: 'Ticks', desc: 'Ruler ticks' },
                     ] as { id: ScrubberKnobStyleId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.scrubberKnob === opt.id
@@ -2356,8 +2154,7 @@ export function CustomizePage({
           {activePage === 'play_button' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Interactive Play / Pause Button Preview"
-                hint="Click button to test live state"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2371,28 +2168,13 @@ export function CustomizePage({
                 />
               </LivePreviewStage>
 
-              <Group
-                title="Play Button Style (Skiper 25)"
-                description="Choose between classic Play/Pause, animated waveform bars, or spinning vinyl disc."
-              >
+              <Group title="Style">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   {(
                     [
-                      {
-                        id: 'classic',
-                        label: 'Classic Icon',
-                        desc: 'Clean monochrome Play / Pause symbol',
-                      },
-                      {
-                        id: 'waveform',
-                        label: 'Waveform Toggle',
-                        desc: 'Skiper 25 · 5-bar spring audio waveform',
-                      },
-                      {
-                        id: 'vinyl',
-                        label: 'Spinning Vinyl',
-                        desc: 'Skiper 25 · Grooved record disc toggle',
-                      },
+                      { id: 'classic', label: 'Classic', desc: 'Clean play / pause' },
+                      { id: 'waveform', label: 'Waveform', desc: 'Animated bars' },
+                      { id: 'vinyl', label: 'Vinyl', desc: 'Spinning disc' },
                     ] as { id: PlayButtonStyleId; label: string; desc: string }[]
                   ).map((opt) => {
                     const active = settings.playButtonStyle === opt.id
@@ -2444,7 +2226,7 @@ export function CustomizePage({
           {activePage === 'player_bar' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Player Bar & Track Metadata Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2458,46 +2240,36 @@ export function CustomizePage({
                 />
               </LivePreviewStage>
 
-              <Group
-                title="Desktop Player Bar Layout"
-                description="Choose how the bottom horizontal playback bar sits inside your workspace."
-              >
+              <Group title="Bar Layout">
                 <Segmented<PlayerBarStyleId>
                   value={settings.playerBarStyle}
                   onChange={(playerBarStyle) => onChange({ playerBarStyle })}
                   options={[
-                    { value: 'floating', label: 'Floating Sticky' },
-                    { value: 'docked', label: 'Docked Full-Width' },
+                    { value: 'floating', label: 'Floating' },
+                    { value: 'docked', label: 'Docked' },
                   ]}
                 />
               </Group>
 
-              <Group
-                title="Visible Track Elements"
-                description="Show or hide UI elements to keep your song rows as minimal as you like."
-              >
+              <Group title="Visibility">
                 <div className="z-surface-card divide-y divide-border rounded-2xl border border-border bg-card">
                   <ToggleRow
-                    label="Bottom dock gradual blur"
-                    description="Progressive liquid edge blur behind the floating bottom dock only (top stays sharp)."
+                    label="Bottom dock blur"
                     checked={settings.dockGradualBlur}
                     onChange={(dockGradualBlur) => onChange({ dockGradualBlur })}
                   />
                   <ToggleRow
-                    label="Play button pulse animation"
-                    description="Show a subtle ring pulse on the active track's Play/Pause button."
+                    label="Play button pulse"
                     checked={settings.showPlayPulse}
                     onChange={(showPlayPulse) => onChange({ showPlayPulse })}
                   />
                   <ToggleRow
                     label="Artist / folder overline"
-                    description="Show the uppercase artist or folder label above each song title."
                     checked={settings.showTrackOverline}
                     onChange={(showTrackOverline) => onChange({ showTrackOverline })}
                   />
                   <ToggleRow
                     label="Track duration"
-                    description="Show song lengths on the right side of track rows."
                     checked={settings.showTrackDuration}
                     onChange={(showTrackDuration) => onChange({ showTrackDuration })}
                   />
@@ -2509,7 +2281,7 @@ export function CustomizePage({
           {activePage === 'audio_crossfade' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Equal-Power Crossfade Curve Preview"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2519,16 +2291,13 @@ export function CustomizePage({
                 <AudioCrossfadeLivePreview crossfadeSecs={settings.crossfadeSecs} />
               </LivePreviewStage>
 
-              <Group
-                title="Crossfade & Fade-In Duration"
-                description="Smoothly fade out the ending of the current song while fading in the next song."
-              >
+              <Group title="Duration">
                 <div className="z-surface-card space-y-4 rounded-2xl border border-border bg-card p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <p className="text-xs text-muted-foreground">
                       {settings.crossfadeSecs > 0
-                        ? `Outgoing track fades out over ${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s while the next track fades in seamlessly.`
-                        : 'Off — tracks switch instantaneously without overlapping fades.'}
+                        ? `${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s fade between tracks`
+                        : 'Off'}
                     </p>
                     <span className="rounded-full border border-border bg-secondary px-3 py-1 font-mono text-xs font-semibold tabular-nums text-foreground">
                       {settings.crossfadeSecs > 0
@@ -2584,8 +2353,7 @@ export function CustomizePage({
           {activePage === 'icon_packs' && (
             <div className="space-y-6">
               <LivePreviewStage
-                title="Live Icon Pack Preview"
-                hint="Hover icons to test kinetic motion"
+                title="Preview"
                 mode={settings.mode}
                 transition={settings.themeTransition}
                 transitionStart={settings.themeTransitionStart}
@@ -2618,10 +2386,7 @@ export function CustomizePage({
                 </div>
               </LivePreviewStage>
 
-              <Group
-                title="Icon Pack (incl. Skiper 99)"
-                description={`Choose from ${ICON_PACK_OPTIONS.length} curated vector packs including Skiper 99 kinetic animated icons.`}
-              >
+              <Group title="Icon Pack">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {ICON_PACK_OPTIONS.map((pack) => {
                     const active = settings.iconPack === pack.id
@@ -2667,17 +2432,14 @@ export function CustomizePage({
                 </div>
               </Group>
 
-              <Group
-                title="Icon Stroke Weight"
-                description="Changes the line thickness of icons globally across the interface."
-              >
+              <Group title="Stroke Weight">
                 <Segmented<IconStrokeId>
                   value={settings.iconStroke}
                   onChange={(iconStroke) => onChange({ iconStroke })}
                   options={[
-                    { value: 'thin', label: 'Thin (1.25)' },
-                    { value: 'regular', label: 'Regular (1.75)' },
-                    { value: 'bold', label: 'Bold (2.25)' },
+                    { value: 'thin', label: 'Thin' },
+                    { value: 'regular', label: 'Regular' },
+                    { value: 'bold', label: 'Bold' },
                   ]}
                 />
               </Group>
@@ -2780,7 +2542,7 @@ function DisplayZoomControls({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              INTERFACE ZOOM · CHROME-STYLE SCALING
+              INTERFACE ZOOM
             </p>
             <div className="mt-1.5 flex items-baseline gap-2.5">
               <span className="font-mono text-4xl font-bold tracking-tight tabular-nums text-foreground">
@@ -2862,10 +2624,7 @@ function DisplayZoomControls({
         </div>
       </div>
 
-      <Group
-        title="Chrome-Style Zoom Presets"
-        description="Jump instantly to standard browser zoom levels — scales text, icons, docks, and visualizers crisply."
-      >
+      <Group title="Presets">
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
           {UI_ZOOM_PRESETS.map((pct) => {
             const active = uiZoom === pct
@@ -2907,14 +2666,16 @@ function Group({
   children,
 }: {
   title: string
-  description: string
+  description?: string
   children: React.ReactNode
 }) {
   return (
     <section className="space-y-3">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        {description && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        )}
       </div>
       {children}
     </section>
@@ -2948,7 +2709,7 @@ function ToggleRow({
   onChange,
 }: {
   label: string
-  description: string
+  description?: string
   checked: boolean
   onChange: (next: boolean) => void
 }) {
@@ -2958,11 +2719,13 @@ function ToggleRow({
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition-colors hover:bg-secondary/40 cursor-pointer"
+      className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-secondary/40 cursor-pointer"
     >
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        {description && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        )}
       </div>
       <MotionSwitch checked={checked} interactive={false} size="sm" />
     </button>

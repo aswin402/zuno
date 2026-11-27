@@ -93,9 +93,6 @@ export function PlaylistsPage({
             className="h-6 w-6 text-muted-foreground/60"
           />
           <p className="text-sm font-medium text-foreground">No playlists yet</p>
-          <p className="text-xs text-muted-foreground">
-            Create lightweight playlists without duplicating audio files.
-          </p>
           <button
             type="button"
             onClick={onCreatePlaylist}

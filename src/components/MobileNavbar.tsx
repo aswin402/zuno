@@ -216,7 +216,7 @@ export function MobileNavbar({
               {/* Sound & Appearance */}
               <div className="space-y-1">
                 <p className="mb-1.5 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
-                  Studio &amp; Audio
+                  Audio
                 </p>
 
                 <DrawerItem
@@ -242,7 +242,7 @@ export function MobileNavbar({
                 <DrawerItem
                   icon="customize"
                   pack={iconPack}
-                  label="Theme & Customize"
+                  label="Customize"
                   active={page === 'customize'}
                   onClick={() => closeAnd(onGoCustomize)}
                 />
@@ -251,20 +251,20 @@ export function MobileNavbar({
               {/* Quick Actions */}
               <div className="mt-6 space-y-1">
                 <p className="mb-1.5 px-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
-                  Library Tools
+                  Library
                 </p>
 
                 <DrawerItem
                   icon="search"
                   pack={iconPack}
-                  label="Search songs"
+                  label="Search"
                   onClick={() => closeAnd(onOpenSearch)}
                 />
 
                 <DrawerItem
                   icon="folder"
                   pack={iconPack}
-                  label="Music folders"
+                  label="Folders"
                   badge={String(sourceCount)}
                   onClick={() => closeAnd(onOpenFolders)}
                 />
@@ -272,7 +272,7 @@ export function MobileNavbar({
                 <DrawerItem
                   icon="refresh"
                   pack={iconPack}
-                  label="Rescan library"
+                  label="Rescan"
                   onClick={() => closeAnd(onRescan)}
                 />
 
@@ -280,7 +280,7 @@ export function MobileNavbar({
                   <DrawerItem
                     icon="refresh"
                     pack={iconPack}
-                    label="Updates & Backup"
+                    label="Updates"
                     badge={
                       updateAvailableVersion
                         ? `v${updateAvailableVersion}`

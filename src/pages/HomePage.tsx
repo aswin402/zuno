@@ -128,17 +128,14 @@ export const HomePage = memo(function HomePage({
 
         {sortedTracks.length === 0 ? (
           <div className="space-y-3 rounded-2xl border border-dashed border-border py-14 text-center text-xs text-muted-foreground">
-            <p>
-              Drop audio files in{' '}
-              <span className="font-mono text-foreground">zuno/songs/</span> or link an existing music folder.
-            </p>
+            <p>No songs yet. Add a music folder to get started.</p>
             <button
               type="button"
               onClick={onOpenFolders}
               className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
             >
               <ZunoIcon name="folder" pack={iconPack} className="h-3.5 w-3.5" />
-              Link Music Folder
+              Add Folder
             </button>
           </div>
         ) : (

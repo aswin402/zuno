@@ -233,7 +233,7 @@ export interface DualThemePreset {
 export const THEME_PRESETS: DualThemePreset[] = [
   {
     id: 'zinc',
-    label: 'Obsidian Mono',
+    label: 'Obsidian',
     dark: {
       background: '#09090b',
       foreground: '#fafafa',
@@ -263,7 +263,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'oled',
-    label: 'Pure OLED',
+    label: 'OLED',
     dark: {
       background: '#000000',
       foreground: '#ffffff',
@@ -293,7 +293,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'vermilion',
-    label: 'Zenko Vermilion',
+    label: 'Vermilion',
     dark: {
       background: '#0a0a0b',
       foreground: '#f5f5f6',
@@ -323,7 +323,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'stone',
-    label: 'Warm Terracotta',
+    label: 'Terracotta',
     dark: {
       background: '#0e0c0a',
       foreground: '#f8f4ef',
@@ -353,7 +353,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'amber',
-    label: 'Amber Forge',
+    label: 'Amber',
     dark: {
       background: '#0d0b08',
       foreground: '#faf5eb',
@@ -383,7 +383,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'crimson',
-    label: 'Crimson Noir',
+    label: 'Crimson',
     dark: {
       background: '#0b090a',
       foreground: '#fafafa',
@@ -413,7 +413,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'emerald',
-    label: 'Emerald Term',
+    label: 'Emerald',
     dark: {
       background: '#070c0a',
       foreground: '#f0fdf4',
@@ -443,7 +443,7 @@ export const THEME_PRESETS: DualThemePreset[] = [
   },
   {
     id: 'slate',
-    label: 'Midnight Slate',
+    label: 'Slate',
     dark: {
       background: '#0a0c14',
       foreground: '#f1f5f9',
@@ -482,7 +482,7 @@ export const ACCENT_PRESETS: {
   lightPrimary?: string
   lightFg?: string
 }[] = [
-  { id: 'mono', label: 'Theme Default', swatch: '#fafafa' },
+  { id: 'mono', label: 'Default', swatch: '#fafafa' },
   {
     id: 'vermilion',
     label: 'Vermilion',
@@ -503,7 +503,7 @@ export const ACCENT_PRESETS: {
   },
   {
     id: 'blue',
-    label: 'Arctic Blue',
+    label: 'Blue',
     swatch: '#3b82f6',
     darkPrimary: '#60a5fa',
     darkFg: '#081b3a',
@@ -545,20 +545,15 @@ export const ICON_PACK_OPTIONS: {
   desc: string
   animated?: boolean
 }[] = [
-  { id: 'lucide', label: 'Lucide', desc: 'Clean balanced strokes' },
-  {
-    id: 'skiper99',
-    label: 'Skiper 99 Animated',
-    desc: 'Kinetic wave, arrow & morph motion',
-    animated: true,
-  },
-  { id: 'tabler', label: 'Tabler', desc: 'Crisp precision 24px geometry' },
-  { id: 'iconsax', label: 'Iconsax', desc: 'Soft curved duotone lines' },
-  { id: 'hugeicons', label: 'Hugeicons Animated', desc: 'Rounded float micro-motion', animated: true },
-  { id: 'itshover', label: 'ItsHover', desc: 'Interactive spring wiggle', animated: true },
-  { id: 'pulsoicon', label: 'PulsoIcon', desc: 'Bouncy micro-pulse hover', animated: true },
-  { id: 'humbleicons', label: 'Humbleicons', desc: 'Minimal hand-crafted lines' },
-  { id: 'majesticons', label: 'Majesticons', desc: 'Confident bold interface glyphs' },
+  { id: 'lucide', label: 'Lucide', desc: 'Clean' },
+  { id: 'skiper99', label: 'Skiper 99', desc: 'Kinetic', animated: true },
+  { id: 'tabler', label: 'Tabler', desc: 'Crisp' },
+  { id: 'iconsax', label: 'Iconsax', desc: 'Soft' },
+  { id: 'hugeicons', label: 'Hugeicons', desc: 'Rounded', animated: true },
+  { id: 'itshover', label: 'ItsHover', desc: 'Spring', animated: true },
+  { id: 'pulsoicon', label: 'PulsoIcon', desc: 'Pulse', animated: true },
+  { id: 'humbleicons', label: 'Humbleicons', desc: 'Minimal' },
+  { id: 'majesticons', label: 'Majesticons', desc: 'Bold' },
 ]
 
 const FONT_SIZE_MAP: Record<FontSizeId, string> = {

@@ -112,7 +112,7 @@ export function DesktopSidebar({
           </button>
           <div className="flex items-center gap-0.5">
             <Tooltip
-              label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
               side="bottom"
             >
               <EaseThemeToggle
@@ -125,7 +125,7 @@ export function DesktopSidebar({
               />
             </Tooltip>
 
-            <Tooltip label={`Music folders (${sourceCount})`} side="bottom">
+            <Tooltip label={`Folders (${sourceCount})`} side="bottom">
               <button
                 onClick={onOpenFolders}
                 className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
@@ -135,7 +135,7 @@ export function DesktopSidebar({
               </button>
             </Tooltip>
 
-            <Tooltip label="Rescan library" side="bottom">
+            <Tooltip label="Rescan" side="bottom">
               <button
                 onClick={onRescan}
                 className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
@@ -266,7 +266,7 @@ export function DesktopSidebar({
               <span className="truncate">
                 {updateAvailableVersion
                   ? `Update v${updateAvailableVersion}`
-                  : 'Updates & Backup'}
+                  : 'Updates'}
               </span>
             </span>
             {appVersion && !updateAvailableVersion && (

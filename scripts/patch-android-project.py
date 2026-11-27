@@ -1649,12 +1649,15 @@ def patch_main_activity(root: pathlib.Path, authority_template: str) -> None:
     patched = f"""package {package_name}
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.View
 import android.webkit.JavascriptInterface
@@ -1677,6 +1680,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 
 class MainActivity : TauriActivity() {{
+  private val REQ_PICK_FOLDER = 1042
   private var zunoWebView: WebView? = null
   @Volatile private var insetTopCss: Int = 0
   @Volatile private var insetBottomCss: Int = 0
@@ -1684,6 +1688,7 @@ class MainActivity : TauriActivity() {{
   @Volatile private var insetRightCss: Int = 0
   @Volatile private var lastDownloadedApkPath: String? = null
   @Volatile private var pendingInstallAfterPermission: Boolean = false
+  @Volatile private var pendingFolderPickReqId: String? = null
   private val apkDownloading = AtomicBoolean(false)
 
   inner class ZunoAndroidBridge {{
@@ -1936,6 +1941,35 @@ class MainActivity : TauriActivity() {{
       if (!file.isFile) return false
       return launchApkInstaller(file)
     }}
+
+    @JavascriptInterface
+    fun pickMusicFolder(reqId: String): Boolean {{
+      pendingFolderPickReqId = reqId
+      return try {{
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {{
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }}
+        runOnUiThread {{
+          try {{
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_PICK_FOLDER)
+          }} catch (e: Exception) {{
+            if (pendingFolderPickReqId == reqId) {{
+              pendingFolderPickReqId = null
+            }}
+            deliverFolderPickResult(reqId, "", e.message ?: "Folder picker unavailable")
+          }}
+        }}
+        true
+      }} catch (e: Exception) {{
+        if (pendingFolderPickReqId == reqId) {{
+          pendingFolderPickReqId = null
+        }}
+        deliverFolderPickResult(reqId, "", e.message ?: "Folder picker unavailable")
+        false
+      }}
+    }}
   }}
 
   private fun openHttpWithRedirects(
@@ -1978,6 +2012,88 @@ class MainActivity : TauriActivity() {{
         JSONObject.quote(payload) + ");"
     )
     wv.post {{ wv.evaluateJavascript(js, null) }}
+  }}
+
+  private fun deliverFolderPickResult(reqId: String, path: String, error: String) {{
+    val wv = zunoWebView ?: return
+    val js = (
+      "window.__zunoAndroidFolderPickCb&&window.__zunoAndroidFolderPickCb(" +
+        JSONObject.quote(reqId) + "," +
+        JSONObject.quote(path) + "," +
+        JSONObject.quote(error) + ");"
+    )
+    wv.post {{ wv.evaluateJavascript(js, null) }}
+  }}
+
+  private fun resolveTreeUriToPath(treeUri: Uri): String? {{
+    if (treeUri.scheme == "file") {{
+      return treeUri.path
+    }}
+    return try {{
+      val docId = DocumentsContract.getTreeDocumentId(treeUri) ?: return null
+      if (docId.startsWith("raw:")) {{
+        return docId.removePrefix("raw:")
+      }}
+      val colonIdx = docId.indexOf(':')
+      val volume = if (colonIdx >= 0) docId.substring(0, colonIdx) else docId
+      val rel = if (colonIdx >= 0) docId.substring(colonIdx + 1).trimStart('/') else ""
+      when {{
+        volume.equals("primary", ignoreCase = true) -> {{
+          val base = Environment.getExternalStorageDirectory().absolutePath
+          if (rel.isEmpty()) base else "$base/$rel"
+        }}
+        volume.equals("downloads", ignoreCase = true) -> {{
+          val base = Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOWNLOADS,
+          ).absolutePath
+          if (rel.isEmpty()) base else "$base/$rel"
+        }}
+        volume.equals("home", ignoreCase = true) -> {{
+          val base = Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOCUMENTS,
+          ).absolutePath
+          if (rel.isEmpty()) base else "$base/$rel"
+        }}
+        volume.isNotBlank() -> {{
+          val base = "/storage/$volume"
+          if (rel.isEmpty()) base else "$base/$rel"
+        }}
+        else -> null
+      }}
+    }} catch (_: Exception) {{
+      null
+    }}
+  }}
+
+  @Suppress("DEPRECATION")
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {{
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode == REQ_PICK_FOLDER) {{
+      val reqId = pendingFolderPickReqId ?: return
+      pendingFolderPickReqId = null
+      val treeUri = if (resultCode == Activity.RESULT_OK) data?.data else null
+      if (treeUri == null) {{
+        deliverFolderPickResult(reqId, "", "")
+        return
+      }}
+      try {{
+        contentResolver.takePersistableUriPermission(
+          treeUri,
+          Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
+      }} catch (_: Exception) {{
+      }}
+      val resolved = resolveTreeUriToPath(treeUri)
+      if (!resolved.isNullOrBlank() && File(resolved).isDirectory) {{
+        val audioPerm = audioPermission()
+        if (ContextCompat.checkSelfPermission(this, audioPerm) != PackageManager.PERMISSION_GRANTED) {{
+          requestStartupPermissionsIfNeeded()
+        }}
+        deliverFolderPickResult(reqId, resolved, "")
+      }} else {{
+        deliverFolderPickResult(reqId, "", "Pick a folder from device storage or SD card")
+      }}
+    }}
   }}
 
   private fun emitUpdateProgress(stage: String, message: String, percent: Int, apkPath: String) {{

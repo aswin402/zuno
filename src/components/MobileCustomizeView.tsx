@@ -81,14 +81,14 @@ type MobileSubPage =
   | 'motion'
 
 const MOBILE_SUBPAGE_TITLES: Record<Exclude<MobileSubPage, null>, string> = {
-  colors: 'Colors & Palette',
-  fonts: 'Typography & Fonts',
-  surfaces: 'Surfaces & Layout',
-  icons: 'Icon Pack',
+  colors: 'Colors',
+  fonts: 'Fonts',
+  surfaces: 'Layout',
+  icons: 'Icons',
   visualizer: 'Visualizer',
-  playback: 'Playback & Scrubber',
-  crossfade: 'Audio Crossfade',
-  motion: 'Motion & Scroll',
+  playback: 'Playback',
+  crossfade: 'Crossfade',
+  motion: 'Motion',
 }
 
 const SHORT_THEME_LABELS: Record<ThemeId, string> = {
@@ -143,44 +143,44 @@ const CUSTOM_COLOR_SLOTS: {
 }[] = [
   {
     key: 'primary',
-    label: 'Primary Accent',
-    hint: 'Buttons, active indicators & scrubber',
+    label: 'Accent',
+    hint: 'Buttons & scrubber',
     presets: ['#fafafa', '#ea5829', '#f59e0b', '#10b981', '#3b82f6', '#818cf8', '#e11d48'],
   },
   {
     key: 'background',
     label: 'Background',
-    hint: 'Main screen canvas',
+    hint: 'Main canvas',
     presets: ['#000000', '#09090b', '#0e0c0a', '#0a0c14', '#ffffff', '#f7f5f0'],
   },
   {
     key: 'card',
-    label: 'Cards & Dock',
-    hint: 'Floating dock, menus & panels',
+    label: 'Cards',
+    hint: 'Dock & menus',
     presets: ['#0a0a0c', '#121215', '#181411', '#121624', '#f8f8f9', '#ffffff'],
   },
   {
     key: 'secondary',
-    label: 'Active Surface',
-    hint: 'Selected rows & pills',
+    label: 'Surface',
+    hint: 'Active rows',
     presets: ['#121216', '#18181b', '#211c17', '#181e30', '#f4f4f5', '#ede9e0'],
   },
   {
     key: 'border',
     label: 'Borders',
-    hint: '1px dividers & card outlines',
+    hint: 'Dividers',
     presets: ['#1e1e24', '#27272a', '#2e2721', '#242a40', '#e4e4e7', '#dfdad0'],
   },
   {
     key: 'foreground',
-    label: 'Primary Text',
-    hint: 'Song titles & headings',
+    label: 'Text',
+    hint: 'Titles',
     presets: ['#ffffff', '#fafafa', '#f8f4ef', '#f1f5f9', '#09090b', '#1c1917'],
   },
   {
     key: 'mutedForeground',
-    label: 'Muted Text',
-    hint: 'Artists & durations',
+    label: 'Muted',
+    hint: 'Artists & time',
     presets: ['#8e8e97', '#a1a1aa', '#9d9287', '#8c96b0', '#71717a', '#64748b'],
   },
 ]
@@ -548,56 +548,56 @@ export function MobileCustomizeView({
                 </div>
               </section>
 
-              {/* Group 1: Look & Style */}
+              {/* Group 1: Style */}
               <div className="space-y-2">
-                <SectionCaption>Look &amp; Style</SectionCaption>
+                <SectionCaption>Style</SectionCaption>
                 <div className="z-surface-card divide-y divide-border/70 overflow-hidden rounded-2xl border border-border bg-card">
                   <HubNavRow
                     icon={Paintbrush}
-                    label="Colors & Palette"
+                    label="Colors"
                     value={hasCustomColors ? `${customColorCount} custom` : activeAccentLabel}
                     onClick={() => setSubPage('colors')}
                   />
                   <HubNavRow
                     icon={Type}
-                    label="Typography & Fonts"
+                    label="Fonts"
                     value={`${activeUiFontLabel} · ${settings.fontSize.toUpperCase()}`}
                     onClick={() => setSubPage('fonts')}
                   />
                   <HubNavRow
                     icon={Layers}
-                    label="Surfaces & Layout"
+                    label="Layout"
                     value={`${surfaceLabels[settings.surfaceStyle]} · ${settings.density}`}
                     onClick={() => setSubPage('surfaces')}
                   />
                   <HubNavRow
                     icon={Sparkles}
-                    label="Icon Pack"
+                    label="Icons"
                     value={activeIconPackLabel}
                     onClick={() => setSubPage('icons')}
                   />
                 </div>
               </div>
 
-              {/* Group 2: Player & Audio */}
+              {/* Group 2: Player */}
               <div className="space-y-2">
-                <SectionCaption>Player &amp; Audio</SectionCaption>
+                <SectionCaption>Player</SectionCaption>
                 <div className="z-surface-card divide-y divide-border/70 overflow-hidden rounded-2xl border border-border bg-card">
                   <HubNavRow
                     icon={AudioLines}
-                    label="Now Playing Visualizer"
+                    label="Visualizer"
                     value={vizLabels[settings.visualizerStyle]}
                     onClick={() => setSubPage('visualizer')}
                   />
                   <HubNavRow
                     icon={Play}
-                    label="Playback & Scrubber"
+                    label="Playback"
                     value={`${playingLabels[settings.playingStyle]} · ${scrubberLabels[settings.scrubberKnob]}`}
                     onClick={() => setSubPage('playback')}
                   />
                   <HubNavRow
                     icon={Sliders}
-                    label="Audio Crossfade"
+                    label="Crossfade"
                     value={
                       settings.crossfadeSecs > 0
                         ? `${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s`
@@ -608,28 +608,28 @@ export function MobileCustomizeView({
                 </div>
               </div>
 
-              {/* Group 3: Motion & Display */}
+              {/* Group 3: Display */}
               <div className="space-y-2">
-                <SectionCaption>Motion &amp; Display</SectionCaption>
+                <SectionCaption>Display</SectionCaption>
                 <div className="z-surface-card divide-y divide-border/70 overflow-hidden rounded-2xl border border-border bg-card">
                   <HubNavRow
                     icon={Wand2}
-                    label="Scroll & Transitions"
+                    label="Motion"
                     value={revealLabels[settings.scrollRevealStyle]}
                     onClick={() => setSubPage('motion')}
                   />
                   <MobileToggleRow
-                    label="Bottom dock blur"
+                    label="Dock blur"
                     checked={settings.dockGradualBlur}
                     onChange={(dockGradualBlur) => onChange({ dockGradualBlur })}
                   />
                   <MobileToggleRow
-                    label="Play button pulse"
+                    label="Play pulse"
                     checked={settings.showPlayPulse}
                     onChange={(showPlayPulse) => onChange({ showPlayPulse })}
                   />
                   <MobileToggleRow
-                    label="Artist / folder overline"
+                    label="Artist overline"
                     checked={settings.showTrackOverline}
                     onChange={(showTrackOverline) => onChange({ showTrackOverline })}
                   />
@@ -724,7 +724,7 @@ export function MobileCustomizeView({
               </div>
 
               <div className="space-y-2.5">
-                <SectionCaption>Fine-Tune Surface Tokens</SectionCaption>
+                <SectionCaption>Custom Colors</SectionCaption>
                 <div className="space-y-2.5">
                   {CUSTOM_COLOR_SLOTS.map((slot) => (
                     <div
@@ -785,7 +785,7 @@ export function MobileCustomizeView({
               {/* UI Font */}
               <div className="space-y-2.5 rounded-2xl border border-border bg-card p-3.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-foreground">Interface Font</span>
+                  <span className="text-xs font-semibold text-foreground">UI Font</span>
                   <button
                     type="button"
                     onClick={() => uiFileRef.current?.click()}
@@ -862,9 +862,7 @@ export function MobileCustomizeView({
               {/* Mono Font */}
               <div className="space-y-2.5 rounded-2xl border border-border bg-card p-3.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-foreground">
-                    Timestamps &amp; Mono
-                  </span>
+                  <span className="text-xs font-semibold text-foreground">Mono Font</span>
                   <button
                     type="button"
                     onClick={() => monoFileRef.current?.click()}
@@ -1169,9 +1167,7 @@ export function MobileCustomizeView({
                 className="relative flex h-36 w-full items-center justify-center overflow-hidden rounded-2xl border border-border bg-card cursor-pointer"
               >
                 {settings.visualizerStyle === 'none' ? (
-                  <span className="font-mono text-xs text-muted-foreground">
-                    Visualizer Off · Text Only
-                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">Off</span>
                 ) : (
                   <NowPlayingVisualizer
                     styleVariant={settings.visualizerStyle}
@@ -1440,13 +1436,11 @@ export function MobileCustomizeView({
               <div className="z-surface-card space-y-4 rounded-2xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold text-foreground">
-                      Equal-Power Crossfade
-                    </p>
+                    <p className="text-xs font-semibold text-foreground">Crossfade</p>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
                       {settings.crossfadeSecs > 0
-                        ? `Smooth ${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s transition between songs`
-                        : 'Instant track switching'}
+                        ? `${settings.crossfadeSecs.toFixed(settings.crossfadeSecs % 1 === 0 ? 0 : 1)}s fade between tracks`
+                        : 'Off'}
                     </p>
                   </div>
                   <span className="shrink-0 rounded-full border border-border bg-secondary px-3 py-1 font-mono text-xs font-semibold tabular-nums text-foreground">

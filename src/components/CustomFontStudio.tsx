@@ -223,15 +223,10 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
 
   return (
     <div className="z-surface-card flex flex-col gap-5 rounded-2xl border border-border bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Type className="h-4 w-4 text-primary" />
-            <span>Custom Font Studio</span>
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Choose from {UI_FONT_PRESETS.length} curated UI &amp; {MONO_FONT_PRESETS.length} mono typefaces, pick an OS font, or upload .woff2 / .ttf / .otf files.
-          </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Type className="h-4 w-4 text-primary" />
+          <span>Fonts</span>
         </div>
 
         <button
@@ -252,20 +247,20 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
           className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
         >
           <RotateCcw className="h-3 w-3" />
-          Restore Fonts
+          Reset
         </button>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <FontSlotPanel
           slot="ui"
-          title="Interface Font"
-          subtitle="Song titles, menus, headings & controls"
+          title="UI Font"
+          subtitle="Titles & menus"
           presets={UI_FONT_PRESETS}
           activePresetId={settings.fontFamily}
           customValue={settings.customUiFont}
           draft={uiInput}
-          placeholder="Custom UI font (e.g. SF Pro, Poppins)..."
+          placeholder="Custom font name…"
           onDraftChange={setUiInput}
           onSelectPreset={(id) => {
             setUiInput('')
@@ -278,13 +273,13 @@ export function CustomFontStudio({ settings, onChange }: CustomFontStudioProps) 
 
         <FontSlotPanel
           slot="mono"
-          title="Timestamps & Mono Font"
-          subtitle="Durations, EQ readouts, dB values & hex codes"
+          title="Mono Font"
+          subtitle="Time & labels"
           presets={MONO_FONT_PRESETS}
           activePresetId={settings.monoFont}
           customValue={settings.customMonoFont}
           draft={monoInput}
-          placeholder="Custom mono font (e.g. Iosevka, Hack)..."
+          placeholder="Custom mono font…"
           monoInput
           onDraftChange={setMonoInput}
           onSelectPreset={(id) => {

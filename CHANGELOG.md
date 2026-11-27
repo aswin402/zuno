@@ -5,6 +5,24 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.34] — 2026-11-28
+
+Fixed native folder browsing on Android, moved the mobile Now Playing queue arrow to match Desktop, redesigned the Music Folders dialog for mobile, and trimmed verbose copy across menus, themes, and Customize.
+
+### Fixed
+- **Android Native "Browse Folder" Picker (`scripts/patch-android-project.py`, `src/lib/zunoApi.ts`)**:
+  - Implemented `ZunoAndroidBridge.pickMusicFolder()` via Android's `Intent.ACTION_OPEN_DOCUMENT_TREE` in `MainActivity.kt` with `onActivityResult` resolution of `primary:`, `home:`, `raw:`, and external SD card `/storage/<vol>` URIs into real filesystem paths, plus automatic audio-permission prompting when needed.
+  - Wired `zunoApi.pickMusicFolder()` to use the native Android bridge on mobile and fall back cleanly to Tauri's desktop folder picker.
+
+### Changed
+- **Mobile Now Playing Up Arrow (`src/components/NowPlayingPanel.tsx`)**:
+  - Moved the mobile `^` queue trigger up to the bottom edge of the curved Now Playing stage card right below the song title/artist (matching Desktop), replacing the horizontal pill bar and removing the duplicate lower-footer arrow.
+- **Minimal Mobile Music Folders UI (`src/components/MusicFoldersModal.tsx`, `src/components/ui/dialog.tsx`)**:
+  - Upgraded `Dialog` on mobile to a thumb-friendly bottom-sheet layout with safe bottom insets.
+  - Redesigned `MusicFoldersModal` with a prominent **Browse Folder** button, collapsible **Path** toggle, short basename suggestion pills (`+ Music`, `+ Download`), compact linked-folder rows (`Internal/...`), and zero redundant prose.
+- **Minimal Copy Across Menus, Themes & Customize (`src/pages/CustomizePage.tsx`, `src/components/MobileCustomizeView.tsx`, `src/lib/appearance.ts`, `src/components/MobileNavbar.tsx`, `src/components/DesktopSidebar.tsx`, `src/components/FloatingNavigation.tsx`, `src/components/UpdateDialog.tsx`, `src/components/CustomFontStudio.tsx`, `src/pages/HomePage.tsx`, `src/pages/PlaylistsPage.tsx`, `src/pages/RadioPage.tsx`)**:
+  - Trimmed verbose descriptions, redundant group subtitles, toggle paragraphs, and internal UI library names across Mobile and Desktop menus, theme presets, Customize Studio, Updates dialog, and pages.
+
 ## [0.0.33] — 2026-11-27
 
 Polished the Desktop player bar, song row options menu, and Songs page sort controls.

@@ -2231,7 +2231,7 @@ export default function App() {
       const updated = await zunoApi.addSource(path)
       setSources(updated)
       await refreshLibrary()
-      notify('Linked music folder')
+      notify('Folder added')
     } finally {
       setFoldersBusy(false)
     }
@@ -2249,7 +2249,7 @@ export default function App() {
       const updated = await zunoApi.removeSource(path)
       setSources(updated)
       await refreshLibrary()
-      notify('Unlinked folder (files untouched)')
+      notify('Folder removed')
     } catch (err) {
       notify(String(err))
     } finally {

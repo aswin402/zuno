@@ -582,21 +582,20 @@ export function NowPlayingPanel({
           </div>
         </div>
 
-        {/* Bottom Queue Trigger: Mobile keeps swipe-up pill line; Desktop uses clean borderless Up Arrow button */}
+        {/* Bottom Queue Trigger: Unified borderless Up Arrow button at the bottom edge of the curved stage card (Mobile + Desktop) */}
         <div
-          className="flex shrink-0 justify-center pt-1.5 pb-1 md:pt-1 md:pb-0"
+          className="flex shrink-0 justify-center pt-0.5 pb-0.5 md:pt-1 md:pb-0"
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <span
-            className="h-1 w-8 rounded-full bg-border/80 md:hidden"
-            aria-hidden="true"
-          />
-          <Tooltip label="Open queue" side="top">
+          <Tooltip label="Queue" side="top">
             <button
               type="button"
               onClick={() => openSheet('queue')}
               aria-label="Open queue and playlists"
-              className="group hidden h-9 w-12 items-center justify-center border-0 bg-transparent text-muted-foreground/70 transition-colors hover:text-foreground active:scale-92 cursor-pointer md:inline-flex"
+              style={{
+                transform: pullUpY < 0 ? `translateY(${pullUpY * 0.25}px)` : undefined,
+              }}
+              className="group inline-flex h-9 w-12 items-center justify-center border-0 bg-transparent text-muted-foreground/70 transition-colors hover:text-foreground active:scale-92 cursor-pointer"
             >
               <ChevronUp className="h-5 w-5 transition-transform duration-200 ease-out group-hover:-translate-y-0.5" />
             </button>
@@ -605,7 +604,7 @@ export function NowPlayingPanel({
       </div>
 
       {/* ── Contrasting Bottom Dock (Mobile + Desktop): Scrubber & Split Time (or Live FM Pill) + Transport Controls ── */}
-      <footer className="shrink-0 px-6 pt-3.5 pb-[max(0.75rem,var(--zuno-safe-bottom))] md:px-10 md:pt-4 md:pb-5">
+      <footer className="shrink-0 px-6 pt-3.5 pb-[max(1.25rem,var(--zuno-safe-bottom))] md:px-10 md:pt-4 md:pb-5">
         {/* Scrubber & Split Elapsed | Total Timestamp (or Live FM Status + Disconnect) above transport controls */}
         <div
           onPointerDown={(e) => e.stopPropagation()}
@@ -856,25 +855,6 @@ export function NowPlayingPanel({
             <ZunoIcon name="next" pack={iconPack} filled className="h-5 w-5" />
           </button>
         </div>
-
-        {/* Mobile Swipe-Up Queue / Playlists Cue (icon-only up arrow) */}
-        <button
-          type="button"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => openSheet('queue')}
-          aria-label="Open queue and playlists"
-          style={{
-            transform: pullUpY < 0 ? `translateY(${pullUpY * 0.25}px)` : undefined,
-          }}
-          className={cn(
-            'group mx-auto mt-1.5 flex h-8 w-12 items-center justify-center rounded-full transition-colors active:scale-92 cursor-pointer md:hidden',
-            isLight
-              ? 'text-background/55 hover:text-background/90'
-              : 'text-muted-foreground/70 hover:text-foreground',
-          )}
-        >
-          <ChevronUp className="h-4.5 w-4.5 transition-transform duration-200 ease-out group-hover:-translate-y-0.5" />
-        </button>
       </footer>
 
       {/* ── Swipe-Up / Slide-Up Sheet: Queue | Playlists ── */}

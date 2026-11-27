@@ -236,6 +236,7 @@ export interface ZunoAndroidBridge {
     version: string,
   ) => void
   reopenPendingApkInstaller?: () => boolean
+  pickMusicFolder?: (reqId: string) => boolean
   updateMediaNotification?: (jsonPayload: string) => void
   clearMediaNotification?: () => void
   playAndroidRadio?: (url: string, name: string, subtitle: string) => void
@@ -351,6 +352,61 @@ const pendingAndroidFetches = new Map<
   { resolve: (text: string) => void; reject: (err: Error) => void; timer: number }
 >()
 let androidFetchSeq = 0
+
+const pendingAndroidFolderPicks = new Map<
+  string,
+  { resolve: (path: string | null) => void; reject: (err: Error) => void; timer: number }
+>()
+let androidFolderPickSeq = 0
+
+function androidPickMusicFolder(timeoutMs = 180_000): Promise<string | null> {
+  const bridge = getAndroidBridge()
+  if (!bridge?.pickMusicFolder) {
+    return Promise.resolve(null)
+  }
+  const w = window as unknown as {
+    __zunoAndroidFolderPickCb?: (reqId: string, path: string, error: string) => void
+  }
+  if (!w.__zunoAndroidFolderPickCb) {
+    w.__zunoAndroidFolderPickCb = (reqId: string, path: string, error: string) => {
+      const entry = pendingAndroidFolderPicks.get(reqId)
+      if (!entry) return
+      pendingAndroidFolderPicks.delete(reqId)
+      window.clearTimeout(entry.timer)
+      if (error && error.trim().length > 0) {
+        entry.reject(new Error(error))
+      } else {
+        entry.resolve(path && path.trim().length > 0 ? path.trim() : null)
+      }
+    }
+  }
+  // Cancel any stale pending request before opening a new picker
+  for (const [oldId, old] of pendingAndroidFolderPicks) {
+    window.clearTimeout(old.timer)
+    old.resolve(null)
+    pendingAndroidFolderPicks.delete(oldId)
+  }
+  return new Promise<string | null>((resolve, reject) => {
+    const reqId = `fp-${++androidFolderPickSeq}-${Date.now()}`
+    const timer = window.setTimeout(() => {
+      pendingAndroidFolderPicks.delete(reqId)
+      resolve(null)
+    }, timeoutMs)
+    pendingAndroidFolderPicks.set(reqId, { resolve, reject, timer })
+    try {
+      const ok = bridge.pickMusicFolder!(reqId)
+      if (ok === false && pendingAndroidFolderPicks.has(reqId)) {
+        pendingAndroidFolderPicks.delete(reqId)
+        window.clearTimeout(timer)
+        reject(new Error('Folder picker unavailable'))
+      }
+    } catch (err) {
+      pendingAndroidFolderPicks.delete(reqId)
+      window.clearTimeout(timer)
+      reject(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
 
 function androidFetchText(url: string, timeoutMs = 15000): Promise<string> {
   const bridge = getAndroidBridge()
@@ -560,6 +616,10 @@ export const zunoApi = {
   addSource: (path: string) => callApi<MusicSource[]>({ op: 'add_source', path }),
   removeSource: (path: string) => callApi<MusicSource[]>({ op: 'remove_source', path }),
   async pickMusicFolder(): Promise<string | null> {
+    const bridge = getAndroidBridge()
+    if (bridge?.pickMusicFolder) {
+      return await androidPickMusicFolder()
+    }
     const tauri = getTauriInternals()
     if (!tauri) return null
     try {

@@ -281,24 +281,18 @@ export function UpdateDialog({
   }
 
   const title = installResult
-    ? isAndroid
-      ? `Zuno v${installResult.installed_version} APK Ready`
-      : `Zuno v${installResult.installed_version} Ready`
+    ? `v${installResult.installed_version} Ready`
     : hasUpdate
-      ? `Update Available · v${latestVer}`
-      : 'Zuno Updates & Backup'
+      ? `Update · v${latestVer}`
+      : 'Updates'
 
   const subtitle = installResult
     ? isAndroid
-      ? "Android's package installer was opened. Confirm Install to upgrade Zuno."
-      : 'Your data was preserved safely. Restart Zuno to launch the new version.'
+      ? 'Confirm install in Android.'
+      : 'Restart Zuno to finish.'
     : hasUpdate
-      ? isAndroid
-        ? `You are on v${currentVer}. Download and install v${latestVer} APK directly.`
-        : `You are on v${currentVer}. Install v${latestVer} directly with automatic data backup.`
-      : isAndroid
-        ? `Installed version v${currentVer} · Offline-first Android app`
-        : `Installed version v${currentVer} · Offline-first single binary`
+      ? `v${currentVer} → v${latestVer}`
+      : `v${currentVer}`
 
   const activeStageIdx = stageIndex(progress.stage)
 
@@ -333,17 +327,10 @@ export function UpdateDialog({
                     </p>
                   )}
                   {isAndroid && (
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      <p>
-                        If Android asks for &ldquo;Install unknown apps&rdquo;, enable Zuno and
-                        return — or tap{' '}
-                        <span className="font-medium text-foreground">Install APK</span> again.
-                      </p>
-                      <p className="text-[11px] text-muted-foreground/85">
-                        Upgrading from v0.0.30 or earlier? Uninstall the old build once if Android
-                        reports a signing conflict — all future updates install in place.
-                      </p>
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Allow &ldquo;Install unknown apps&rdquo; if prompted, then tap{' '}
+                      <span className="font-medium text-foreground">Install APK</span>.
+                    </p>
                   )}
                   {installResult.backup_path && (
                     <p className="pt-1 text-xs text-muted-foreground">
@@ -531,15 +518,14 @@ export function UpdateDialog({
                   onClick={() => setCreateBackup((v) => !v)}
                   className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-background/50 px-3.5 py-3 text-left transition-colors hover:bg-secondary/40 cursor-pointer"
                 >
-                  <div className="flex min-w-0 items-start gap-2.5">
-                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
                     <div className="min-w-0">
                       <p className="text-xs font-medium text-foreground">
-                        Back up playlists, EQ &amp; settings first
+                        Backup before update
                       </p>
                       <p className="mt-0.5 text-[11px] text-muted-foreground">
-                        Saves a snapshot in <span className="font-mono">.zuno/backups/</span> before
-                        installing (keeps last 5, never copies audio files).
+                        Playlists, EQ &amp; settings
                       </p>
                     </div>
                   </div>
@@ -561,17 +547,17 @@ export function UpdateDialog({
                     <div>
                       <p className="text-xs font-semibold text-foreground">
                         {checking
-                          ? 'Checking GitHub Releases…'
+                          ? 'Checking…'
                           : checkError
-                            ? 'Could not reach GitHub Releases'
-                            : `Zuno v${currentVer} is up to date`}
+                            ? 'Check failed'
+                            : 'Up to date'}
                       </p>
                       <p className="mt-0.5 text-[11px] text-muted-foreground">
                         {checking
-                          ? 'Checking for a newer release in the background'
+                          ? 'Checking latest release'
                           : checkError
-                            ? 'Zuno stays 100% functional offline — try again when connected.'
-                            : 'No newer release is published yet.'}
+                            ? 'Offline — try again later'
+                            : `Zuno v${currentVer}`}
                       </p>
                     </div>
                   </div>
@@ -599,12 +585,12 @@ export function UpdateDialog({
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/50 px-3.5 py-2.5">
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-foreground">
-                      Backup playlists &amp; settings
+                      Backup data
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                       {manualBackup
-                        ? `Saved ${manualBackup.files_count} files → ${shortenHomePath(manualBackup.backup_path, homeDir)}`
-                        : 'Snapshots playlists, folders, EQ presets & theme settings.'}
+                        ? `Saved ${manualBackup.files_count} files`
+                        : 'Playlists, EQ & settings'}
                     </p>
                   </div>
                   <Button
@@ -627,14 +613,9 @@ export function UpdateDialog({
                   onClick={() => onToggleAutoCheck(!autoCheck)}
                   className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-background/50 px-3.5 py-2.5 text-left transition-colors hover:bg-secondary/40 cursor-pointer"
                 >
-                  <div>
-                    <p className="text-xs font-medium text-foreground">
-                      Check for updates on launch
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      Silent when offline — turn off for strict air-gapped use.
-                    </p>
-                  </div>
+                  <span className="text-xs font-medium text-foreground">
+                    Check on launch
+                  </span>
                   <MotionSwitch checked={autoCheck} interactive={false} size="sm" />
                 </button>
               </div>

@@ -524,7 +524,7 @@ export function RadioPage({
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            FM TUNER · OFFLINE SIGNAL &amp; ONLINE STREAM
+            RADIO
           </p>
           <h1 className="mt-0.5 text-2xl font-semibold tracking-tight text-foreground sm:text-[28px]">
             FM Radio
