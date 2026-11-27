@@ -236,11 +236,16 @@ jobs:
 
           KEYSTORE_PATH="/tmp/zuno-release.jks"
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KEYSTORE_PATH"
             KS_PASS="${ANDROID_KEYSTORE_PASSWORD}"
             KEY_ALIAS="${ANDROID_KEY_ALIAS:-zuno}"
             KEY_PASS="${ANDROID_KEY_PASSWORD:-$KS_PASS}"
+            echo "==> Signing APK with persistent release keystore (alias=${KEY_ALIAS})"
+          elif [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            echo "Error: ANDROID_KEYSTORE_BASE64 secret is required for tagged releases to preserve in-place Android upgrades." >&2
+            exit 1
           else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set — generating ephemeral non-release keystore"
             KS_PASS="zuno-release-signing-key"
             KEY_ALIAS="zuno"
             KEY_PASS="$KS_PASS"
@@ -262,7 +267,11 @@ jobs:
             --key-pass "pass:${KEY_PASS}" \
             --out "$SIGNED_APK" \
             "$ALIGNED_APK"
-          "$APKSIGNER" verify --verbose "$SIGNED_APK"
+          "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
+          if [ -x "${BUILD_TOOLS}/aapt2" ]; then
+            echo "==> Inspecting APK package & version metadata:"
+            "${BUILD_TOOLS}/aapt2" dump badging "$SIGNED_APK" | head -n 3 || true
+          fi
           rm -f "$ALIGNED_APK" "$KEYSTORE_PATH" "${SIGNED_APK}.idsig"
 
           (cd release-dist && sha256sum "zuno-android-arm64.apk" > "zuno-android-arm64.apk.sha256")

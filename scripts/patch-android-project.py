@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import shutil
@@ -1600,11 +1601,13 @@ def patch_main_activity(root: pathlib.Path, authority_template: str) -> None:
     patched = f"""package {package_name}
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
@@ -1632,6 +1635,7 @@ class MainActivity : TauriActivity() {{
   @Volatile private var insetLeftCss: Int = 0
   @Volatile private var insetRightCss: Int = 0
   @Volatile private var lastDownloadedApkPath: String? = null
+  @Volatile private var pendingInstallAfterPermission: Boolean = false
   private val apkDownloading = AtomicBoolean(false)
 
   inner class ZunoAndroidBridge {{
@@ -1962,10 +1966,35 @@ class MainActivity : TauriActivity() {{
 
   private fun launchApkInstaller(apkFile: File): Boolean {{
     return try {{
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {{
+        pendingInstallAfterPermission = true
+        lastDownloadedApkPath = apkFile.absolutePath
+        emitUpdateProgress(
+          "installing",
+          "Allow 'Install unknown apps' for Zuno in Settings, then return to finish upgrading…",
+          95,
+          apkFile.absolutePath,
+        )
+        val settingsIntent = Intent(
+          Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+          Uri.parse("package:" + packageName),
+        ).apply {{
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }}
+        runOnUiThread {{
+          try {{
+            startActivity(settingsIntent)
+          }} catch (_: Exception) {{
+          }}
+        }}
+        return true
+      }}
+      pendingInstallAfterPermission = false
       val authority = "{authority_kotlin}"
       val apkUri = FileProvider.getUriForFile(this, authority, apkFile)
       val intent = Intent(Intent.ACTION_VIEW).apply {{
         setDataAndType(apkUri, "application/vnd.android.package-archive")
+        clipData = ClipData.newRawUri("Zuno Update APK", apkUri)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }}
@@ -1986,6 +2015,23 @@ class MainActivity : TauriActivity() {{
     insetTopCss = fallbackStatusBarCss()
     installWindowInsetsListener()
     requestStartupPermissionsIfNeeded()
+  }}
+
+  override fun onResume() {{
+    super.onResume()
+    if (
+      pendingInstallAfterPermission &&
+      (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())
+    ) {{
+      pendingInstallAfterPermission = false
+      val path = lastDownloadedApkPath
+      if (!path.isNullOrBlank()) {{
+        val file = File(path)
+        if (file.isFile) {{
+          launchApkInstaller(file)
+        }}
+      }}
+    }}
   }}
 
   @Suppress("DEPRECATION")
@@ -2151,11 +2197,57 @@ class MainActivity : TauriActivity() {{
     print(f"[patch-android] Patched {activity_path} (package={package_name})")
 
 
+def compute_version_code(version_name: str) -> int:
+    clean = version_name.strip().lstrip("v").split("-", 1)[0]
+    parts = [int(p) for p in clean.split(".") if p.isdigit()]
+    while len(parts) < 3:
+        parts.append(0)
+    major, minor, patch = parts[0], parts[1], parts[2]
+    return max(1, major * 1_000_000 + minor * 1_000 + patch)
+
+
+def patch_tauri_properties(app_dir: pathlib.Path) -> None:
+    conf_path = REPO_ROOT / "src-tauri" / "tauri.conf.json"
+    if not conf_path.is_file():
+        return
+    conf = json.loads(conf_path.read_text(encoding="utf-8"))
+    version_name = str(conf.get("version") or "0.0.1").strip()
+    version_code = compute_version_code(version_name)
+
+    props_path = app_dir / "tauri.properties"
+    lines: list[str] = []
+    if props_path.is_file():
+        lines = props_path.read_text(encoding="utf-8").splitlines()
+
+    def upsert_prop(entries: list[str], key: str, value: str) -> list[str]:
+        prefix = f"{key}="
+        replaced = False
+        out: list[str] = []
+        for line in entries:
+            if line.strip().startswith(prefix):
+                out.append(f"{key}={value}")
+                replaced = True
+            else:
+                out.append(line)
+        if not replaced:
+            out.append(f"{key}={value}")
+        return out
+
+    lines = upsert_prop(lines, "tauri.android.versionCode", str(version_code))
+    lines = upsert_prop(lines, "tauri.android.versionName", version_name)
+    props_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    print(
+        f"[patch-android] Verified {props_path} "
+        f"(versionName={version_name}, versionCode={version_code})"
+    )
+
+
 def patch_gradle(path: pathlib.Path) -> None:
     if not path.is_file():
         print(f"[patch-android] Skipping missing {path}")
         return
 
+    patch_tauri_properties(path.parent)
     text = path.read_text(encoding="utf-8")
 
     # Ensure minSdk is at least 24 for Oboe/AAudio and Tauri v2

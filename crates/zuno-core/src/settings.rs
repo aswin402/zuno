@@ -87,7 +87,7 @@ pub fn default_appearance_json() -> Value {
             "iconPack": "skiper99",
             "iconStroke": "regular",
             "trackIconStyle": "ring",
-            "playingStyle": "pulse",
+            "playingStyle": "equalizer",
             "playButtonStyle": "classic",
             "visualizerStyle": "wave-bars",
             "visualizerColor": "spectrum",
@@ -104,7 +104,7 @@ pub fn default_appearance_json() -> Value {
             "showTrackDuration": true,
             "dockGradualBlur": true,
             "crossfadeSecs": 3,
-            "uiZoom": 100
+            "uiZoom": 120
         }"#,
     )
     .expect("valid default appearance json")
@@ -168,7 +168,7 @@ pub fn appearance_options_catalog() -> Value {
             "scrubberKnob": ["ring", "solid", "line", "pill", "capsule", "waveform", "ticks"],
             "titlebarStyle": ["minimal", "macos", "dots", "pill", "geometric"],
             "titlebarAlign": ["right", "left"],
-            "uiZoom": { "min": 50, "max": 200, "step": 10, "presets": [75, 80, 90, 100, 110, 125, 150, 175, 200] },
+            "uiZoom": { "min": 50, "max": 200, "step": 10, "presets": [75, 80, 90, 100, 110, 120, 125, 150, 175, 200] },
             "crossfadeSecs": { "min": 0.0, "max": 10.0 },
             "sortField": ["name", "artist", "album", "time", "size", "duration"],
             "sortDir": ["asc", "desc"]
@@ -221,7 +221,7 @@ pub fn clamp_db(v: f32) -> f32 {
 
 pub fn clamp_ui_zoom(pct: f64) -> f64 {
     if !pct.is_finite() {
-        return 100.0;
+        return 120.0;
     }
     pct.clamp(UI_ZOOM_MIN, UI_ZOOM_MAX).round()
 }
@@ -463,7 +463,7 @@ pub fn extract_ui_zoom(settings: &AppSettings) -> f64 {
         .get("uiZoom")
         .and_then(Value::as_f64)
         .map(clamp_ui_zoom)
-        .unwrap_or(100.0)
+        .unwrap_or(120.0)
 }
 
 pub fn apply_eq_preset(settings: &mut AppSettings, preset_id: &str) -> Result<EqPresetSpec> {
@@ -726,7 +726,8 @@ mod tests {
 
         let mut s = load_app_settings(&paths);
         assert_eq!(s.revision, 0);
-        assert_eq!(extract_ui_zoom(&s), 100.0);
+        assert_eq!(extract_ui_zoom(&s), 120.0);
+        assert_eq!(s.appearance["playingStyle"], "equalizer");
 
         apply_settings_patch(
             &mut s,

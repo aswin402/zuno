@@ -151,10 +151,10 @@ export interface AppearanceSettings {
 export const UI_ZOOM_MIN = 50
 export const UI_ZOOM_MAX = 200
 export const UI_ZOOM_STEP = 10
-export const UI_ZOOM_PRESETS = [75, 80, 90, 100, 110, 125, 150, 175, 200] as const
+export const UI_ZOOM_PRESETS = [75, 80, 90, 100, 110, 120, 125, 150, 175, 200] as const
 
 export function clampUiZoom(pct: number): number {
-  if (!Number.isFinite(pct)) return 100
+  if (!Number.isFinite(pct)) return 120
   return Math.round(Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, pct)))
 }
 
@@ -183,7 +183,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   iconPack: 'skiper99',
   iconStroke: 'regular',
   trackIconStyle: 'ring',
-  playingStyle: 'pulse',
+  playingStyle: 'equalizer',
   playButtonStyle: 'classic',
   visualizerStyle: 'wave-bars',
   visualizerColor: 'spectrum',
@@ -200,7 +200,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   showTrackDuration: true,
   dockGradualBlur: true,
   crossfadeSecs: 3,
-  uiZoom: 100,
+  uiZoom: 120,
 }
 
 export const APPEARANCE_STORAGE_KEY = 'zuno:appearance'

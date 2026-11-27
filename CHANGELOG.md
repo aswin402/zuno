@@ -5,6 +5,25 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.31] — 2026-11-27
+
+Fixed Android in-place APK upgrades ("App not installed"), introduced a minimal touch-first mobile Customize experience, and synced all 41 live appearance settings as Zuno's defaults.
+
+### Fixed
+- **Android In-Place App Upgrades (`.github/workflows/release.yml`, `scripts/patch-android-project.py`, `src/components/UpdateDialog.tsx`)**:
+  - Configured a permanent Android release signing keystore in GitHub Actions secrets (`ANDROID_KEYSTORE_BASE64`, enforced on tagged releases) so every future release shares a consistent signing certificate and upgrades in place without showing "App not installed".
+  - Enforced strictly monotonic Android `versionCode` in `tauri.properties` from `tauri.conf.json` (`major * 1,000,000 + minor * 1,000 + patch`) and verified APK signing certs & version metadata in CI.
+  - Added Android 8+ `canRequestPackageInstalls()` check with automatic `ACTION_MANAGE_UNKNOWN_APP_SOURCES` prompt and automatic installer resume on `onResume()`, plus `ClipData` URI permission propagation for OEM installers.
+
+### Added
+- **Minimal Mobile-First Customize UI (`src/components/MobileCustomizeView.tsx`, `src/pages/CustomizePage.tsx`)**:
+  - Replaced the cramped desktop Studio layout on screens `< 1024px` with a minimal Pure OLED mobile hub featuring an instant Dark/Light toggle, a compact 4×2 all-8-themes swatch grid, a 1-row accent dot strip, and clean grouped drill-down screens (`Colors & Palette`, `Typography & Fonts`, `Surfaces & Layout`, `Icon Pack`, `Visualizer`, `Playback & Scrubber`, `Audio Crossfade`, `Scroll & Transitions`).
+  - Removed desktop-only sections (`Window Corners`, `Top Titlebar`, `Desktop Navigation`, `Display Zoom`) from mobile screens while preserving the full Appearance Studio on desktop.
+
+### Changed
+- **Default Theme & Appearance (`src/lib/appearance.ts`, `crates/zuno-core/src/settings.rs`, `src/App.tsx`, `src/pages/CustomizePage.tsx`)**:
+  - Synced all appearance defaults to match the active Pure OLED configuration (`playingStyle: "equalizer"`, `uiZoom: 120`, Pure OLED `#000000`, Obel Mono UI/mono font, Skiper 99 icons, Wave Bars spectrum visualizer, Solid scrubber, Blur Reveal scroll, and 3s crossfade).
+
 ## [0.0.30] — 2026-11-27
 
 Enabled uninterrupted background & screen-off playback on Android and Desktop, plus a native Pure OLED Android Home Screen & Lock Screen widget.

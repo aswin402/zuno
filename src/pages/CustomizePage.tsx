@@ -36,6 +36,7 @@ import {
 import { ColorPicker } from '@/components/ColorPicker'
 import { CompactScrollArea } from '@/components/CompactScrollArea'
 import { CustomFontStudio } from '@/components/CustomFontStudio'
+import { MobileCustomizeView } from '@/components/MobileCustomizeView'
 import {
   EaseThemeToggle,
   ThemeToggleGlyph,
@@ -643,9 +644,23 @@ export function CustomizePage({
   const isSearching = searchQuery.trim().length > 0
 
   return (
-    <div className="zuno-canvas flex h-full min-h-0 w-full flex-col bg-background lg:flex-row">
+    <>
+      {/* Minimal Touch-First Mobile Customize View (< 1024px) */}
+      <MobileCustomizeView
+        settings={settings}
+        section={section}
+        isModified={isModified}
+        onChange={onChange}
+        onSelectTheme={handleSelectTheme}
+        onToggleMode={handleToggleMode}
+        onReset={onReset}
+        onBack={onBack}
+      />
+
+      {/* Full-Screen Desktop Appearance Studio (>= 1024px) */}
+      <div className="zuno-canvas hidden h-full min-h-0 w-full flex-row bg-background lg:flex">
       {/* Desktop Left Collapsible Hierarchy Tree Sidebar */}
-      <aside className="hidden w-[274px] shrink-0 flex-col border-r border-border bg-card/60 lg:flex">
+      <aside className="flex w-[274px] shrink-0 flex-col border-r border-border bg-card/60">
         {/* Top Back Button + Studio Title */}
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-border/70 px-3">
           <button
@@ -803,76 +818,7 @@ export function CustomizePage({
 
       {/* Right Full-Screen Studio Stage */}
       <CompactScrollArea className="min-h-0 min-w-0 flex-1">
-        <div className="mx-auto w-full max-w-5xl space-y-6 px-4 pb-[calc(3.5rem+var(--zuno-safe-bottom))] pt-[calc(var(--zuno-safe-top)+1rem)] sm:px-10 sm:pt-7">
-          {/* Mobile Top Back Bar + 2-Level Hierarchical Nav */}
-          <div className="space-y-2.5 lg:hidden">
-            <div className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={onBack}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary cursor-pointer"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                <span>Back</span>
-              </button>
-              <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                Appearance Studio
-              </span>
-            </div>
-
-            {/* Level 1: Parent Categories */}
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5 zuno-scrollbar-hide">
-              {STUDIO_TREE.map((branch) => {
-                const BranchIcon = branch.icon
-                const active = branch.id === currentCategory.id
-                return (
-                  <button
-                    key={branch.id}
-                    type="button"
-                    onClick={() => {
-                      if (!active && branch.children[0]) {
-                        selectPage(branch.children[0].id)
-                      }
-                    }}
-                    className={cn(
-                      'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors cursor-pointer',
-                      active
-                        ? 'bg-primary text-primary-foreground'
-                        : 'border border-border bg-card text-muted-foreground',
-                    )}
-                  >
-                    <BranchIcon className="h-3.5 w-3.5" />
-                    <span>{branch.shortLabel}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            {/* Level 2: Child Components inside Active Category */}
-            <div className="flex gap-1.5 overflow-x-auto pb-1 zuno-scrollbar-hide">
-              {currentCategory.children.map((item) => {
-                const Icon = item.icon
-                const active = activePage === item.id
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => selectPage(item.id)}
-                    className={cn(
-                      'flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-medium transition-colors cursor-pointer',
-                      active
-                        ? 'border-primary bg-secondary text-foreground'
-                        : 'border-border/70 bg-background text-muted-foreground',
-                    )}
-                  >
-                    <Icon className="h-3 w-3" />
-                    <span>{item.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
+        <div className="mx-auto w-full max-w-5xl space-y-6 px-10 pb-14 pt-7">
           {/* Studio Stage Header + Hierarchical Breadcrumb + Prev/Next */}
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -2741,6 +2687,7 @@ export function CustomizePage({
         </div>
       </CompactScrollArea>
     </div>
+    </>
   )
 }
 
@@ -2841,7 +2788,11 @@ function DisplayZoomControls({
               </span>
               <span className="rounded-full border border-border bg-secondary px-2.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">
                 {(uiZoom / 100).toFixed(2)}×{' '}
-                {uiZoom === 100 ? 'Default' : uiZoom > 100 ? 'Zoomed In' : 'Zoomed Out'}
+                {uiZoom === DEFAULT_APPEARANCE.uiZoom
+                  ? 'Default'
+                  : uiZoom > DEFAULT_APPEARANCE.uiZoom
+                    ? 'Zoomed In'
+                    : 'Zoomed Out'}
               </span>
             </div>
           </div>
@@ -2873,12 +2824,12 @@ function DisplayZoomControls({
 
             <button
               type="button"
-              disabled={uiZoom === 100}
-              onClick={() => onZoomChange(100)}
+              disabled={uiZoom === DEFAULT_APPEARANCE.uiZoom}
+              onClick={() => onZoomChange(DEFAULT_APPEARANCE.uiZoom)}
               className="t-press inline-flex h-10 items-center gap-1.5 rounded-full border border-border bg-background px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              <span>Reset 100%</span>
+              <span>Reset {DEFAULT_APPEARANCE.uiZoom}%</span>
             </button>
           </div>
         </div>
@@ -2931,7 +2882,7 @@ function DisplayZoomControls({
                 )}
               >
                 <span>{pct}%</span>
-                {pct === 100 && (
+                {pct === DEFAULT_APPEARANCE.uiZoom && (
                   <span
                     className={cn(
                       'text-[9px] font-sans font-normal',

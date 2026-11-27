@@ -333,10 +333,17 @@ export function UpdateDialog({
                     </p>
                   )}
                   {isAndroid && (
-                    <p className="text-xs text-muted-foreground">
-                      If Android asks for &ldquo;Install unknown apps&rdquo;, allow Zuno and tap{' '}
-                      <span className="font-medium text-foreground">Install APK</span> again.
-                    </p>
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <p>
+                        If Android asks for &ldquo;Install unknown apps&rdquo;, enable Zuno and
+                        return — or tap{' '}
+                        <span className="font-medium text-foreground">Install APK</span> again.
+                      </p>
+                      <p className="text-[11px] text-muted-foreground/85">
+                        Upgrading from v0.0.30 or earlier? Uninstall the old build once if Android
+                        reports a signing conflict — all future updates install in place.
+                      </p>
+                    </div>
                   )}
                   {installResult.backup_path && (
                     <p className="pt-1 text-xs text-muted-foreground">

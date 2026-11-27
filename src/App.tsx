@@ -364,10 +364,10 @@ export default function App() {
 
   const adjustUiZoom = useCallback(
     (action: 'in' | 'out' | 'reset') => {
-      const current = uiZoomRef.current ?? 100
+      const current = uiZoomRef.current ?? DEFAULT_APPEARANCE.uiZoom
       const next =
         action === 'reset'
-          ? 100
+          ? DEFAULT_APPEARANCE.uiZoom
           : clampUiZoom(current + (action === 'in' ? UI_ZOOM_STEP : -UI_ZOOM_STEP))
       if (next !== current) {
         setAppearance((prev) => ({ ...prev, uiZoom: next }))
