@@ -8,7 +8,7 @@ use crate::spectrum::{AudioLevels, SharedSpectrum};
 use serde_json::{Value, json};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 use zuno_core::ipc::{IpcData, IpcRequest, IpcResponse};
@@ -110,7 +110,7 @@ enum AudioCmd {
         load_gen: u64,
         path: PathBuf,
         volume: f32,
-        reply: mpsc::Sender<Result<()>>,
+        reply: mpsc::Sender<Result<bool>>,
     },
     LoadPcmStream {
         reader: Box<dyn Read + Send>,
@@ -120,8 +120,11 @@ enum AudioCmd {
         reply: mpsc::Sender<Result<()>>,
     },
     Pause,
-    Resume,
+    Resume {
+        reply: mpsc::Sender<bool>,
+    },
     Stop,
+    RecoverOutput,
     Seek {
         pos: Duration,
         reply: mpsc::Sender<Result<()>>,
@@ -145,6 +148,7 @@ pub struct ZunoService {
     inner: Arc<Mutex<InnerState>>,
     audio_tx: mpsc::Sender<AudioCmd>,
     load_gen: Arc<AtomicU64>,
+    engine_loaded: Arc<AtomicBool>,
     position_bits: Arc<AtomicU64>,
     spectrum: Option<Arc<SharedSpectrum>>,
     radio: Arc<RadioPlaybackManager>,
@@ -197,12 +201,14 @@ impl ZunoService {
 
         let (tx, rx) = mpsc::channel::<AudioCmd>();
         let load_gen = Arc::new(AtomicU64::new(0));
+        let engine_loaded = Arc::new(AtomicBool::new(false));
         let position_bits = Arc::new(AtomicU64::new(0.0f64.to_bits()));
         let spectrum = engine.spectrum();
         let service = Arc::new(Self {
             inner: Arc::clone(&inner),
             audio_tx: tx.clone(),
             load_gen: Arc::clone(&load_gen),
+            engine_loaded: Arc::clone(&engine_loaded),
             position_bits: Arc::clone(&position_bits),
             spectrum,
             radio: Arc::new(RadioPlaybackManager::new()),
@@ -218,6 +224,7 @@ impl ZunoService {
         let thread_inner = Arc::clone(&inner);
         let thread_pos = Arc::clone(&position_bits);
         let thread_load_gen = Arc::clone(&load_gen);
+        let thread_loaded = Arc::clone(&engine_loaded);
 
         // Single dedicated audio thread: owns OutputStream/Sink safely.
         // Blocks with zero CPU wakeups while idle/paused, ticks at 25ms during active crossfades,
@@ -252,12 +259,14 @@ impl ZunoService {
                             reply,
                         }) => {
                             if cmd_gen < thread_load_gen.load(Ordering::Acquire) {
-                                // A newer track load or stop is already queued — skip decoding stale track.
-                                let _ = reply.send(Ok(()));
+                                // A newer track load, pause, or stop is already queued — skip decoding stale track.
+                                let _ = reply.send(Ok(false));
                             } else {
                                 let res = catch_audio_result("load_and_play", || {
                                     engine.load_and_play(&path, volume)
                                 });
+                                let loaded_now = catch_audio_op("is_loaded", false, || engine.is_loaded());
+                                thread_loaded.store(loaded_now, Ordering::Release);
                                 if res.is_ok() {
                                     mode = PlaybackLoopMode::PlayingFile;
                                     publish_pos(0.0);
@@ -271,7 +280,7 @@ impl ZunoService {
                                     } else {
                                         TICK_IDLE_MS
                                     });
-                                let _ = reply.send(res);
+                                let _ = reply.send(res.map(|()| true));
                             }
                         }
                         Ok(AudioCmd::LoadPcmStream {
@@ -284,6 +293,7 @@ impl ZunoService {
                             let res = catch_audio_result("load_pcm_stream", || {
                                 engine.load_pcm_stream(reader, sample_rate, channels, volume)
                             });
+                            thread_loaded.store(false, Ordering::Release);
                             mode = if res.is_ok() {
                                 PlaybackLoopMode::LivePcm
                             } else {
@@ -302,18 +312,40 @@ impl ZunoService {
                             }
                             fading = false;
                         }
-                        Ok(AudioCmd::Resume) => {
-                            catch_audio_op("resume", (), || engine.resume());
-                            if mode != PlaybackLoopMode::LivePcm {
-                                mode = PlaybackLoopMode::PlayingFile;
+                        Ok(AudioCmd::Resume { reply }) => {
+                            let loaded_before =
+                                catch_audio_op("is_loaded", false, || engine.is_loaded());
+                            if loaded_before {
+                                catch_audio_op("resume", (), || engine.resume());
+                                let loaded_after =
+                                    catch_audio_op("is_loaded", false, || engine.is_loaded());
+                                thread_loaded.store(loaded_after, Ordering::Release);
+                                if loaded_after && mode != PlaybackLoopMode::LivePcm {
+                                    mode = PlaybackLoopMode::PlayingFile;
+                                }
+                                next_tick = Instant::now() + Duration::from_millis(TICK_IDLE_MS);
+                                let _ = reply.send(loaded_after);
+                            } else {
+                                thread_loaded.store(false, Ordering::Release);
+                                let _ = reply.send(false);
                             }
-                            next_tick = Instant::now() + Duration::from_millis(TICK_IDLE_MS);
                         }
                         Ok(AudioCmd::Stop) => {
                             catch_audio_op("stop", (), || engine.stop());
+                            thread_loaded.store(false, Ordering::Release);
                             mode = PlaybackLoopMode::Idle;
                             publish_pos(0.0);
                             fading = false;
+                        }
+                        Ok(AudioCmd::RecoverOutput) => {
+                            if mode == PlaybackLoopMode::PlayingFile {
+                                let _ = catch_audio_op("recover_output", false, || {
+                                    engine.recover_output(true)
+                                });
+                                let loaded_now =
+                                    catch_audio_op("is_loaded", false, || engine.is_loaded());
+                                thread_loaded.store(loaded_now, Ordering::Release);
+                            }
                         }
                         Ok(AudioCmd::Seek { pos, reply }) => {
                             let res = catch_audio_result("seek", || engine.seek(pos));
@@ -390,6 +422,7 @@ impl ZunoService {
                                                 })
                                                 .is_ok();
                                                 if ok {
+                                                    thread_loaded.store(true, Ordering::Release);
                                                     publish_pos(0.0);
                                                     fading = catch_audio_op(
                                                         "tick_transition",
@@ -418,6 +451,7 @@ impl ZunoService {
                                         // If early crossfade fired on the last track with repeat off,
                                         // let the final track finish cleanly instead of cutting it off early!
                                         catch_audio_op("stop", (), || engine.stop());
+                                        thread_loaded.store(false, Ordering::Release);
                                         mode = PlaybackLoopMode::Idle;
                                         publish_pos(0.0);
                                         fading = false;
@@ -430,6 +464,7 @@ impl ZunoService {
                                     }
                                 }
                             } else if finished {
+                                thread_loaded.store(false, Ordering::Release);
                                 mode = PlaybackLoopMode::Idle;
                                 fading = false;
                             }
@@ -580,11 +615,13 @@ impl ZunoService {
     /// Stop any live PCM hardware FM stream without clearing the user's song queue.
     pub fn stop_pcm_stream(&self) {
         self.load_gen.fetch_add(1, Ordering::AcqRel);
+        self.engine_loaded.store(false, Ordering::Release);
         let _ = self.audio_tx.send(AudioCmd::Stop);
     }
 
     /// Pause local file playback without touching active FM radio state (used when switching to FM).
     pub fn pause_local_playback(&self) {
+        self.load_gen.fetch_add(1, Ordering::AcqRel);
         let _ = self.audio_tx.send(AudioCmd::Pause);
         let pos = self.audio_position();
         let mut st = lock_unpoisoned(&self.inner);
@@ -592,6 +629,12 @@ impl ZunoService {
             st.play_state = PlayState::Paused;
             Self::persist_locked(&st, pos);
         }
+    }
+
+    /// Poke the audio backend to verify/reopen its OS output stream (used on Android Bluetooth /
+    /// headset audio route changes so playback recovers immediately without silence).
+    pub fn recover_audio_output(&self) {
+        let _ = self.audio_tx.send(AudioCmd::RecoverOutput);
     }
 
     /// Execute any `IpcRequest` and return a structured `IpcResponse`.
@@ -933,6 +976,9 @@ impl ZunoService {
                         "playback": self.status(),
                     })));
                 }
+                // Bump load_gen so any in-flight LoadAndPlay that finishes concurrently cannot
+                // overwrite the user's Pause back to PlayState::Playing!
+                self.load_gen.fetch_add(1, Ordering::AcqRel);
                 let _ = self.audio_tx.send(AudioCmd::Pause);
                 let pos = self.audio_position();
                 {
@@ -959,17 +1005,46 @@ impl ZunoService {
                         "playback": self.status(),
                     })));
                 }
-                let needs_load = {
+                let saved_pos = self.audio_position();
+                let (was_paused, needs_load) = {
                     let st = lock_unpoisoned(&self.inner);
-                    st.play_state == PlayState::Stopped
+                    let paused = st.play_state == PlayState::Paused;
+                    let load = st.play_state == PlayState::Stopped
+                        || !self.engine_loaded.load(Ordering::Acquire);
+                    (paused, load)
                 };
-                if needs_load {
-                    let (abs_path, volume) = self.prepare_current_or_first()?;
-                    self.load_audio(abs_path, volume)?;
-                } else {
-                    let _ = self.audio_tx.send(AudioCmd::Resume);
+                let mut resumed_live = false;
+                if !needs_load {
+                    let (reply_tx, reply_rx) = mpsc::channel();
+                    if self.audio_tx.send(AudioCmd::Resume { reply: reply_tx }).is_ok() {
+                        resumed_live = reply_rx.recv().unwrap_or(false);
+                    }
                 }
-                {
+                if !resumed_live {
+                    let (abs_path, volume) = self.prepare_current_or_first()?;
+                    let (expected_gen, loaded) = self.load_audio(abs_path, volume)?;
+                    if loaded {
+                        if was_paused && saved_pos > 0.5 {
+                            let (seek_tx, seek_rx) = mpsc::channel();
+                            if self
+                                .audio_tx
+                                .send(AudioCmd::Seek {
+                                    pos: Duration::from_secs_f64(saved_pos),
+                                    reply: seek_tx,
+                                })
+                                .is_ok()
+                            {
+                                let _ = seek_rx.recv();
+                            }
+                        }
+                        let mut st = lock_unpoisoned(&self.inner);
+                        if self.load_gen.load(Ordering::Acquire) == expected_gen
+                            && st.queue.current_track_id().is_some()
+                        {
+                            st.play_state = PlayState::Playing;
+                        }
+                    }
+                } else {
                     let mut st = lock_unpoisoned(&self.inner);
                     if st.queue.current_track_id().is_some() {
                         st.play_state = PlayState::Playing;
@@ -1655,8 +1730,23 @@ impl ZunoService {
     }
 
     fn start_loaded_track(&self, path: PathBuf, volume: f32) -> Result<()> {
-        self.load_audio(path, volume)?;
+        let (expected_gen, loaded) = match self.load_audio(path, volume) {
+            Ok(pair) => pair,
+            Err(err) => {
+                if !self.engine_loaded.load(Ordering::Acquire) {
+                    let mut st = lock_unpoisoned(&self.inner);
+                    st.play_state = PlayState::Stopped;
+                }
+                return Err(err);
+            }
+        };
+        if !loaded || self.load_gen.load(Ordering::Acquire) != expected_gen {
+            return Ok(());
+        }
         let mut st = lock_unpoisoned(&self.inner);
+        if self.load_gen.load(Ordering::Acquire) != expected_gen {
+            return Ok(());
+        }
         st.play_state = PlayState::Playing;
         if let Some(tid) = st.queue.current_track_id().map(str::to_string) {
             record_last_played(&mut st.settings, &tid);
@@ -1749,7 +1839,7 @@ impl ZunoService {
         Some((abs, st.volume))
     }
 
-    fn load_audio(&self, path: PathBuf, volume: f32) -> Result<()> {
+    fn load_audio(&self, path: PathBuf, volume: f32) -> Result<(u64, bool)> {
         let load_gen = self.load_gen.fetch_add(1, Ordering::AcqRel) + 1;
         let (reply_tx, reply_rx) = mpsc::channel();
         self.audio_tx
@@ -1760,9 +1850,10 @@ impl ZunoService {
                 reply: reply_tx,
             })
             .map_err(|_| ZunoError::Audio("audio thread stopped".into()))?;
-        reply_rx
+        let loaded = reply_rx
             .recv()
-            .map_err(|_| ZunoError::Audio("audio thread failed to respond".into()))?
+            .map_err(|_| ZunoError::Audio("audio thread failed to respond".into()))??;
+        Ok((load_gen, loaded))
     }
 
     /// Lock-free O(1) playback position read (no channel allocation or audio-thread round-trip).
@@ -2156,5 +2247,115 @@ mod tests {
                 data: IpcData::Status(ref st)
             } if st.state == PlayState::Playing
         ));
+    }
+
+    #[test]
+    fn resume_after_stop_pcm_stream_reloads_paused_track_at_saved_position() {
+        let tmp = tempdir().unwrap();
+        let paths = ZunoPaths::new(tmp.path());
+        paths.ensure_dirs().unwrap();
+        fs::write(paths.songs_dir().join("song.mp3"), b"audio-data").unwrap();
+
+        let svc = ZunoService::open_with_engine(paths, MockAudioEngine::new()).unwrap();
+        let _ = svc.handle_request(IpcRequest::Play {
+            track_id: None,
+            query: None,
+            folder: None,
+            playlist: None,
+        });
+        let _ = svc.handle_request(IpcRequest::Seek {
+            position_secs: 42.0,
+        });
+        // Simulate switching to FM radio (pauses local playback, then stops PCM stream -> engine unloaded).
+        svc.pause_local_playback();
+        svc.stop_pcm_stream();
+        assert_eq!(svc.status().state, PlayState::Paused);
+
+        // Resuming local playback must reload the track cleanly instead of silently pretending to play!
+        let resp = svc.handle_request(IpcRequest::Resume);
+        assert!(matches!(
+            resp,
+            IpcResponse::Ok {
+                data: IpcData::Status(ref st)
+            } if st.state == PlayState::Playing && st.position_secs >= 41.5
+        ));
+    }
+
+    #[test]
+    fn pause_during_slow_load_keeps_paused_state() {
+        struct SlowLoadEngine {
+            inner: MockAudioEngine,
+            entered: Arc<AtomicBool>,
+            release: Arc<AtomicBool>,
+        }
+        impl AudioEngine for SlowLoadEngine {
+            fn load_and_play(&mut self, path: &std::path::Path, volume: f32) -> Result<()> {
+                self.entered.store(true, Ordering::SeqCst);
+                while !self.release.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                self.inner.load_and_play(path, volume)
+            }
+            fn pause(&mut self) {
+                self.inner.pause();
+            }
+            fn resume(&mut self) {
+                self.inner.resume();
+            }
+            fn stop(&mut self) {
+                self.inner.stop();
+            }
+            fn seek(&mut self, pos: Duration) -> Result<()> {
+                self.inner.seek(pos)
+            }
+            fn set_volume(&mut self, volume: f32) {
+                self.inner.set_volume(volume);
+            }
+            fn is_loaded(&self) -> bool {
+                self.inner.is_loaded()
+            }
+            fn position_secs(&self) -> f64 {
+                self.inner.position_secs()
+            }
+            fn is_finished(&self) -> bool {
+                self.inner.is_finished()
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let paths = ZunoPaths::new(tmp.path());
+        paths.ensure_dirs().unwrap();
+        fs::write(paths.songs_dir().join("slow.mp3"), b"audio-data").unwrap();
+
+        let entered = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let engine = SlowLoadEngine {
+            inner: MockAudioEngine::new(),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        };
+        let svc = ZunoService::open_with_engine(paths, engine).unwrap();
+
+        let svc_play = Arc::clone(&svc);
+        let play_thread = std::thread::spawn(move || {
+            svc_play.handle_request(IpcRequest::Play {
+                track_id: None,
+                query: None,
+                folder: None,
+                playlist: None,
+            })
+        });
+
+        while !entered.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // User hits Pause while the previous song is still decoding.
+        let _ = svc.handle_request(IpcRequest::Pause);
+        release.store(true, Ordering::SeqCst);
+        let _ = play_thread.join().unwrap();
+
+        // The finished decode must NOT flip play_state back to Playing!
+        assert_ne!(svc.status().state, PlayState::Playing);
     }
 }

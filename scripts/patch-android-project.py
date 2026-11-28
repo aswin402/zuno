@@ -625,6 +625,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
@@ -633,12 +635,15 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Base64
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.Executors
@@ -665,6 +670,8 @@ class ZunoMediaService : Service() {{
     const val ACTION_UPDATE = "dev.zuno.player.ACTION_MEDIA_UPDATE"
     const val ACTION_CLEAR = "dev.zuno.player.ACTION_MEDIA_CLEAR"
     const val ACTION_PREV = "dev.zuno.player.ACTION_MEDIA_PREV"
+    const val ACTION_PLAY = "dev.zuno.player.ACTION_MEDIA_PLAY"
+    const val ACTION_PAUSE = "dev.zuno.player.ACTION_MEDIA_PAUSE"
     const val ACTION_TOGGLE = "dev.zuno.player.ACTION_MEDIA_TOGGLE"
     const val ACTION_NEXT = "dev.zuno.player.ACTION_MEDIA_NEXT"
     const val ACTION_STOP = "dev.zuno.player.ACTION_MEDIA_STOP"
@@ -681,6 +688,7 @@ class ZunoMediaService : Service() {{
     @Volatile var pendingRadioName: String = ""
     @Volatile var pendingRadioSubtitle: String = ""
     @Volatile var activeInstance: ZunoMediaService? = null
+    val stateSeq = AtomicLong(0L)
 
     fun configureBridge(port: Int, token: String) {{
       if (port > 0 && token.isNotBlank()) {{
@@ -693,10 +701,13 @@ class ZunoMediaService : Service() {{
       if (rustBridgePort > 0 && rustBridgeToken.isNotBlank()) {{
         return Pair(rustBridgePort, rustBridgeToken)
       }}
-      val candidates = listOf(
+      val candidates = mutableListOf(
         File(context.filesDir, "zuno/.zuno/android-bridge.json"),
         File(context.cacheDir, "zuno/.zuno/android-bridge.json"),
       )
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {{
+        candidates.add(File(context.dataDir, "zuno/.zuno/android-bridge.json"))
+      }}
       for (f in candidates) {{
         if (!f.isFile) continue
         try {{
@@ -715,10 +726,11 @@ class ZunoMediaService : Service() {{
     }}
 
     fun sync(context: Context, state: NowPlayingState) {{
+      stateSeq.incrementAndGet()
       currentState = state
       val inst = activeInstance
       if (inst != null) {{
-        inst.renderMediaNotification(state)
+        inst.scheduleRenderMediaNotification(state)
         return
       }}
       val intent = Intent(context, ZunoMediaService::class.java).apply {{
@@ -844,6 +856,7 @@ class ZunoMediaService : Service() {{
   private var hasAudioFocus = false
   private var resumeAfterTransientLoss = false
   private var noisyReceiverRegistered = false
+  private var audioDeviceCallbackRegistered = false
   private var radioPlayer: MediaPlayer? = null
   private var radioActive = false
   private val radioGeneration = AtomicLong(0L)
@@ -851,8 +864,26 @@ class ZunoMediaService : Service() {{
   private var cachedArtworkBitmap: Bitmap? = null
   private var fallbackArtworkBitmap: Bitmap? = null
   private val syncLoopRunning = AtomicBoolean(false)
+  private val recoverScheduled = AtomicBoolean(false)
+  private val mainHandler = Handler(Looper.getMainLooper())
   private val controlExecutor = Executors.newSingleThreadExecutor {{ r ->
     Thread(r, "zuno-media-ctl").apply {{ isDaemon = true }}
+  }}
+
+  private data class BridgeCallResult(val body: String?, val reachedServer: Boolean)
+
+  private val audioDeviceCallback = object : AudioDeviceCallback() {{
+    override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>?) {{
+      if (addedDevices?.any {{ it.isSink }} == true) {{
+        scheduleAudioOutputRecover()
+      }}
+    }}
+
+    override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>?) {{
+      if (removedDevices?.any {{ it.isSink }} == true) {{
+        scheduleAudioOutputRecover()
+      }}
+    }}
   }}
 
   private val noisyReceiver = object : BroadcastReceiver() {{
@@ -871,12 +902,17 @@ class ZunoMediaService : Service() {{
         handleMediaControl("pause", -1.0)
       }}
       AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {{
+        hasAudioFocus = false
         if (currentState?.isPlaying == true) {{
           resumeAfterTransientLoss = true
           handleMediaControl("pause", -1.0)
         }}
       }}
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {{
+        // Keep playback uninterrupted through brief notification chimes.
+      }}
       AudioManager.AUDIOFOCUS_GAIN -> {{
+        hasAudioFocus = true
         if (resumeAfterTransientLoss) {{
           resumeAfterTransientLoss = false
           handleMediaControl("play", -1.0)
@@ -891,6 +927,11 @@ class ZunoMediaService : Service() {{
     audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     ensureNotificationChannel()
     ensureBridgeCredentials(applicationContext)
+    try {{
+      audioManager?.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+      audioDeviceCallbackRegistered = true
+    }} catch (_: Exception) {{
+    }}
 
     val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
     wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zuno:audio_playback")?.apply {{
@@ -951,6 +992,8 @@ class ZunoMediaService : Service() {{
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {{
     when (intent?.action) {{
       ACTION_PREV -> handleMediaControl("previous", -1.0)
+      ACTION_PLAY -> handleMediaControl("play", -1.0)
+      ACTION_PAUSE -> handleMediaControl("pause", -1.0)
       ACTION_TOGGLE -> handleMediaControl("toggle", -1.0)
       ACTION_NEXT -> handleMediaControl("next", -1.0)
       ACTION_STOP -> {{
@@ -966,7 +1009,7 @@ class ZunoMediaService : Service() {{
           // Try hydrating live state directly from Rust bridge if available
           refreshFromRustBridgeAsync()
         }} else {{
-          renderMediaNotification(state)
+          scheduleRenderMediaNotification(state)
         }}
       }}
     }}
@@ -983,6 +1026,13 @@ class ZunoMediaService : Service() {{
   override fun onDestroy() {{
     activeInstance = null
     syncLoopRunning.set(false)
+    if (audioDeviceCallbackRegistered) {{
+      try {{
+        audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback)
+      }} catch (_: Exception) {{
+      }}
+      audioDeviceCallbackRegistered = false
+    }}
     try {{
       controlExecutor.shutdownNow()
     }} catch (_: Exception) {{
@@ -1177,6 +1227,35 @@ class ZunoMediaService : Service() {{
     }}
   }}
 
+  private fun scheduleAudioOutputRecover() {{
+    val st = currentState
+    if (st == null || !st.isPlaying || st.isLive || radioActive) return
+    if (!recoverScheduled.compareAndSet(false, true)) return
+    mainHandler.postDelayed({{
+      recoverScheduled.set(false)
+      val latest = currentState
+      if (latest == null || !latest.isPlaying || latest.isLive || radioActive) return@postDelayed
+      val creds = ensureBridgeCredentials(applicationContext) ?: return@postDelayed
+      try {{
+        controlExecutor.execute {{
+          callRustBridge("POST", creds.first, creds.second, "/recover")
+        }}
+      }} catch (_: Exception) {{
+      }}
+    }}, 250L)
+  }}
+
+  fun scheduleRenderMediaNotification(state: NowPlayingState) {{
+    if (Looper.myLooper() == Looper.getMainLooper()) {{
+      renderMediaNotification(state)
+    }} else {{
+      mainHandler.post {{
+        if (currentState == null) return@post
+        renderMediaNotification(currentState ?: state)
+      }}
+    }}
+  }}
+
   /**
    * Executes Play/Pause/Toggle/Next/Previous/Seek directly against the Rust audio engine over
    * localhost `127.0.0.1` so lockscreen, notification, Bluetooth, and Home Screen Widget controls
@@ -1190,8 +1269,9 @@ class ZunoMediaService : Service() {{
           radioEventListener?.invoke("disconnected", "")
           currentState?.let {{
             val next = it.copy(isPlaying = false)
+            stateSeq.incrementAndGet()
             currentState = next
-            renderMediaNotification(next)
+            scheduleRenderMediaNotification(next)
           }}
         }}
         "play" -> {{
@@ -1205,8 +1285,9 @@ class ZunoMediaService : Service() {{
             radioEventListener?.invoke("disconnected", "")
             currentState?.let {{
               val next = it.copy(isPlaying = false)
+              stateSeq.incrementAndGet()
               currentState = next
-              renderMediaNotification(next)
+              scheduleRenderMediaNotification(next)
             }}
           }} else if (pendingRadioUrl.isNotBlank()) {{
             startNativeRadioPlayer(pendingRadioUrl, pendingRadioName, pendingRadioSubtitle)
@@ -1223,6 +1304,7 @@ class ZunoMediaService : Service() {{
       return
     }}
 
+    val cmdSeq = stateSeq.incrementAndGet()
     try {{
       controlExecutor.execute {{
         val (port, token) = creds
@@ -1231,10 +1313,12 @@ class ZunoMediaService : Service() {{
         }} else {{
           "/control/" + op
         }}
-        val body = callRustBridge("POST", port, token, endpoint)
-        if (body != null) {{
-          applyRustStatusJson(body, port, token)
-        }} else {{
+        val res = callRustBridge("POST", port, token, endpoint)
+        if (res.body != null) {{
+          applyRustStatusJson(res.body, port, token, cmdSeq)
+        }} else if (!res.reachedServer) {{
+          // Only fall back to WebView if the localhost bridge was unreachable; never double-fire
+          // a toggle after a read timeout where Rust already processed the request!
           actionListener?.invoke(op, seekSecs)
         }}
       }}
@@ -1248,14 +1332,17 @@ class ZunoMediaService : Service() {{
     Thread {{
       try {{
         while (syncLoopRunning.get()) {{
-          Thread.sleep(1200L)
+          Thread.sleep(2000L)
           val st = currentState
           if (st == null || !st.isPlaying || st.isLive || radioActive) {{
             break
           }}
           val creds = ensureBridgeCredentials(applicationContext) ?: break
-          val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: continue
-          applyRustStatusJson(body, creds.first, creds.second)
+          val snapSeq = stateSeq.get()
+          val res = callRustBridge("GET", creds.first, creds.second, "/status")
+          if (res.body != null && stateSeq.get() == snapSeq) {{
+            applyRustStatusJson(res.body, creds.first, creds.second, snapSeq)
+          }}
         }}
       }} catch (_: Exception) {{
       }} finally {{
@@ -1269,32 +1356,38 @@ class ZunoMediaService : Service() {{
 
   private fun refreshFromRustBridgeAsync() {{
     val creds = ensureBridgeCredentials(applicationContext) ?: return
+    val snapSeq = stateSeq.get()
     try {{
       controlExecutor.execute {{
-        val body = callRustBridge("GET", creds.first, creds.second, "/status") ?: return@execute
-        applyRustStatusJson(body, creds.first, creds.second)
+        val res = callRustBridge("GET", creds.first, creds.second, "/status")
+        if (res.body != null) {{
+          applyRustStatusJson(res.body, creds.first, creds.second, snapSeq)
+        }}
       }}
     }} catch (_: Exception) {{
     }}
   }}
 
-  private fun callRustBridge(method: String, port: Int, token: String, path: String): String? {{
+  private fun callRustBridge(method: String, port: Int, token: String, path: String): BridgeCallResult {{
     var conn: HttpURLConnection? = null
     return try {{
       conn = (URL("http://127.0.0.1:" + port + path).openConnection() as HttpURLConnection).apply {{
         requestMethod = method
         connectTimeout = 1500
-        readTimeout = 2500
+        readTimeout = 6000
         setRequestProperty("X-Zuno-Token", token)
       }}
       val code = conn.responseCode
       if (code in 200..299) {{
-        conn.inputStream.bufferedReader(Charsets.UTF_8).use {{ it.readText() }}
+        val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use {{ it.readText() }}
+        BridgeCallResult(text, true)
       }} else {{
-        null
+        BridgeCallResult(null, true)
       }}
+    }} catch (_: SocketTimeoutException) {{
+      BridgeCallResult(null, true)
     }} catch (_: Exception) {{
-      null
+      BridgeCallResult(null, false)
     }} finally {{
       conn?.disconnect()
     }}
@@ -1350,14 +1443,17 @@ class ZunoMediaService : Service() {{
     }}
   }}
 
-  private fun applyRustStatusJson(rawJson: String, port: Int, token: String) {{
+  private fun applyRustStatusJson(rawJson: String, port: Int, token: String, expectedSeq: Long) {{
     try {{
+      if (stateSeq.get() != expectedSeq) {{
+        return
+      }}
       val obj = JSONObject(rawJson)
       val stateStr = obj.optString("state", "stopped")
       val trackId = obj.optString("track_id", "")
       val title = obj.optString("title", "")
       if (stateStr == "stopped" && title.isBlank()) {{
-        stopAndRemoveNotification()
+        mainHandler.post {{ stopAndRemoveNotification() }}
         return
       }}
       val next = NowPlayingState(
@@ -1384,6 +1480,9 @@ class ZunoMediaService : Service() {{
         cachedArtworkBitmap = null
       }}
 
+      if (stateSeq.get() != expectedSeq) {{
+        return
+      }}
       val prev = currentState
       val changed = prev == null ||
         prev.trackId != next.trackId ||
@@ -1393,7 +1492,7 @@ class ZunoMediaService : Service() {{
 
       currentState = next
       if (changed) {{
-        renderMediaNotification(next)
+        scheduleRenderMediaNotification(next)
       }}
     }} catch (_: Exception) {{
     }}
@@ -1468,9 +1567,40 @@ class ZunoMediaService : Service() {{
 
   @Synchronized
   fun renderMediaNotification(state: NowPlayingState) {{
+    if (Looper.myLooper() != Looper.getMainLooper()) {{
+      scheduleRenderMediaNotification(state)
+      return
+    }}
     val session = mediaSession ?: return
     val art = decodeArtwork(state)
     latestArtworkBitmap = art
+
+    // If track has embedded cover art not yet cached, fetch once directly from Rust bridge in background
+    if (
+      state.hasCover &&
+      !state.isLive &&
+      state.trackId.isNotBlank() &&
+      state.artworkBase64.isBlank() &&
+      cachedArtworkKey != "tid:" + state.trackId
+    ) {{
+      val tid = state.trackId
+      val creds = ensureBridgeCredentials(applicationContext)
+      if (creds != null) {{
+        try {{
+          controlExecutor.execute {{
+            if (cachedArtworkKey == "tid:" + tid) return@execute
+            val bmp = fetchCoverBytesFromBridge(creds.first, creds.second, tid) ?: return@execute
+            cachedArtworkKey = "tid:" + tid
+            cachedArtworkBitmap = bmp
+            val cur = currentState
+            if (cur != null && cur.trackId == tid) {{
+              scheduleRenderMediaNotification(cur)
+            }}
+          }}
+        }} catch (_: Exception) {{
+        }}
+      }}
+    }}
 
     if (state.isPlaying) {{
       requestAudioFocus()
@@ -1539,7 +1669,7 @@ class ZunoMediaService : Service() {{
         if (state.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
       ),
       if (state.isPlaying) "Pause" else "Play",
-      actionPendingIntent(ACTION_TOGGLE, 102),
+      actionPendingIntent(if (state.isPlaying) ACTION_PAUSE else ACTION_PLAY, 102),
     ).build()
     val nextAction = Notification.Action.Builder(
       Icon.createWithResource(this, android.R.drawable.ic_media_next),
@@ -2183,6 +2313,12 @@ class MainActivity : TauriActivity() {{
 
   override fun onResume() {{
     super.onResume()
+    zunoWebView?.post {{
+      zunoWebView?.evaluateJavascript(
+        "window.dispatchEvent(new Event('zuno:android-resumed'));",
+        null,
+      )
+    }}
     if (
       pendingInstallAfterPermission &&
       (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())

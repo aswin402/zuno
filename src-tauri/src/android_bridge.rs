@@ -198,6 +198,11 @@ fn handle_client(mut stream: TcpStream, service: &ZunoService, expected_token: &
                 write_http(&mut stream, "404 Not Found", "text/plain", b"no cover");
             }
         }
+        ("POST", "/recover") => {
+            service.recover_audio_output();
+            let body = status_json(service);
+            write_http(&mut stream, "200 OK", "application/json", body.as_bytes());
+        }
         ("POST", p) if p.starts_with("/control/") => {
             let op = p.trim_start_matches("/control/");
             let req = match op {
@@ -315,5 +320,10 @@ mod tests {
         assert_eq!(ok2, 200);
         let v2: serde_json::Value = serde_json::from_str(&body2).unwrap();
         assert_eq!(v2["is_playing"], false);
+
+        let (ok3, body3) = http_call(handle.port, "POST", "/recover", &handle.token);
+        assert_eq!(ok3, 200);
+        let v3: serde_json::Value = serde_json::from_str(&body3).unwrap();
+        assert_eq!(v3["state"], "stopped");
     }
 }

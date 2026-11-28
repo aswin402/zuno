@@ -5,6 +5,26 @@ All notable changes to **Zuno** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.35] — 2026-11-28
+
+Major Android playback reliability overhaul — fixed silent playback after audio route changes / Doze, Play/Pause desyncs and double-toggles, seek deadlocks, and sluggish touch responsiveness on Android.
+
+### Fixed
+- **Android Oboe/AAudio Stream Disconnect, Sample-Rate & Seek Deadlock Fixes (`crates/zuno-audio/src/engine.rs`)**:
+  - Replaced `rodio::OutputStream::try_default()` with a managed `cpal` + `DynamicMixer` output stream that selects Android's native **48 kHz / 44.1 kHz stereo** formats instead of `cpal-oboe`'s `192 kHz` max default (which dropped/glitched audio on phone DACs and Bluetooth A2DP sinks).
+  - Added live `error_callback` disconnect detection and a hardware callback heartbeat watchdog so Oboe/AAudio disconnects (Bluetooth connect/disconnect, headphone plug/unplug, phone calls, Doze idle) transparently reopen the audio stream and resume the track at its exact position instead of playing permanent silence.
+  - Paused/released the hardware Oboe stream when paused/stopped on Android, and made `seek()` deadlock-proof (never blocks waiting on a dead or hardware-paused audio callback; falls back to synchronous Symphonia seek on stream rebuild).
+- **Play / Pause State Desync & Silent Resume After FM Radio (`crates/zuno-audio/src/service.rs`, `src-tauri/src/android_bridge.rs`)**:
+  - Synchronized `engine_loaded` state with the audio thread so `Resume` cleanly reloads the current track at its saved position whenever the sink was unloaded (e.g., returning from FM radio or after a stream teardown) instead of flipping to `Playing` with zero audio.
+  - Incremented `load_gen` on `Pause` and guarded `start_loaded_track()` so an in-flight decode finishing concurrently can never overwrite a user's `Pause` back to `Playing`.
+  - Added authenticated `POST /recover` on the Android localhost bridge so native audio route changes immediately trigger output stream verification/recovery.
+- **Android MediaService Double-Toggle, Thread-Safety & Route-Change Fixes (`scripts/patch-android-project.py`)**:
+  - Switched notification controls to explicit `ACTION_PLAY` / `ACTION_PAUSE` actions, serialized foreground/MediaSession updates on the main looper with monotonic `stateSeq` ordering, and stopped double-firing WebView controls after localhost bridge read timeouts.
+  - Registered `AudioDeviceCallback` to recover audio automatically on Bluetooth/headset route changes, preserved playback through transient notification ducking (`AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK`), and dispatched `zuno:android-resumed` on `MainActivity.onResume()` for instant foreground state resync.
+- **Mobile Play/Pause Responsiveness, Scrubber Dragging & WebView Bridge Overhead (`src/App.tsx`, `src/components/Scrubber.tsx`, `src/components/NowPlayingVisualizer.tsx`)**:
+  - Switched native Play/Pause taps to optimistic, explicit `pause()` / `resume()` commands and made song taps optimistically update the queue immediately without blocking on a full-library `queueGet()` round-trip.
+  - Guarded scrubber touch drags (`isScrubbingRef` + pointer/touch-cancel commits) against 350ms status-poll snap-back, throttled mobile visualizer `audioLevels()` polling to 100ms, skipped desktop-only `syncPoll()`/`radioPoll()` chatter on idle Android, and let `ZunoMediaService` fetch/cache cover artwork once per track directly from `127.0.0.1`.
+
 ## [0.0.34] — 2026-11-28
 
 Fixed native folder browsing on Android, moved the mobile Now Playing queue arrow to match Desktop, redesigned the Music Folders dialog for mobile, and trimmed verbose copy across menus, themes, and Customize.

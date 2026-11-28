@@ -283,10 +283,6 @@ export default function App() {
   const [androidMediaSyncSeq, setAndroidMediaSyncSeq] = useState(0)
   const positionRef = useRef(0)
   positionRef.current = position
-  const androidArtCacheRef = useRef<{ trackId: string; base64: string }>({
-    trackId: '',
-    base64: '',
-  })
   const [volume, setVolume] = useState(DEFAULT_VOLUME)
   const [shuffle, setShuffle] = useState(false)
   const [repeat, setRepeat] = useState<RepeatMode>('off')
@@ -1409,9 +1405,18 @@ export default function App() {
     [],
   )
 
+  const isPlayingRef = useRef(isPlaying)
+  isPlayingRef.current = isPlaying
+  const isScrubbingRef = useRef(false)
+  const scrubSafetyTimerRef = useRef<number | null>(null)
+  const activeRadioRef = useRef(activeRadio)
+  activeRadioRef.current = activeRadio
+
   const applyNativeStatus = useCallback((st: PlaybackStatus) => {
     setIsPlaying(st.state === 'playing')
-    setPosition(st.position_secs)
+    if (!isScrubbingRef.current) {
+      setPosition(st.position_secs)
+    }
     if (st.duration_secs > 0) setDuration(st.duration_secs)
     if (Math.abs(st.volume - volumeRef.current) > 0.005) {
       remoteVolumeRef.current = st.volume
@@ -1422,7 +1427,7 @@ export default function App() {
     if (st.queue_index !== null) setQueueIndex(st.queue_index)
     if (st.active_playlist) setActivePlaylistLabel(st.active_playlist)
     const tid = st.current_track?.id ?? null
-    // If playback changed externally (MPRIS media keys, GNOME banner, tray, CLI, MCP), sync queue!
+    // If playback changed externally (MPRIS media keys, GNOME banner, tray, CLI, MCP, lockscreen), sync queue!
     if (
       tid &&
       (st.queue_len !== queueIdsRef.current.length ||
@@ -1489,11 +1494,18 @@ export default function App() {
     const poll = () => {
       if (cancelled) return
       if (document.hidden) {
-        timer = window.setTimeout(poll, 1200)
+        timer = window.setTimeout(poll, 1400)
         return
       }
       const pollSeq = playbackSeqRef.current
-      Promise.all([zunoApi.getStatus(), zunoApi.radioPoll(), zunoApi.syncPoll()])
+      // On Android mobile there is no background MCP daemon; skipping unnecessary radioPoll/syncPoll
+      // calls when idle cuts Android WebView JNI bridge traffic by ~67%.
+      const needAuxPolls = desktopNative || Boolean(activeRadioRef.current)
+      Promise.all([
+        zunoApi.getStatus(),
+        needAuxPolls ? zunoApi.radioPoll() : Promise.resolve(null),
+        desktopNative ? zunoApi.syncPoll() : Promise.resolve(null),
+      ])
         .then(([st, radioRes, syncRes]) => {
           if (cancelled) return
           // Never let an in-flight poll that started before a rapid Play/Next/Pause click
@@ -1540,20 +1552,31 @@ export default function App() {
             st.state === 'playing' ||
             radioRes?.active?.state === 'playing' ||
             radioRes?.active?.state === 'connecting'
-          timer = window.setTimeout(poll, fast ? 350 : 900)
+          const nextMs = desktopNative ? (fast ? 350 : 900) : fast ? 500 : 1200
+          timer = window.setTimeout(poll, nextMs)
         })
         .catch(() => {
           if (cancelled) return
           timer = window.setTimeout(poll, 2000)
         })
     }
-    timer = window.setTimeout(poll, hasLiveNativePlayback ? 350 : 900)
+    timer = window.setTimeout(
+      poll,
+      desktopNative
+        ? hasLiveNativePlayback
+          ? 350
+          : 900
+        : hasLiveNativePlayback
+          ? 500
+          : 1200,
+    )
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
   }, [
     nativeAudio,
+    desktopNative,
     hasLiveNativePlayback,
     applyNativeStatus,
     hydrateFromBackendSettings,
@@ -1663,9 +1686,18 @@ export default function App() {
       if (forceShuffle !== undefined) setShuffle(forceShuffle)
       if (nativeAudio) {
         const seq = ++playbackSeqRef.current
+        const chosenId = startId ?? ids[0]
         setBaseQueueIds(ids)
+        if (!useShuffle) {
+          setQueueIds(ids)
+          setQueueIndex(Math.max(0, ids.indexOf(chosenId)))
+        } else if (startId) {
+          setQueueIds([startId, ...ids.filter((id) => id !== startId)])
+          setQueueIndex(0)
+        }
         setActivePlaylistLabel(label)
         setPosition(0)
+        setIsPlaying(true)
         zunoApi
           .setQueue({
             track_ids: ids,
@@ -1673,15 +1705,25 @@ export default function App() {
             label,
             shuffle: forceShuffle ?? null,
           })
-          .then(async (st) => {
+          .then((st) => {
             if (seq !== playbackSeqRef.current) return
-            const q = await zunoApi.queueGet().catch(() => null)
-            if (seq !== playbackSeqRef.current) return
-            if (q) setQueueIds(q.tracks.map((t) => t.id))
+            // Apply live status immediately so Play/Pause and Now Playing respond without waiting
+            // for a heavy full-library `queueGet()` JNI transfer!
             applyNativeStatus(st)
+            if (useShuffle) {
+              zunoApi
+                .queueGet()
+                .then((q) => {
+                  if (seq !== playbackSeqRef.current) return
+                  const qIds = q.tracks.map((t) => t.id)
+                  if (qIds.length > 0) setQueueIds(qIds)
+                })
+                .catch(() => {})
+            }
           })
           .catch((err) => {
             if (seq !== playbackSeqRef.current) return
+            setIsPlaying(false)
             notify(formatError(err, 'Unable to play track'))
           })
         return
@@ -1698,17 +1740,9 @@ export default function App() {
     [shuffle, playTrackById, nativeAudio, applyNativeStatus, stopRadioPlayback, notify],
   )
 
-  const handleTogglePlay = useCallback(() => {
-    if (activeRadio) {
-      if (activeRadio.isPlaying || activeRadio.isBuffering) {
-        handleDisconnectRadio()
-      } else {
-        handleReconnectRadio()
-      }
-      return
-    }
-    if (nativeAudio) {
-      if (!currentTrack && queueIds.length === 0) {
+  const setNativePlaybackPlaying = useCallback(
+    (wantPlay: boolean) => {
+      if (wantPlay && !currentTrack && queueIds.length === 0) {
         if (tracks.length > 0) {
           startQueue(
             tracks.map((t) => t.id),
@@ -1721,16 +1755,33 @@ export default function App() {
         return
       }
       const seq = ++playbackSeqRef.current
-      zunoApi
-        .togglePause()
+      setIsPlaying(wantPlay)
+      const call = wantPlay ? zunoApi.resume() : zunoApi.pause()
+      call
         .then((st) => {
           if (seq === playbackSeqRef.current) applyNativeStatus(st)
         })
         .catch((err) => {
           if (seq === playbackSeqRef.current) {
+            setIsPlaying(!wantPlay)
             notify(formatError(err, 'Playback control failed'))
           }
         })
+    },
+    [currentTrack, queueIds.length, tracks, startQueue, applyNativeStatus, notify],
+  )
+
+  const handleTogglePlay = useCallback(() => {
+    if (activeRadio) {
+      if (activeRadio.isPlaying || activeRadio.isBuffering) {
+        handleDisconnectRadio()
+      } else {
+        handleReconnectRadio()
+      }
+      return
+    }
+    if (nativeAudio) {
+      setNativePlaybackPlaying(!isPlayingRef.current)
       return
     }
     const el = audioRef.current
@@ -1765,13 +1816,11 @@ export default function App() {
     handleDisconnectRadio,
     handleReconnectRadio,
     nativeAudio,
+    setNativePlaybackPlaying,
     currentTrack,
-    queueIds.length,
     tracks,
     startQueue,
     eqSettings,
-    applyNativeStatus,
-    notify,
   ])
 
   const selectOrToggleTrack = useCallback(
@@ -1970,9 +2019,28 @@ export default function App() {
     playTrackById(queueIds[prevIdx])
   }, [nativeAudio, applyNativeStatus, queueIds, queueIndex, repeat, playTrackById, notify])
 
+  const handleSeekChange = useCallback((secs: number) => {
+    isScrubbingRef.current = true
+    if (scrubSafetyTimerRef.current !== null) {
+      window.clearTimeout(scrubSafetyTimerRef.current)
+    }
+    scrubSafetyTimerRef.current = window.setTimeout(() => {
+      isScrubbingRef.current = false
+      scrubSafetyTimerRef.current = null
+    }, 1800)
+    positionRef.current = secs
+    setPosition(secs)
+  }, [])
+
   const handleSeekCommit = useCallback(
     (secs: number) => {
+      isScrubbingRef.current = false
+      if (scrubSafetyTimerRef.current !== null) {
+        window.clearTimeout(scrubSafetyTimerRef.current)
+        scrubSafetyTimerRef.current = null
+      }
       positionRef.current = secs
+      setPosition(secs)
       if (nativeAudio) {
         const seq = ++playbackSeqRef.current
         zunoApi
@@ -2674,7 +2742,9 @@ export default function App() {
     handleSeekCommit,
   ])
 
-  // Native Android top notification media player banner (MediaSession + MediaStyle foreground service)
+  // Native Android top notification media player banner (MediaSession + MediaStyle foreground service).
+  // Cover artwork is fetched and cached once per trackId directly by ZunoMediaService from the
+  // localhost Rust bridge, avoiding redundant WebView fetch/FileReader base64 churn on Play/Pause.
   useEffect(() => {
     if (!nativeAudio || desktopNative) return
     const bridge = getAndroidBridge()
@@ -2685,7 +2755,6 @@ export default function App() {
       return
     }
 
-    let cancelled = false
     const title = displayTrack.title || 'Zuno'
     const artist = displayArtist(displayTrack)
     const album = displayTrack.album || displayTrack.folder || 'Zuno'
@@ -2695,70 +2764,23 @@ export default function App() {
     const posMs = isLive ? 0 : Math.max(0, Math.round(positionRef.current * 1000))
     const durMs = Math.max(0, Math.round(durationSecs * 1000))
 
-    const pushState = (artworkBase64: string) => {
-      if (cancelled) return
-      try {
-        bridge.updateMediaNotification?.(
-          JSON.stringify({
-            trackId: displayTrack.id,
-            title,
-            artist,
-            album,
-            isPlaying: playingNow,
-            isLive,
-            positionMs: posMs,
-            durationMs: durMs,
-            artworkBase64,
-            hasCover: !isLive && displayTrack.has_cover,
-          }),
-        )
-      } catch {
-        /* ignore bridge errors */
-      }
-    }
-
-    const needsCover = !isLive && displayTrack.has_cover
-    if (!needsCover) {
-      pushState('')
-      return () => {
-        cancelled = true
-      }
-    }
-
-    if (androidArtCacheRef.current.trackId === displayTrack.id) {
-      pushState(androidArtCacheRef.current.base64)
-      return () => {
-        cancelled = true
-      }
-    }
-
-    // Show notification immediately with Zuno emblem, then upgrade with embedded album art
-    pushState('')
-    fetch(zunoApi.coverUrl(displayTrack.id, 256))
-      .then((res) => (res.ok ? res.blob() : null))
-      .then(
-        (blob) =>
-          new Promise<string>((resolve) => {
-            if (!blob) {
-              resolve('')
-              return
-            }
-            const reader = new FileReader()
-            reader.onloadend = () =>
-              resolve(typeof reader.result === 'string' ? reader.result : '')
-            reader.onerror = () => resolve('')
-            reader.readAsDataURL(blob)
-          }),
+    try {
+      bridge.updateMediaNotification(
+        JSON.stringify({
+          trackId: displayTrack.id,
+          title,
+          artist,
+          album,
+          isPlaying: playingNow,
+          isLive,
+          positionMs: posMs,
+          durationMs: durMs,
+          artworkBase64: '',
+          hasCover: !isLive && displayTrack.has_cover,
+        }),
       )
-      .then((dataUrl) => {
-        if (cancelled) return
-        androidArtCacheRef.current = { trackId: displayTrack.id, base64: dataUrl }
-        if (dataUrl) pushState(dataUrl)
-      })
-      .catch(() => {})
-
-    return () => {
-      cancelled = true
+    } catch {
+      /* ignore bridge errors */
     }
   }, [
     nativeAudio,
@@ -2775,6 +2797,9 @@ export default function App() {
     displayIsPlaying,
     activeRadio,
     handleTogglePlay,
+    setNativePlaybackPlaying,
+    handleReconnectRadio,
+    handleDisconnectRadio,
     displayPrev,
     displayNext,
     handleSeekCommit,
@@ -2785,6 +2810,9 @@ export default function App() {
     displayIsPlaying,
     activeRadio,
     handleTogglePlay,
+    setNativePlaybackPlaying,
+    handleReconnectRadio,
+    handleDisconnectRadio,
     displayPrev,
     displayNext,
     handleSeekCommit,
@@ -2801,10 +2829,18 @@ export default function App() {
       const h = androidMediaHandlersRef.current
       switch (action) {
         case 'play':
-          if (!h.displayIsPlaying) h.handleTogglePlay()
+          if (h.activeRadio) {
+            if (!h.displayIsPlaying) h.handleReconnectRadio()
+          } else {
+            h.setNativePlaybackPlaying(true)
+          }
           break
         case 'pause':
-          if (h.displayIsPlaying) h.handleTogglePlay()
+          if (h.activeRadio) {
+            if (h.displayIsPlaying) h.handleDisconnectRadio()
+          } else {
+            h.setNativePlaybackPlaying(false)
+          }
           break
         case 'toggle':
           h.handleTogglePlay()
@@ -2860,16 +2896,17 @@ export default function App() {
         return { ...cur, isPlaying: false, isBuffering: false }
       })
     }
-    const onVisible = () => {
-      if (!document.hidden) {
-        zunoApi.getStatus().then(applyNativeStatus).catch(() => {})
-      }
+    const syncOnForeground = () => {
+      if (document.hidden) return
+      zunoApi.getStatus().then(applyNativeStatus).catch(() => {})
     }
     window.addEventListener('zuno:android-radio-state', onRadioState)
-    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('zuno:android-resumed', syncOnForeground)
+    document.addEventListener('visibilitychange', syncOnForeground)
     return () => {
       window.removeEventListener('zuno:android-radio-state', onRadioState)
-      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('zuno:android-resumed', syncOnForeground)
+      document.removeEventListener('visibilitychange', syncOnForeground)
     }
   }, [nativeAudio, desktopNative, applyNativeStatus])
 
@@ -2899,7 +2936,7 @@ export default function App() {
     onDisconnectRadio: handleDisconnectRadio,
     onPrev: displayPrev,
     onNext: displayNext,
-    onSeekChange: setPosition,
+    onSeekChange: handleSeekChange,
     onSeekCommit: handleSeekCommit,
     onVolumeChange: setVolume,
     onToggleFavorite: displayToggleFavorite,
@@ -3470,7 +3507,7 @@ export default function App() {
           onDisconnectRadio={handleDisconnectRadio}
           onPrev={displayPrev}
           onNext={displayNext}
-          onSeekChange={setPosition}
+          onSeekChange={handleSeekChange}
           onSeekCommit={handleSeekCommit}
           onToggleFavorite={displayToggleFavorite}
           onToggleShuffle={handleToggleShuffle}

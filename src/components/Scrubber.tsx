@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { fnv1aHash } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ScrubberKnobStyleId } from '@/lib/appearance'
@@ -68,6 +68,19 @@ export function Scrubber({
     () => (styleVariant === 'waveform' ? makeWaveHeights(seed, waveCount) : []),
     [styleVariant, seed, waveCount],
   )
+  const draggingRef = useRef(false)
+  const latestValRef = useRef(clamped)
+  latestValRef.current = clamped
+
+  const handleDragStart = () => {
+    draggingRef.current = true
+  }
+
+  const handleDragCommit = (val?: number) => {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    onCommit?.(typeof val === 'number' && Number.isFinite(val) ? val : latestValRef.current)
+  }
 
   return (
     <div
@@ -178,17 +191,30 @@ export function Scrubber({
           max={safeMax}
           step={0.1}
           value={clamped}
-          onChange={(e) => onChange?.(Number(e.target.value))}
+          onPointerDown={handleDragStart}
+          onTouchStart={handleDragStart}
+          onChange={(e) => {
+            draggingRef.current = true
+            const v = Number(e.target.value)
+            latestValRef.current = v
+            onChange?.(v)
+          }}
           onMouseUp={(e) =>
-            onCommit?.(Number((e.target as HTMLInputElement).value))
+            handleDragCommit(Number((e.target as HTMLInputElement).value))
+          }
+          onPointerUp={(e) =>
+            handleDragCommit(Number((e.target as HTMLInputElement).value))
           }
           onTouchEnd={(e) =>
-            onCommit?.(Number((e.target as HTMLInputElement).value))
+            handleDragCommit(Number((e.target as HTMLInputElement).value))
+          }
+          onTouchCancel={(e) =>
+            handleDragCommit(Number((e.target as HTMLInputElement).value))
           }
           onKeyUp={(e) =>
-            onCommit?.(Number((e.target as HTMLInputElement).value))
+            handleDragCommit(Number((e.target as HTMLInputElement).value))
           }
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 touch-none"
         />
       )}
     </div>

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { parseCssColorToRgb, type Rgb } from '@/lib/color'
 import { readSpectrumData } from '@/lib/equalizer'
 import { cn } from '@/lib/utils'
-import { isTauriRuntime, zunoApi, type AudioLevels } from '@/lib/zunoApi'
+import { isDesktopTauriRuntime, isTauriRuntime, zunoApi, type AudioLevels } from '@/lib/zunoApi'
 import type {
   ThemeMode,
   VisualizerColorId,
@@ -245,6 +245,9 @@ export function NowPlayingVisualizer({
 
     const startPollingIfNeeded = () => {
       if (!isNative || pollTimer !== undefined || !isPlayingRef.current) return
+      // On Android WebView, 100ms polling (smoothly interpolated to 60fps by lerpAR) prevents
+      // saturating the JNI bridge during Play/Pause/Seek taps while keeping visuals fluid.
+      const intervalMs = isDesktopTauriRuntime() ? 33 : 100
       const poll = () => {
         if (disposed || document.hidden || pollInFlight || !isPlayingRef.current) return
         pollInFlight = true
@@ -258,7 +261,7 @@ export function NowPlayingVisualizer({
           })
       }
       poll()
-      pollTimer = window.setInterval(poll, 33)
+      pollTimer = window.setInterval(poll, intervalMs)
     }
 
     const stopPolling = () => {
